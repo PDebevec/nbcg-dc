@@ -1,0 +1,1464 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap&amp;subset=latin,cyrillic" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{font-family:'IBM Plex Sans',system-ui,sans-serif;color:#1f2437;background:#eef0f7}
+  input,button,select,textarea{font:inherit;color:inherit}
+  button{cursor:pointer;border:none;background:none;padding:0}
+  input:focus,select:focus{outline:none}
+  a{color:#2b3a8c;text-decoration:none}
+  a:hover{color:#22307a}
+  ::-webkit-scrollbar{width:11px;height:11px}
+  ::-webkit-scrollbar-thumb{background:#cdd1e2;border-radius:6px;border:3px solid transparent;background-clip:content-box}
+  ::-webkit-scrollbar-thumb:hover{background:#b4b9d2;background-clip:content-box}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+</style>
+</helmet>
+
+<div style="display:flex;height:100vh;width:100%;overflow:hidden">
+
+  <!-- ================= LEFT RAIL ================= -->
+  <nav style="width:236px;flex:none;background:linear-gradient(180deg,#283583 0%,#1c2660 100%);color:#eaecfa;display:flex;flex-direction:column;padding:18px 14px">
+    <div style="display:flex;align-items:center;gap:11px;padding:6px 8px 20px">
+      <div style="width:38px;height:38px;flex:none;border-radius:9px;background:rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center;font-weight:700;letter-spacing:.5px;font-size:15px;border:1px solid rgba(255,255,255,.16)">NB</div>
+      <div style="line-height:1.2">
+        <div style="font-weight:600;font-size:14px">NBCG Archive</div>
+        <div style="font-size:11px;color:#a9b0e0;letter-spacing:.3px">Digital library client</div>
+      </div>
+    </div>
+
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:#8b93cf;padding:4px 10px 8px">Workspace</div>
+    <sc-for list="{{ menu }}" as="n" hint-placeholder-count="4">
+      <button onClick="{{ n.onClick }}" title="{{ n.label }}" style="position:relative;display:flex;align-items:center;gap:12px;width:100%;text-align:left;padding:10px 12px;margin-bottom:3px;border-radius:9px;font-size:14px;font-weight:{{ n.weight }};color:{{ n.color }};background:{{ n.bg }}">
+        <span style="position:absolute;left:-14px;top:8px;bottom:8px;width:3px;border-radius:0 3px 3px 0;background:#ffffff;opacity:{{ n.active }}"></span>
+        <span style="width:20px;height:20px;flex:none;display:flex;align-items:center;justify-content:center" innerHTML="{{ n.icon }}"></span>
+        <span>{{ n.label }}</span>
+        <sc-if value="{{ n.badge }}" hint-placeholder-val=""><span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:11px;background:rgba(255,255,255,.16);padding:1px 7px;border-radius:20px">{{ n.badge }}</span></sc-if>
+      </button>
+    </sc-for>
+
+    <div style="margin-top:auto;padding:12px 10px 4px">
+      <div style="display:flex;align-items:center;gap:9px;padding:9px 11px;border-radius:9px;background:rgba(255,255,255,.07);font-size:12.5px">
+        <span style="width:9px;height:9px;border-radius:50%;background:{{ conn.dot }};flex:none;box-shadow:0 0 0 3px {{ conn.halo }}"></span>
+        <div style="line-height:1.25">
+          <div style="font-weight:600;color:#f2f3fd">{{ conn.label }}</div>
+          <div style="font-size:11px;color:#a9b0e0;font-family:'IBM Plex Mono',monospace">{{ conn.host }}</div>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ================= MAIN ================= -->
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column;background:#f4f5fb">
+    <div style="flex:1;min-height:0;overflow:auto">
+
+      <!-- ============ OVERVIEW ============ -->
+      <sc-if value="{{ isOverview }}" hint-placeholder-val="{{ true }}">
+        <div style="padding: 22px 26px 40px">
+
+          <sc-if value="{{ firstRun }}" hint-placeholder-val="">
+            <div style="max-width:560px;margin:56px auto;text-align:center;background:#fff;border:1px solid #e6e8f2;border-radius:16px;padding:44px 40px">
+              <div style="width:60px;height:60px;margin:0 auto 18px;border-radius:14px;background:#eef1fd;display:flex;align-items:center;justify-content:center;font-size:26px;color:#2b3a8c">◲</div>
+              <div style="font-size:20px;font-weight:600;margin-bottom:8px">Welcome to NBCG Archive</div>
+              <p style="color:#6b7290;font-size:14px;line-height:1.6;margin:0 auto 24px;max-width:400px">No folders are configured yet. Point the app at your <span style="font-family:'IBM Plex Mono',monospace;color:#2b3a8c">/unprocessed</span> and <span style="font-family:'IBM Plex Mono',monospace;color:#2b3a8c">/processed</span> roots and connect the backend to begin.</p>
+              <button onClick="{{ goSettings }}" style="height:42px;padding:0 24px;border-radius:10px;background:#2b3a8c;color:#fff;font-weight:600;font-size:14px">Set up the archive →</button>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ notFirstRun }}" hint-placeholder-val="{{ true }}">
+          <div>
+            <!-- toolbar -->
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+              <div style="display:flex;gap:4px;background:#eaecf5;padding:4px;border-radius:10px">
+                <sc-for list="{{ segs }}" as="s" hint-placeholder-count="6">
+                  <button onClick="{{ s.onClick }}" style="display:flex;align-items:center;gap:8px;padding:7px 12px;border-radius:7px;font-size:13px;font-weight:{{ s.weight }};color:{{ s.color }};background:{{ s.bg }}"><span style="width:9px;height:9px;border-radius:3px;background:{{ s.dot }};flex:none;opacity:{{ s.dotOpacity }}"></span>{{ s.label }}<span style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;color:{{ s.countColor }};background:{{ s.countBg }};padding:1px 6px;border-radius:20px;min-width:19px;text-align:center">{{ s.count }}</span></button>
+                </sc-for>
+              </div>
+              <sc-if value="{{ showSelectAll }}" hint-placeholder-val="">
+                <button onClick="{{ selectAllVisible }}" style="margin-left:auto;display:flex;align-items:center;gap:8px;height:34px;padding:0 15px;border-radius:9px;border:1px solid #cdd6f7;background:#f4f6fe;color:#2b3a8c;font-weight:600;font-size:13px">
+                  <span style="width:14px;height:14px;border:1.5px solid #2b3a8c;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:10px">{{ selectAllGlyph }}</span>{{ selectAllLabel }}
+                </button>
+              </sc-if>
+            </div>
+
+            <!-- info line for non-selectable filters -->
+            <sc-if value="{{ scopeNote }}" hint-placeholder-val="">
+              <div style="display:flex;align-items:center;gap:9px;background:#f1f2f9;border:1px solid #e6e8f2;border-radius:10px;padding:9px 14px;margin-bottom:14px;color:#6b7290;font-size:12.5px">
+                <span style="width:16px;height:16px;flex:none;border-radius:50%;background:#e0e3ee;color:#6b7290;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:11px">i</span>{{ scopeNote }}
+              </div>
+            </sc-if>
+
+            <!-- bulk / create-batch bar -->
+            <sc-if value="{{ hasSelection }}" hint-placeholder-val="">
+              <div style="display:flex;align-items:center;gap:12px;background:#eef1fd;border:1px solid #cdd6f7;border-radius:11px;padding:11px 16px;margin-bottom:14px;animation:fadein .15s">
+                <span style="font-weight:600;font-size:13.5px;color:#2b3a8c">{{ selCount }} {{ selTypeLabel }} selected</span>
+                <span style="font-size:12px;color:#7681b8">→ new batch, moved to In&nbsp;progress</span>
+                <button onClick="{{ createBatchSel }}" style="margin-left:auto;height:34px;padding:0 16px;border-radius:8px;background:#2b3a8c;color:#fff;font-weight:600;font-size:13px;display:flex;align-items:center;gap:8px"><span style="font-size:14px">▤</span>Create batch</button>
+                <button onClick="{{ clearSel }}" style="font-size:13px;color:#6b7290">Clear</button>
+              </div>
+            </sc-if>
+
+            <!-- TABLE -->
+            <div style="background:#fff;border:1px solid #e6e8f2;border-radius:14px;overflow:hidden;box-shadow:0 1px 3px rgba(30,40,90,.05)">
+              <table style="width:100%;border-collapse:collapse;font-size:13.5px">
+                <thead>
+                  <tr style="background:#f7f8fc;color:#8991ab;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px">
+                    <th style="width:34px;padding:11px 0 11px 16px"></th>
+                    <th style="text-align:left;padding:8px 12px;font-weight:600">
+                      <div style="display:flex;align-items:center;gap:14px">
+                        <span>Item</span>
+                        <div style="display:flex;align-items:center;background:#fff;border:1px solid #e6e8f2;border-radius:8px;padding:0 9px;height:30px;width:240px;text-transform:none">
+                          <span style="color:#9aa1bb;font-size:13px">⌕</span>
+                          <input value="{{ query }}" onInput="{{ onQuery }}" placeholder="Search items…" style="border:none;background:none;padding:0 7px;font-size:12.5px;width:100%;text-transform:none;font-weight:400;letter-spacing:0;color:#2a3050">
+                        </div>
+                      </div>
+                    </th>
+                    <sc-for list="{{ stageCols }}" as="sc" hint-placeholder-count="5">
+                      <th style="padding:11px 6px;font-weight:600;width:88px;text-align:center">{{ sc }}</th>
+                    </sc-for>
+                    <th style="text-align:left;padding:11px 14px;font-weight:600;width:150px">State</th>
+                    <th style="width:44px;padding:11px 12px 11px 0"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <sc-for list="{{ rows }}" as="r" hint-placeholder-count="8">
+                    <tr onClick="{{ r.onRowClick }}" style="border-top:1px solid #eef0f6;background:{{ r.rowBg }};cursor:pointer;transition:background .12s" style-hover="{{ r.rowHover }}">
+                      <td style="padding:0 0 0 16px;vertical-align:middle" onClick="{{ r.stop }}">
+                        <sc-if value="{{ r.selectable }}" hint-placeholder-val="{{ true }}">
+                          <input type="checkbox" checked="{{ r.checked }}" onChange="{{ r.onCheck }}" style="width:15px;height:15px;accent-color:#2b3a8c;cursor:pointer">
+                        </sc-if>
+                        <sc-if value="{{ r.lockIcon }}" hint-placeholder-val=""><span title="In a batch — locked" style="display:inline-flex;color:#b9bfd6"><svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4.5" y="9" width="11" height="7.5" rx="1.6"></rect><path d="M7 9V6.6a3 3 0 0 1 6 0V9"></path></svg></span></sc-if>
+                      </td>
+                      <td style="padding:11px 12px">
+                        <div style="display:flex;align-items:center;gap:8px">
+                          <span style="width:4px;align-self:stretch;border-radius:3px;background:{{ r.accent }}"></span>
+                          <div style="min-width:0">
+                            <div style="font-weight:600;color:#232945;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ r.title }}</div>
+                            <div style="font-size:11.5px;color:#98a0ba;font-family:'IBM Plex Mono',monospace;display:flex;gap:9px">
+                              <span>{{ r.folder }}</span><span>{{ r.sources }}</span><span style="color:#2b3a8c">{{ r.backendId }}</span><span style="color:#7681b8">{{ r.batchTag }}</span>
+                            </div>
+                            <sc-if value="{{ r.error }}" hint-placeholder-val=""><div style="font-size:11.5px;color:#c23a2c;margin-top:4px;display:flex;align-items:center;gap:6px"><span style="width:6px;height:6px;border-radius:50%;background:#d93a2c;flex:none"></span>{{ r.error }}</div></sc-if>
+                          </div>
+                        </div>
+                      </td>
+                      <sc-for list="{{ r.cells }}" as="c" hint-placeholder-count="5">
+                        <td style="text-align:center;padding:11px 6px">
+                          <span title="{{ c.title }}" style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px">
+                            <sc-if value="{{ c.spin }}" hint-placeholder-val=""><span style="width:13px;height:13px;border:2px solid #d3ddf5;border-top-color:#2f6fed;border-radius:50%;display:inline-block;animation:spin .8s linear infinite"></span></sc-if>
+                            <sc-if value="{{ c.dot }}" hint-placeholder-val="{{ true }}"><span style="width:9px;height:9px;border-radius:50%;background:{{ c.dotBg }};border:{{ c.dotBorder }}"></span></sc-if>
+                          </span>
+                        </td>
+                      </sc-for>
+                      <td style="padding:11px 14px">
+                        <span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:600;color:{{ r.stateColor }};background:{{ r.stateBg }}"><span style="width:6px;height:6px;border-radius:50%;background:{{ r.stateColor }}"></span>{{ r.stateLabel }}</span>
+                      </td>
+                      <td style="padding:11px 12px 11px 0;position:relative" onClick="{{ r.stop }}">
+                        <button onClick="{{ r.toggleMenu }}" title="More actions" style="width:28px;height:28px;border-radius:7px;color:#9aa1bb;font-size:17px;line-height:1;display:flex;align-items:center;justify-content:center;margin-left:auto" style-hover="{{ menuBtnHover }}">⋯</button>
+                        <sc-if value="{{ r.menuOpen }}" hint-placeholder-val="">
+                          <div style="position:absolute;top:40px;right:12px;width:210px;background:#fff;border:1px solid #e6e8f2;border-radius:10px;box-shadow:0 14px 34px rgba(20,25,50,.18);z-index:25;padding:5px;animation:fadein .12s">
+                            <button onClick="{{ r.onOpen }}" style="display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:9px 10px;border-radius:7px;font-size:12.5px;font-weight:500;color:#2a3050" style-hover="{{ menuItemHover }}"><svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" style="flex:none"><rect x="2.5" y="3.5" width="12" height="12" rx="2"></rect><line x1="7" y1="3.5" x2="7" y2="15.5"></line></svg>{{ r.openLabel }}</button>
+                            <button onClick="{{ r.onOpenFolder }}" style="display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:9px 10px;border-radius:7px;font-size:12.5px;font-weight:500;color:#2a3050" style-hover="{{ menuItemHover }}"><svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" style="flex:none"><path d="M2.6 6a1.4 1.4 0 0 1 1.4-1.4h2.6l1.4 1.8h6a1.4 1.4 0 0 1 1.4 1.4v6.4a1.4 1.4 0 0 1-1.4 1.4H4a1.4 1.4 0 0 1-1.4-1.4z"></path></svg>Open in Explorer</button>
+                          </div>
+                        </sc-if>
+                      </td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+              </table>
+              <sc-if value="{{ noRows }}" hint-placeholder-val="">
+                <div style="padding:48px;text-align:center;color:#98a0ba;font-size:14px">No items match this filter.</div>
+              </sc-if>
+            </div>
+          </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <!-- ============ BATCHES LIST ============ -->
+      <sc-if value="{{ isBatches }}" hint-placeholder-val="">
+        <div style="padding:22px 26px 44px;max-width:1000px;margin:0 auto">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+            <div>
+              <div style="font-size:17px;font-weight:600">Batches</div>
+              <div style="font-size:12.5px;color:#98a0ba">Every batch that isn't finished. Only one processes at a time.</div>
+            </div>
+            <button onClick="{{ goOverview }}" style="margin-left:auto;height:36px;padding:0 15px;border-radius:9px;border:1px solid #cdd6f7;background:#f4f6fe;color:#2b3a8c;font-weight:600;font-size:13px">+ New from Overview</button>
+          </div>
+
+          <sc-if value="{{ noBatches }}" hint-placeholder-val="">
+            <div style="background:#fff;border:1px dashed #d5d9ea;border-radius:14px;padding:52px;text-align:center;color:#98a0ba">
+              <div style="font-size:15px;font-weight:600;color:#6b7290;margin-bottom:6px">No batches yet</div>
+              <div style="font-size:13px">Select items in Overview and hit <span style="color:#2b3a8c;font-weight:600">Create batch</span> to start one.</div>
+            </div>
+          </sc-if>
+
+          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px">
+            <sc-for list="{{ batchCards }}" as="b" hint-placeholder-count="3">
+              <div onClick="{{ b.onOpen }}" style="background:#fff;border:1px solid {{ b.border }};border-radius:14px;padding:16px 18px;cursor:pointer;box-shadow:0 1px 3px rgba(30,40,90,.05);transition:border-color .12s" style-hover="{{ cardHover }}">
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:3px">
+                  <span style="font-size:15px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#232945">{{ b.number }}</span>
+                  <span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:20px;font-size:11.5px;font-weight:600;color:{{ b.statusColor }};background:{{ b.statusBg }}">
+                    <sc-if value="{{ b.running }}" hint-placeholder-val=""><span style="width:11px;height:11px;border:2px solid rgba(47,111,237,.35);border-top-color:#2f6fed;border-radius:50%;display:inline-block;animation:spin .7s linear infinite"></span></sc-if>
+                    <sc-if value="{{ b.notRunning }}" hint-placeholder-val="{{ true }}"><span style="width:6px;height:6px;border-radius:50%;background:{{ b.statusColor }}"></span></sc-if>
+                    {{ b.statusLabel }}
+                  </span>
+                  <span style="margin-left:auto;font-size:11.5px;color:#a2aac2;font-family:'IBM Plex Mono',monospace">{{ b.created }}</span>
+                </div>
+                <div style="font-size:13px;color:#6b7290;margin-bottom:13px">{{ b.countLabel }}</div>
+
+                <!-- 3-stage indicator -->
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:12px">
+                  <sc-for list="{{ b.stages }}" as="sg" hint-placeholder-count="3">
+                    <div style="flex:1;display:flex;align-items:center;gap:7px">
+                      <span style="width:20px;height:20px;flex:none;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:{{ sg.c }};background:{{ sg.bg }};border:{{ sg.bd }}">{{ sg.glyph }}</span>
+                      <span style="font-size:11.5px;font-weight:{{ sg.weight }};color:{{ sg.textC }};white-space:nowrap">{{ sg.label }}</span>
+                      <sc-if value="{{ sg.connector }}" hint-placeholder-val="{{ true }}"><span style="flex:1;height:2px;border-radius:2px;background:{{ sg.lineC }}"></span></sc-if>
+                    </div>
+                  </sc-for>
+                </div>
+
+                <div style="display:flex;align-items:center;gap:10px">
+                  <div style="flex:1;height:7px;background:#eef0f7;border-radius:5px;overflow:hidden"><div style="height:100%;background:linear-gradient(90deg,#2b3a8c,#4658c0);border-radius:5px;width:{{ b.pct }}"></div></div>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;color:#2b3a8c;min-width:34px;text-align:right">{{ b.pct }}</span>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ============ BATCH WORK (3 tabs) ============ -->
+      <sc-if value="{{ isBatchWork }}" hint-placeholder-val="">
+        <div style="display:flex;flex-direction:column;min-height:100%">
+
+          <!-- header -->
+          <div style="background:#fff;border-bottom:1px solid #e6e8f2;padding:0 26px;position:sticky;top:0;z-index:12">
+            <div style="display:flex;align-items:center;gap:14px;padding:13px 0 0">
+              <button onClick="{{ backToBatches }}" title="Back to batches" style="width:34px;height:34px;flex:none;border-radius:9px;border:1px solid #e6e8f2;background:#fff;color:#6b7290;display:flex;align-items:center;justify-content:center;font-size:17px" style-hover="{{ openBtnHover }}">‹</button>
+              <div style="min-width:0">
+                <div style="display:flex;align-items:center;gap:9px">
+                  <span style="font-size:15px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#232945">{{ bw.number }}</span>
+                  <span style="display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;color:{{ bw.statusColor }};background:{{ bw.statusBg }}"><span style="width:6px;height:6px;border-radius:50%;background:{{ bw.statusColor }}"></span>{{ bw.statusLabel }}</span>
+                  <sc-if value="{{ bw.readonly }}" hint-placeholder-val=""><span style="font-size:10.5px;font-weight:700;color:#6b7290;background:#eef0f6;padding:2px 8px;border-radius:5px">READ-ONLY</span></sc-if>
+                </div>
+                <div style="font-size:12px;color:#98a0ba">{{ bw.countLabel }}</div>
+              </div>
+              <div style="margin-left:auto;display:flex;align-items:center;gap:7px;font-size:12px;color:#7c9e86;font-weight:500;flex:none"><span style="width:7px;height:7px;border-radius:50%;background:#2e9e5b"></span>{{ bw.saveLabel }}</div>
+            </div>
+            <div style="display:flex;gap:2px;margin-top:10px">
+              <sc-for list="{{ bwTabs }}" as="tb" hint-placeholder-count="3">
+                <button onClick="{{ tb.onClick }}" style="display:flex;align-items:center;gap:9px;padding:11px 16px;font-size:13.5px;font-weight:{{ tb.weight }};color:{{ tb.color }};border-bottom:2.5px solid {{ tb.bd }};white-space:nowrap;opacity:{{ tb.opacity }}">
+                  <span style="width:19px;height:19px;flex:none;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:700;color:{{ tb.numC }};background:{{ tb.numBg }}">{{ tb.num }}</span>{{ tb.label }}
+                </button>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="flex:1;padding:22px 26px 52px">
+
+            <!-- SETUP TAB -->
+            <sc-if value="{{ tabSetup }}" hint-placeholder-val="">
+            <div style="max-width:860px;margin:0 auto">
+              <div style="display:flex;align-items:center;gap:9px;background:#eef1fd;border:1px solid #cdd6f7;border-radius:10px;padding:11px 15px;margin-bottom:16px;color:#2b3a8c;font-size:13px">
+                <span style="width:18px;height:18px;flex:none;border-radius:50%;background:#cdd6f7;color:#2b3a8c;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:11px">1</span>
+                These settings apply to <b style="margin:0 3px">all {{ bw.count }} items</b> in the batch. You can still override each item in the next step.
+              </div>
+
+              <!-- COBISS -->
+              <div style="background:#fff;border:1px solid #e6e8f2;border-radius:13px;padding:16px 18px;margin-bottom:14px">
+                <div style="font-size:12px;font-weight:600;color:#6b7290;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px">Prefill from COBISS</div>
+                <div style="font-size:12.5px;color:#98a0ba;margin-bottom:11px">If set, every item is prefilled with this COBISS record's data — overriding parent-inherited fields.</div>
+                <div style="display:flex;gap:10px;align-items:center">
+                  <div style="display:flex;align-items:center;background:#f1f2f9;border:1px solid #e6e8f2;border-radius:9px;padding:0 12px;height:40px;flex:1;max-width:300px">
+                    <span style="font-size:12px;color:#98a0ba;font-family:'IBM Plex Mono',monospace;margin-right:6px">COBISS.CG-ID</span>
+                    <input value="{{ setupCobiss }}" onInput="{{ onSetupCobiss }}" disabled="{{ setupDisabled }}" placeholder="optional — e.g. 24512006" style="border:none;background:none;font-family:'IBM Plex Mono',monospace;font-size:14px;width:100%">
+                  </div>
+                  <sc-if value="{{ setupCobissSet }}" hint-placeholder-val=""><span style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:#2f6fed">↧ Will prefill all items</span></sc-if>
+                </div>
+              </div>
+
+              <!-- parents -->
+              <div style="background:#fff;border:1px solid #e6e8f2;border-radius:13px;padding:16px 18px;margin-bottom:14px">
+                <div style="font-size:12px;font-weight:600;color:#6b7290;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px">Parent records</div>
+                <div style="font-size:12.5px;color:#98a0ba;margin-bottom:11px">Link one or more parents. Only one passes data at a time — its shared fields copy down to the items. Click <b>can pass data</b> on another to switch the source.</div>
+                <sc-if value="{{ hasSetupParents }}" hint-placeholder-val="">
+                  <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:11px">
+                    <sc-for list="{{ setupParents }}" as="p" hint-placeholder-count="1">
+                      <div style="display:flex;align-items:center;gap:11px;background:#faf9fe;border:1px solid #e7e1f6;border-radius:10px;padding:10px 12px">
+                        <span style="width:30px;height:30px;flex:none;border-radius:8px;background:#efe9fb;color:#6b4fca;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:12px">{{ p.typeInitial }}</span>
+                        <div style="min-width:0;flex:1">
+                          <div style="font-size:13.5px;font-weight:600;color:#3f3369;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.name }}</div>
+                          <div style="font-size:11px;color:#8871c9;font-family:'IBM Plex Mono',monospace">{{ p.typeLabel }} · {{ p.id }}</div>
+                        </div>
+                        <sc-if value="{{ p.markShow }}" hint-placeholder-val="{{ true }}">
+                          <button onClick="{{ p.markOnClick }}" title="{{ p.markTitle }}" style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:5px 10px;border-radius:7px;color:{{ p.markC }};background:{{ p.markBg }};border:1px solid {{ p.markBd }};cursor:{{ p.markCursor }};white-space:nowrap;flex:none">{{ p.markIcon }} {{ p.markLabel }}</button>
+                        </sc-if>
+                        <button onClick="{{ p.onRemove }}" title="Unlink" hidden="{{ p.hideRemove }}" style="width:26px;height:26px;flex:none;border-radius:7px;color:#a2aac2;display:flex;align-items:center;justify-content:center" style-hover="{{ menuBtnHover }}"><svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="5" y1="5" x2="15" y2="15"></line><line x1="15" y1="5" x2="5" y2="15"></line></svg></button>
+                      </div>
+                    </sc-for>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ metaEditable }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex;gap:10px;align-items:center">
+                  <div style="display:flex;align-items:center;background:#f1f2f9;border:1px solid #e6e8f2;border-radius:9px;padding:0 11px;height:38px;flex:1;max-width:340px">
+                    <span style="color:#9aa1bb">⌕</span>
+                    <input placeholder="Search serials &amp; collections to link…" style="border:none;background:none;padding:0 8px;font-size:13px;width:100%">
+                  </div>
+                  <button onClick="{{ addSetupParent }}" style="height:38px;padding:0 14px;border-radius:9px;border:1px solid #ddd0f4;background:#f7f4fd;color:#5b41a8;font-weight:600;font-size:13px">+ Link parent</button>
+                </div>
+                </sc-if>
+
+              </div>
+
+              <!-- publish + visibility -->
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px">
+                <div style="background:#fff;border:1px solid #e6e8f2;border-radius:13px;padding:16px 18px">
+                  <div style="font-size:12px;font-weight:600;color:#6b7290;margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px">Publish as</div>
+                  <div style="display:flex;gap:4px;background:#eaecf5;padding:4px;border-radius:9px">
+                    <sc-for list="{{ publishOpts }}" as="po" hint-placeholder-count="2"><button onClick="{{ po.onClick }}" style="flex:1;padding:8px 10px;border-radius:7px;font-size:13px;font-weight:{{ po.w }};color:{{ po.c }};background:{{ po.b }}">{{ po.label }}</button></sc-for>
+                  </div>
+                </div>
+                <div style="background:#fff;border:1px solid #e6e8f2;border-radius:13px;padding:16px 18px">
+                  <div style="font-size:12px;font-weight:600;color:#6b7290;margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px">Visibility</div>
+                  <div style="display:flex;gap:4px;background:#eaecf5;padding:4px;border-radius:9px">
+                    <sc-for list="{{ visOpts }}" as="vo" hint-placeholder-count="3"><button onClick="{{ vo.onClick }}" style="flex:1;padding:8px 8px;border-radius:7px;font-size:12.5px;font-weight:{{ vo.w }};color:{{ vo.c }};background:{{ vo.b }}">{{ vo.label }}</button></sc-for>
+                  </div>
+                </div>
+              </div>
+
+              <sc-if value="{{ metaEditable }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;align-items:center;gap:12px">
+                <button onClick="{{ setupContinue }}" style="margin-left:auto;height:42px;padding:0 22px;border-radius:10px;background:{{ setupBtnBg }};color:#fff;font-weight:600;font-size:14px">Next: Metadata →</button>
+              </div>
+              </sc-if>
+            </div>
+            </sc-if>
+
+            <!-- METADATA TAB -->
+            <sc-if value="{{ tabMeta }}" hint-placeholder-val="{{ true }}">
+            <div style="max-width:1080px;margin:0 auto">
+
+              <!-- item navigator -->
+              <div style="background:#fff;border:1px solid #e6e8f2;border-radius:13px;padding:13px 16px;margin-bottom:14px">
+                <div style="display:flex;align-items:center;gap:12px;margin-bottom:{{ navBodyGap }}">
+                  <div style="min-width:0;flex:1">
+                    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#98a0ba;font-weight:600;white-space:nowrap">Item {{ nav.cur1 }} of {{ nav.total }} · {{ nav.validCount }}/{{ nav.total }} ready</div>
+                    <div style="font-size:15px;font-weight:600;color:#232945;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:520px">{{ nav.curTitle }}</div>
+                  </div>
+                  <span style="font-size:11px;font-weight:700;padding:3px 9px;border-radius:6px;color:{{ nav.levelC }};background:{{ nav.levelBg }};flex:none">{{ nav.levelLabel }}</span>
+                </div>
+
+                <sc-if value="{{ navIsB }}" hint-placeholder-val="{{ true }}">
+                  <div style="display:flex;align-items:center;gap:12px">
+                    <div style="position:relative;flex:none">
+                      <button onClick="{{ nav.togglePicker }}" style="display:flex;align-items:center;gap:10px;height:40px;padding:0 12px;border:1.5px solid {{ nav.pickBd }};border-radius:10px;background:{{ nav.pickBg }};min-width:300px;text-align:left">
+                        <span style="width:11px;height:11px;flex:none;border-radius:50%;background:{{ nav.curDot }}"></span>
+                        <span style="flex:1;min-width:0;font-size:13px;font-weight:600;color:#232945;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ nav.cur1 }}/{{ nav.total }} · {{ nav.curTitle }}</span>
+                        <span style="font-size:11px;color:#98a0ba">▾</span>
+                      </button>
+                      <sc-if value="{{ nav.pickerOpen }}" hint-placeholder-val="">
+                        <div style="position:absolute;top:48px;left:0;width:360px;max-height:52vh;overflow:auto;background:#fff;border:1px solid #e6e8f2;border-radius:12px;box-shadow:0 16px 40px rgba(20,25,50,.18);z-index:20;padding:6px;animation:fadein .12s">
+                          <sc-for list="{{ nav.items }}" as="ni" hint-placeholder-count="4">
+                            <button onClick="{{ ni.onClick }}" style="display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:9px 10px;border-radius:9px;background:{{ ni.bg }}">
+                              <span style="width:20px;height:20px;flex:none;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;background:{{ ni.c }}">{{ ni.badge }}</span>
+                              <div style="min-width:0;flex:1"><div style="font-size:13px;font-weight:{{ ni.weight }};color:{{ ni.textC }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ ni.title }}</div><div style="font-size:10.5px;color:#a2aac2;font-family:'IBM Plex Mono',monospace">{{ ni.sub }}</div></div>
+                              <span style="font-size:10.5px;font-weight:600;color:{{ ni.c }}">{{ ni.statusLabel }}</span>
+                            </button>
+                          </sc-for>
+                        </div>
+                      </sc-if>
+                    </div>
+                    <div style="flex:1;min-width:0">
+                      <div style="display:flex;align-items:center;gap:9px;margin-bottom:5px"><span style="font-size:11.5px;color:#98a0ba">{{ nav.validCount }} of {{ nav.total }} ready</span></div>
+                      <div style="height:7px;background:#eef0f7;border-radius:5px;overflow:hidden"><div style="height:100%;background:linear-gradient(90deg,#1f9d57,#3bbd77);border-radius:5px;width:{{ nav.pct }}"></div></div>
+                    </div>
+                  </div>
+                </sc-if>
+              </div>
+
+              <sc-if value="{{ validationBanner }}" hint-placeholder-val="">
+                <div style="display:flex;align-items:center;gap:9px;background:#fdecea;border:1px solid #f4c7c1;border-radius:10px;padding:11px 15px;margin-bottom:14px;color:#b83224;font-size:13px;font-weight:500">✗ {{ validationBanner }}</div>
+              </sc-if>
+
+              <!-- files strip -->
+              <div style="background:#fff;border:1px solid #e6e8f2;border-radius:13px;padding:13px 16px;margin-bottom:14px">
+                <div style="font-size:12px;font-weight:600;color:#6b7290;margin-bottom:9px;text-transform:uppercase;letter-spacing:.5px">Files</div>
+                <div style="display:flex;gap:9px;flex-wrap:wrap">
+                  <sc-for list="{{ files }}" as="fl" hint-placeholder-count="6">
+                    <div style="display:flex;align-items:center;gap:9px;border:1px solid {{ fl.border }};border-radius:9px;padding:8px 11px;background:{{ fl.cardBg }};min-width:196px">
+                      <span style="width:28px;height:28px;flex:none;border-radius:6px;background:{{ fl.iconBg }};display:inline-flex;align-items:center;justify-content:center;font-size:13px;color:{{ fl.iconC }}">{{ fl.glyph }}</span>
+                      <div style="min-width:0;flex:1"><div style="font-size:12px;font-weight:600;color:#2a3050;font-family:'IBM Plex Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ fl.name }}</div><div style="font-size:10.5px;color:#98a0ba">{{ fl.meta }}</div></div>
+                      <sc-if value="{{ fl.tag }}" hint-placeholder-val=""><span style="font-size:9px;font-weight:700;color:#5a678f;background:#e2e7f5;padding:2px 6px;border-radius:5px;letter-spacing:.4px;flex:none">{{ fl.tag }}</span></sc-if>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+
+              <!-- COBISS per item -->
+              <sc-if value="{{ metaEditable }}" hint-placeholder-val="{{ true }}">
+              <div style="background:#fff;border:1px solid #e6e8f2;border-radius:13px;padding:16px 18px;margin-bottom:14px">
+                <div style="font-size:12px;font-weight:600;color:#6b7290;margin-bottom:9px;text-transform:uppercase;letter-spacing:.5px">Prefill from COBISS</div>
+                <div style="display:flex;gap:10px;align-items:center">
+                  <div style="display:flex;align-items:center;background:#f1f2f9;border:1px solid #e6e8f2;border-radius:9px;padding:0 12px;height:40px;flex:1;max-width:280px">
+                    <span style="font-size:12px;color:#98a0ba;font-family:'IBM Plex Mono',monospace;margin-right:6px">COBISS.CG-ID</span>
+                    <input value="{{ cobissId }}" onInput="{{ onCobissId }}" placeholder="e.g. 24512006" style="border:none;background:none;font-family:'IBM Plex Mono',monospace;font-size:14px;width:100%">
+                  </div>
+                  <button onClick="{{ getCobiss }}" style="height:40px;padding:0 16px;border-radius:9px;background:#2b3a8c;color:#fff;font-weight:600;font-size:13.5px;display:flex;align-items:center;gap:8px">
+                    <sc-if value="{{ cobissLoading }}" hint-placeholder-val=""><span style="width:13px;height:13px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;display:inline-block;animation:spin .7s linear infinite"></span></sc-if>
+                    {{ cobissBtn }}
+                  </button>
+                  <sc-if value="{{ cobissDone }}" hint-placeholder-val=""><span style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:#1f9d57">✓ Filled from COBISS</span></sc-if>
+                </div>
+              </div>
+              </sc-if>
+
+              <sc-if value="{{ overwrite }}" hint-placeholder-val="">
+                <div style="background:#fbf3e1;border:1px solid #ecd8a8;border-radius:11px;padding:13px 16px;margin-bottom:14px;animation:fadein .15s">
+                  <div style="font-size:13.5px;font-weight:600;color:#8a6410;margin-bottom:4px">Overwrite existing values?</div>
+                  <div style="font-size:12.5px;color:#9a7a34;margin-bottom:11px">{{ overwrite }} already has a value you entered. Apply COBISS data over it, or keep yours and only fill empty fields.</div>
+                  <div style="display:flex;gap:9px">
+                    <button onClick="{{ applyOverwrite }}" style="height:34px;padding:0 14px;border-radius:8px;background:#c8811a;color:#fff;font-weight:600;font-size:13px">Overwrite all</button>
+                    <button onClick="{{ keepMine }}" style="height:34px;padding:0 14px;border-radius:8px;border:1px solid #ecd8a8;background:#fff;color:#8a6410;font-weight:600;font-size:13px">Keep mine, fill empties</button>
+                  </div>
+                </div>
+              </sc-if>
+
+              <!-- parents per item -->
+              <div style="background:#fff;border:1px solid #e6e8f2;border-radius:13px;padding:16px 18px;margin-bottom:14px">
+                <div style="font-size:12px;font-weight:600;color:#6b7290;margin-bottom:9px;text-transform:uppercase;letter-spacing:.5px">Parent records</div>
+                <sc-if value="{{ hasParents }}" hint-placeholder-val="">
+                  <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:11px">
+                    <sc-for list="{{ parents }}" as="p" hint-placeholder-count="1">
+                      <div style="display:flex;align-items:center;gap:11px;background:#faf9fe;border:1px solid #e7e1f6;border-radius:10px;padding:10px 12px">
+                        <span style="width:30px;height:30px;flex:none;border-radius:8px;background:#efe9fb;color:#6b4fca;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:12px">{{ p.typeInitial }}</span>
+                        <div style="min-width:0;flex:1">
+                          <div style="font-size:13.5px;font-weight:600;color:#3f3369;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.name }}</div>
+                          <div style="font-size:11px;color:#8871c9;font-family:'IBM Plex Mono',monospace">{{ p.typeLabel }} · {{ p.id }}</div>
+                        </div>
+                        <sc-if value="{{ p.markShow }}" hint-placeholder-val="{{ true }}">
+                          <button onClick="{{ p.markOnClick }}" title="{{ p.markTitle }}" style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:5px 10px;border-radius:7px;color:{{ p.markC }};background:{{ p.markBg }};border:1px solid {{ p.markBd }};cursor:{{ p.markCursor }};white-space:nowrap;flex:none">{{ p.markIcon }} {{ p.markLabel }}</button>
+                        </sc-if>
+                        <button onClick="{{ p.onRemove }}" title="Unlink" hidden="{{ p.hideRemove }}" style="width:26px;height:26px;flex:none;border-radius:7px;color:#a2aac2;display:flex;align-items:center;justify-content:center" style-hover="{{ menuBtnHover }}"><svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="5" y1="5" x2="15" y2="15"></line><line x1="15" y1="5" x2="5" y2="15"></line></svg></button>
+                      </div>
+                    </sc-for>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ metaEditable }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex;gap:10px;align-items:center">
+                  <div style="display:flex;align-items:center;background:#f1f2f9;border:1px solid #e6e8f2;border-radius:9px;padding:0 11px;height:38px;flex:1;max-width:320px">
+                    <span style="color:#9aa1bb">⌕</span>
+                    <input placeholder="Search serials &amp; collections to link…" style="border:none;background:none;padding:0 8px;font-size:13px;width:100%">
+                  </div>
+                  <button onClick="{{ addParentItem }}" style="height:38px;padding:0 14px;border-radius:9px;border:1px solid #ddd0f4;background:#f7f4fd;color:#5b41a8;font-weight:600;font-size:13px">+ Link parent</button>
+                </div>
+                </sc-if>
+              </div>
+
+              <!-- fields -->
+              <div style="background:#fff;border:1px solid #e6e8f2;border-radius:13px;padding:18px 20px">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px 22px">
+                  <sc-for list="{{ fields }}" as="f" hint-placeholder-count="8">
+                    <div style="grid-column:{{ f.col }}">
+                      <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">
+                        <label style="font-size:13px;font-weight:600;color:#3a4160">{{ f.label }}</label>
+                        <sc-if value="{{ f.required }}" hint-placeholder-val=""><span style="color:#d93a2c;font-weight:700">*</span></sc-if>
+                        <sc-if value="{{ f.prov }}" hint-placeholder-val=""><span style="font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:5px;color:{{ f.provC }};background:{{ f.provBg }}">{{ f.prov }}</span></sc-if>
+                        <sc-if value="{{ f.flag }}" hint-placeholder-val=""><span style="font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:5px;color:#b07d16;background:#fbf1df">{{ f.flag }}</span></sc-if>
+                        <sc-if value="{{ f.hasSrcPicker }}" hint-placeholder-val="">
+                          <div style="position:relative;margin-left:auto">
+                            <button onClick="{{ f.toggleMenu }}" title="Choose which parent this field comes from" style="display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;padding:2px 8px 2px 7px;border-radius:6px;color:{{ f.srcPillC }};background:{{ f.srcPillBg }};border:1px solid transparent" style-hover="{{ srcPillHover }}"><span style="width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.75"></span>{{ f.srcPillLabel }}<span style="opacity:.55;font-size:9px">▼</span></button>
+                            <sc-if value="{{ f.menuOpen }}" hint-placeholder-val="">
+                              <div style="position:absolute;top:26px;right:0;width:256px;background:#fff;border:1px solid #e6e8f2;border-radius:11px;box-shadow:0 14px 36px rgba(20,25,50,.17);z-index:30;padding:6px;animation:fadein .12s">
+                                <div style="font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#a2aac2;padding:4px 8px 6px">Fill this field from</div>
+                                <sc-for list="{{ f.srcOptions }}" as="so" hint-placeholder-count="2">
+                                  <button onClick="{{ so.onPick }}" style="display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:7px 9px;border-radius:8px;background:{{ so.bg }}" style-hover="{{ srcOptHover }}">
+                                    <span style="width:15px;height:15px;flex:none;border-radius:50%;border:1.5px solid {{ so.ringC }};display:inline-flex;align-items:center;justify-content:center"><span style="width:7px;height:7px;border-radius:50%;background:{{ so.dot }}"></span></span>
+                                    <span style="min-width:0;flex:1"><span style="display:block;font-size:12.5px;font-weight:600;color:#3f3369;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ so.name }}</span><span style="display:block;font-size:11px;color:#98a0ba;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ so.preview }}</span></span>
+                                  </button>
+                                </sc-for>
+                                <button onClick="{{ f.setManual }}" style="display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:8px 9px;border-radius:8px;background:{{ f.manualBg }};margin-top:3px;border-top:1px solid #f2f3f8" style-hover="{{ srcOptHover }}">
+                                  <span style="width:15px;height:15px;flex:none;border-radius:50%;border:1.5px solid {{ f.manualRing }};display:inline-flex;align-items:center;justify-content:center"><span style="width:7px;height:7px;border-radius:50%;background:{{ f.manualDot }}"></span></span>
+                                  <span style="font-size:12.5px;font-weight:600;color:#3a4160">Manual entry</span>
+                                </button>
+                              </div>
+                            </sc-if>
+                          </div>
+                        </sc-if>
+                      </div>
+                      <sc-if value="{{ f.isInput }}" hint-placeholder-val="{{ true }}">
+                        <input value="{{ f.value }}" onInput="{{ f.onChange }}" disabled="{{ f.disabled }}" placeholder="{{ f.placeholder }}" style="width:100%;height:39px;border:1.5px solid {{ f.borderColor }};background:{{ f.inputBg }};border-radius:9px;padding:0 12px;font-size:13.5px;color:{{ f.inputColor }};cursor:{{ f.inputCursor }}">
+                      </sc-if>
+                      <sc-if value="{{ f.isDate }}" hint-placeholder-val="">
+                        <input type="date" value="{{ f.value }}" onInput="{{ f.onChange }}" disabled="{{ f.disabled }}" style="width:100%;height:39px;border:1.5px solid {{ f.borderColor }};background:{{ f.inputBg }};border-radius:9px;padding:0 12px;font-size:13.5px;color:{{ f.inputColor }};cursor:{{ f.inputCursor }}">
+                      </sc-if>
+                      <sc-if value="{{ f.isEnum }}" hint-placeholder-val="">
+                        <select value="{{ f.value }}" onChange="{{ f.onChange }}" disabled="{{ f.disabled }}" style="width:100%;height:39px;border:1.5px solid {{ f.borderColor }};background:{{ f.inputBg }};border-radius:9px;padding:0 10px;font-size:13.5px;color:{{ f.inputColor }};cursor:{{ f.inputCursor }}">
+                          <option value="">— select —</option>
+                          <sc-for list="{{ f.options }}" as="o" hint-placeholder-count="3"><option value="{{ o }}">{{ o }}</option></sc-for>
+                        </select>
+                      </sc-if>
+                      <sc-if value="{{ f.isMulti }}" hint-placeholder-val="">
+                        <div style="display:flex;flex-wrap:wrap;gap:7px;align-items:center">
+                          <sc-for list="{{ f.chips }}" as="ch" hint-placeholder-count="2"><span style="display:inline-flex;align-items:center;gap:6px;background:#eef1fd;border:1px solid #d7ddf7;color:#2b3a8c;padding:4px 9px;border-radius:7px;font-size:12.5px">{{ ch }}</span></sc-for>
+                        <sc-if value="{{ f.notDisabled }}" hint-placeholder-val="{{ true }}">
+                          <input onKeyDown="{{ f.onAdd }}" placeholder="{{ f.placeholder }}" style="min-width:160px;flex:1;height:36px;border:1.5px dashed #d5d9ea;background:#fbfbfe;border-radius:8px;padding:0 11px;font-size:13px">
+                        </sc-if>
+                        </div>
+                      </sc-if>
+                      <sc-if value="{{ f.error }}" hint-placeholder-val=""><div style="font-size:12px;color:#d93a2c;margin-top:6px;font-weight:500">{{ f.error }}</div></sc-if>
+                    </div>
+                  </sc-for>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px;padding-top:18px;border-top:1px solid #f2f3f8;margin-top:18px">
+                  <button onClick="{{ prevItem }}" style="height:40px;padding:0 16px;border-radius:9px;border:1px solid #e6e8f2;background:#fff;color:{{ prevColor }};font-weight:600;font-size:13.5px;opacity:{{ prevOpacity }}">‹ Previous</button>
+                  <span style="font-size:12px;color:#a2aac2">{{ nav.cur1 }} / {{ nav.total }}</span>
+                  <div style="margin-left:auto;display:flex;align-items:center;gap:12px">
+                    <sc-if value="{{ nextHelper }}" hint-placeholder-val=""><span style="font-size:12px;color:#c8811a;font-weight:500">{{ nextHelper }}</span></sc-if>
+                    <button onClick="{{ nextItem }}" style="height:40px;padding:0 20px;border-radius:9px;background:{{ nextBg }};color:#fff;font-weight:600;font-size:14px">{{ nextLabel }}</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            </sc-if>
+
+            <!-- PROCESSING & UPLOAD TAB -->
+            <sc-if value="{{ tabProc }}" hint-placeholder-val="">
+            <div style="max-width:1000px;margin:0 auto">
+
+              <sc-if value="{{ uploadedBanner }}" hint-placeholder-val="">
+                <div style="display:flex;align-items:center;gap:12px;background:#e6f6ec;border:1px solid #bfe6cd;border-radius:12px;padding:15px 18px;margin-bottom:16px;animation:fadein .2s">
+                  <span style="width:38px;height:38px;flex:none;border-radius:50%;background:#fff;color:#1f9d57;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700">✓</span>
+                  <div><div style="font-size:14.5px;font-weight:600;color:#1a7a45">{{ uploadedTitle }}</div><div style="font-size:12.5px;color:#3f8a60">{{ uploadedSub }}</div></div>
+                </div>
+              </sc-if>
+
+              <!-- control strip -->
+              <div style="background:#fff;border:1px solid #e6e8f2;border-radius:13px;padding:16px 20px;margin-bottom:14px">
+                <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:12px;font-weight:600;color:#6b7290;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Batch processing</div>
+                    <div style="font-size:13px;color:#6b7290">{{ procSummary }}</div>
+                  </div>
+                  <sc-if value="{{ showRerunAll }}" hint-placeholder-val=""><button onClick="{{ rerunAllFailed }}" style="height:38px;padding:0 15px;border-radius:9px;border:1px solid #f4c7c1;background:#fdf0ee;color:#c23a2c;font-weight:600;font-size:13px;flex:none">↻ Rerun all failed</button></sc-if>
+                  <sc-if value="{{ showStart }}" hint-placeholder-val="{{ true }}"><button onClick="{{ startProcess }}" style="height:42px;padding:0 22px;border-radius:10px;background:{{ startBg }};color:#fff;font-weight:600;font-size:14px;flex:none;opacity:{{ startOpacity }}">{{ startLabel }}</button></sc-if>
+                  <sc-if value="{{ showUpload }}" hint-placeholder-val=""><button onClick="{{ doUpload }}" style="height:42px;padding:0 24px;border-radius:10px;background:#1f9d57;color:#fff;font-weight:600;font-size:14px;flex:none">⇧ Upload batch</button></sc-if>
+                </div>
+                <div style="display:flex;align-items:center;gap:12px">
+                  <div style="flex:1;height:9px;background:#eef0f7;border-radius:6px;overflow:hidden"><div style="height:100%;background:linear-gradient(90deg,#2b3a8c,#4658c0);border-radius:6px;width:{{ procPct }};transition:width .4s"></div></div>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;color:#2b3a8c;min-width:38px;text-align:right">{{ procPct }}</span>
+                </div>
+                <sc-if value="{{ startBlockedNote }}" hint-placeholder-val=""><div style="font-size:12px;color:#c8811a;margin-top:8px">{{ startBlockedNote }}</div></sc-if>
+              </div>
+
+              <!-- per-item list -->
+              <div style="background:#fff;border:1px solid #e6e8f2;border-radius:13px;overflow:hidden">
+                <sc-for list="{{ procItems }}" as="pi" hint-placeholder-count="3">
+                  <div style="display:flex;align-items:center;gap:14px;padding:13px 18px;border-top:1px solid #eef0f6;background:{{ pi.rowBg }}">
+                    <span style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;flex:none;border-radius:8px;font-size:13px;font-weight:700;color:{{ pi.c }};background:{{ pi.bg }}">
+                      <sc-if value="{{ pi.spin }}" hint-placeholder-val=""><span style="width:14px;height:14px;border:2.5px solid #cfe0ff;border-top-color:#2f6fed;border-radius:50%;display:inline-block;animation:spin .7s linear infinite"></span></sc-if>
+                      <sc-if value="{{ pi.noSpin }}" hint-placeholder-val="{{ true }}">{{ pi.glyph }}</sc-if>
+                    </span>
+                    <div style="flex:1;min-width:0">
+                      <div style="font-size:13.5px;font-weight:600;color:#2a3050;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ pi.title }}</div>
+                      <div style="font-size:11.5px;color:#98a0ba;font-family:'IBM Plex Mono',monospace">{{ pi.sub }}</div>
+                    </div>
+                    <sc-if value="{{ pi.error }}" hint-placeholder-val=""><span style="font-size:11.5px;color:#c23a2c;max-width:260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ pi.error }}</span></sc-if>
+                    <span style="width:88px;text-align:right;font-size:12px;font-weight:600;color:{{ pi.c }};flex:none">{{ pi.statusLabel }}</span>
+                    <sc-if value="{{ pi.canRerun }}" hint-placeholder-val=""><button onClick="{{ pi.onRerun }}" style="height:30px;padding:0 12px;border-radius:8px;border:1px solid #f4c7c1;background:#fff;color:#c23a2c;font-weight:600;font-size:12px;flex:none">↻ Rerun</button></sc-if>
+                  </div>
+                </sc-for>
+              </div>
+
+              <!-- upload summary -->
+              <div style="background:#fff;border:1px solid #e6e8f2;border-radius:13px;padding:15px 20px;margin-top:14px;display:flex;align-items:center;gap:22px">
+                <div><div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#98a0ba;font-weight:600;margin-bottom:4px">Publish as</div><div style="font-size:13.5px;font-weight:600;color:#2a3050">{{ bw.publishLabel }}</div></div>
+                <div style="width:1px;height:34px;background:#eef0f6"></div>
+                <div><div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#98a0ba;font-weight:600;margin-bottom:4px">Visibility</div><div style="font-size:13.5px;font-weight:600;color:#2a3050">{{ bw.visibilityLabel }}</div></div>
+                <div style="width:1px;height:34px;background:#eef0f6"></div>
+                <div style="font-size:12px;color:#a2aac2;flex:1">document.pdf · thumbnail.png · ocr.txt · metadata.json per item. Source TIFFs stay local.</div>
+              </div>
+            </div>
+            </sc-if>
+
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ============ SYNC ============ -->
+      <sc-if value="{{ isSync }}" hint-placeholder-val="">
+        <div style="padding:22px 26px 48px;max-width:760px;margin:0 auto">
+          <div style="background:#fff;border:1px solid #e6e8f2;border-radius:14px;padding:22px 24px;margin-bottom:16px">
+            <div style="display:flex;align-items:center;gap:16px;margin-bottom:{{ syncBarMargin }}">
+              <div style="width:46px;height:46px;flex:none;border-radius:12px;background:#eef1fd;color:#2b3a8c;display:flex;align-items:center;justify-content:center;font-size:22px">↻</div>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:17px;font-weight:600">Metadata sync</div>
+                <div style="font-size:12.5px;color:#98a0ba">Last synced {{ lastSync }} · pulls catalog metadata from the backend into the archive</div>
+              </div>
+              <div style="text-align:right">
+                <div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#98a0ba;margin-bottom:3px">Source</div>
+                <div style="font-size:12.5px;font-family:'IBM Plex Mono',monospace;color:#2b3a8c">api.nbcg.me</div>
+              </div>
+              <div style="text-align:right">
+                <div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#98a0ba;margin-bottom:3px">Auto-sync</div>
+                <div style="font-size:12.5px;font-family:'IBM Plex Mono',monospace;color:#2b3a8c">{{ nextSync }}</div>
+              </div>
+              <button onClick="{{ doSync }}" style="height:42px;padding:0 22px;border-radius:10px;background:#2b3a8c;color:#fff;font-weight:600;font-size:14px;display:flex;align-items:center;gap:9px">
+                <sc-if value="{{ syncing }}" hint-placeholder-val=""><span style="width:14px;height:14px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;display:inline-block;animation:spin .7s linear infinite"></span></sc-if>
+                {{ syncBtn }}
+              </button>
+            </div>
+            <sc-if value="{{ syncing }}" hint-placeholder-val="">
+              <div>
+                <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
+                  <div style="flex:1;height:9px;background:#eef0f7;border-radius:6px;overflow:hidden"><div style="height:100%;background:linear-gradient(90deg,#2b3a8c,#4658c0);border-radius:6px;width:{{ syncPct }}"></div></div>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;color:#2b3a8c">{{ syncPct }}</span>
+                </div>
+                <div style="font-size:12px;color:#98a0ba">{{ syncStage }}</div>
+              </div>
+            </sc-if>
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
+            <sc-for list="{{ syncStats }}" as="ss" hint-placeholder-count="4">
+              <div style="background:#fff;border:1px solid #e6e8f2;border-radius:12px;padding:15px 16px">
+                <div style="font-size:26px;font-weight:700;color:{{ ss.color }};font-family:'IBM Plex Mono',monospace;line-height:1.1">{{ ss.value }}</div>
+                <div style="font-size:12px;color:#98a0ba;margin-top:4px">{{ ss.label }}</div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="background:#fff;border:1px solid #e6e8f2;border-radius:14px;padding:8px 20px 12px">
+            <div style="font-size:12px;font-weight:600;color:#6b7290;padding:14px 2px 6px;text-transform:uppercase;letter-spacing:.5px">Recent syncs</div>
+            <sc-for list="{{ syncLog }}" as="sl" hint-placeholder-count="4">
+              <div style="display:flex;align-items:center;gap:13px;padding:12px 2px;border-top:1px solid #f2f3f8">
+                <span style="width:9px;height:9px;border-radius:50%;flex:none;background:{{ sl.dot }};box-shadow:0 0 0 3px {{ sl.halo }}"></span>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13.5px;font-weight:500;color:#2a3050">{{ sl.summary }}</div>
+                  <div style="font-size:11.5px;color:#a2aac2;font-family:'IBM Plex Mono',monospace">{{ sl.detail }}</div>
+                </div>
+                <span style="font-size:12px;color:#98a0ba;font-family:'IBM Plex Mono',monospace;white-space:nowrap">{{ sl.time }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ============ SETTINGS ============ -->
+      <sc-if value="{{ isSettings }}" hint-placeholder-val="">
+        <div style="padding:22px 26px 48px;max-width:720px;margin:0 auto">
+          <div style="display:flex;gap:4px;background:#eaecf5;padding:4px;border-radius:10px;margin-bottom:18px;width:fit-content">
+            <button onClick="{{ setCfgTab }}" style="padding:7px 16px;border-radius:7px;font-size:13px;font-weight:{{ cfgTab.w }};color:{{ cfgTab.c }};background:{{ cfgTab.b }}">Configure</button>
+            <button onClick="{{ setDataTab }}" style="padding:7px 16px;border-radius:7px;font-size:13px;font-weight:{{ dataTab.w }};color:{{ dataTab.c }};background:{{ dataTab.b }}">Data</button>
+          </div>
+
+          <sc-if value="{{ isCfgTab }}" hint-placeholder-val="{{ true }}">
+          <div>
+
+          <div style="background:#fff;border:1px solid #e6e8f2;border-radius:13px;padding:18px 20px;margin-bottom:16px">
+            <div style="font-size:13px;font-weight:700;margin-bottom:2px">Folder locations</div>
+            <div style="font-size:12.5px;color:#98a0ba;margin-bottom:14px">Where scans arrive and where finished items are moved.</div>
+            <sc-for list="{{ folders }}" as="fo" hint-placeholder-count="2">
+              <div style="margin-bottom:14px">
+                <label style="font-size:12.5px;font-weight:600;color:#3a4160;display:block;margin-bottom:6px">{{ fo.label }}</label>
+                <div style="display:flex;gap:9px;align-items:center">
+                  <div style="flex:1;height:39px;border:1.5px solid #e6e8f2;border-radius:9px;background:#fbfbfe;display:flex;align-items:center;padding:0 12px;font-family:'IBM Plex Mono',monospace;font-size:13px;color:{{ fo.pathColor }}">{{ fo.path }}</div>
+                  <button style="height:39px;padding:0 15px;border-radius:9px;border:1px solid #e6e8f2;background:#fff;font-weight:600;font-size:13px;color:#3a4160">Browse…</button>
+                  <span style="display:inline-flex;align-items:center;gap:6px;width:110px;font-size:12px;font-weight:600;color:{{ fo.c }}"><span style="width:8px;height:8px;border-radius:50%;background:{{ fo.c }}"></span>{{ fo.status }}</span>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="background:#fff;border:1px solid #e6e8f2;border-radius:13px;padding:18px 20px;margin-bottom:16px">
+            <div style="font-size:13px;font-weight:700;margin-bottom:14px">Backend connection</div>
+            <div style="margin-bottom:14px">
+              <label style="font-size:12.5px;font-weight:600;color:#3a4160;display:block;margin-bottom:6px">API base URL</label>
+              <input value="{{ apiUrl }}" onInput="{{ onApiUrl }}" placeholder="https://api.nbcg.me" style="width:100%;height:39px;border:1.5px solid #e6e8f2;border-radius:9px;background:#fbfbfe;padding:0 12px;font-family:'IBM Plex Mono',monospace;font-size:13px">
+            </div>
+            <div style="margin-bottom:16px">
+              <label style="font-size:12.5px;font-weight:600;color:#3a4160;display:block;margin-bottom:6px">API access token</label>
+              <div style="display:flex;gap:9px">
+                <div style="flex:1;display:flex;align-items:center;height:39px;border:1.5px solid #e6e8f2;border-radius:9px;background:#fbfbfe;padding:0 12px">
+                  <input value="{{ tokenDisplay }}" readOnly="{{ true }}" style="border:none;background:none;font-family:'IBM Plex Mono',monospace;font-size:13px;width:100%;letter-spacing:{{ tokenSpacing }}">
+                  <button onClick="{{ toggleToken }}" style="font-size:12px;font-weight:600;color:#2b3a8c;padding:0 4px">{{ tokenToggle }}</button>
+                </div>
+                <button style="height:39px;padding:0 14px;border-radius:9px;border:1px solid #e6e8f2;background:#fff;font-weight:600;font-size:13px;color:#3a4160">Paste</button>
+              </div>
+              <div style="font-size:11.5px;color:#a2aac2;margin-top:6px">Stored as a secret. Never shown in plain text by default.</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px">
+              <button onClick="{{ testConn }}" style="height:39px;padding:0 16px;border-radius:9px;border:1px solid #cdd6f7;background:#f4f6fe;color:#2b3a8c;font-weight:600;font-size:13px">Test connection</button>
+              <sc-if value="{{ testResult }}" hint-placeholder-val="">
+                <span style="display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;color:{{ testColor }}">{{ testGlyph }} {{ testResult }}</span>
+              </sc-if>
+            </div>
+          </div>
+
+          <div style="background:#fff;border:1px solid #e6e8f2;border-radius:13px;padding:18px 20px;margin-bottom:18px">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f2f3f8">
+              <span style="font-size:13px;font-weight:600;color:#3a4160">Theme</span>
+              <div style="display:flex;gap:4px;background:#eaecf5;padding:4px;border-radius:9px">
+                <sc-for list="{{ themes }}" as="th" hint-placeholder-count="3"><button onClick="{{ th.onClick }}" style="padding:6px 13px;border-radius:7px;font-size:12.5px;font-weight:{{ th.w }};color:{{ th.c }};background:{{ th.b }}">{{ th.label }}</button></sc-for>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid #f2f3f8">
+              <div><div style="font-size:13px;font-weight:600;color:#3a4160">Metadata schema</div><div style="font-size:11.5px;color:#98a0ba">Field definitions from the backend</div></div>
+              <button style="height:34px;padding:0 13px;border-radius:8px;border:1px solid #e6e8f2;background:#fff;font-weight:600;font-size:12.5px;color:#3a4160">↻ Refresh schema</button>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 0 4px">
+              <span style="font-size:13px;font-weight:600;color:#3a4160">App version</span>
+              <span style="font-size:12.5px;color:#98a0ba;font-family:'IBM Plex Mono',monospace">NBCG Archive 1.4.0 · Tauri</span>
+            </div>
+          </div>
+
+          <div style="display:flex;justify-content:flex-end;gap:10px">
+            <button onClick="{{ testConn }}" style="height:42px;padding:0 18px;border-radius:10px;border:1px solid #cdd6f7;background:#f4f6fe;color:#2b3a8c;font-weight:600;font-size:14px">Test connection</button>
+            <button onClick="{{ saveSettings }}" style="height:42px;padding:0 26px;border-radius:10px;background:#2b3a8c;color:#fff;font-weight:600;font-size:14px">Save settings</button>
+          </div>
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ isDataTab }}" hint-placeholder-val="">
+          <div>
+            <div style="background:#eef1fd;border:1px solid #cdd6f7;border-radius:11px;padding:12px 15px;margin-bottom:18px;color:#2b3a8c;font-size:13px;line-height:1.5"><b>Naming rules</b> are fixed to keep the archive consistent. This is how every archive PDF is named on upload — shown here for reference, not for editing.</div>
+
+            <div style="background:#fff;border:1px solid #e6e8f2;border-radius:13px;padding:18px 20px;margin-bottom:16px">
+              <div style="font-size:13px;font-weight:700;margin-bottom:2px">Archive PDF filename</div>
+              <div style="font-size:12.5px;color:#98a0ba;margin-bottom:16px">The name given to each item's archive PDF when it is generated.</div>
+              <div style="display:flex;gap:14px;margin-bottom:14px">
+                <div style="flex:1">
+                  <label style="font-size:12.5px;font-weight:600;color:#3a4160;display:block;margin-bottom:6px">Prefix</label>
+                  <input value="{{ nm.prefix }}" disabled="{{ true }}" style="width:100%;height:39px;border:1.5px solid #ececf3;border-radius:9px;background:#f3f4f8;padding:0 12px;font-family:'IBM Plex Mono',monospace;font-size:13px;color:#8a90a8;cursor:not-allowed">
+                </div>
+                <div style="flex:1">
+                  <label style="font-size:12.5px;font-weight:600;color:#3a4160;display:block;margin-bottom:6px">Suffix</label>
+                  <input value="{{ nm.suffix }}" placeholder="none" disabled="{{ true }}" style="width:100%;height:39px;border:1.5px solid #ececf3;border-radius:9px;background:#f3f4f8;padding:0 12px;font-family:'IBM Plex Mono',monospace;font-size:13px;color:#8a90a8;cursor:not-allowed">
+                </div>
+              </div>
+              <div style="margin-bottom:14px">
+                <label style="font-size:12.5px;font-weight:600;color:#3a4160;display:block;margin-bottom:6px">Base identifier</label>
+                <div style="display:flex;flex-wrap:wrap;gap:4px;background:#eef0f6;padding:4px;border-radius:9px;width:fit-content">
+                  <sc-for list="{{ baseSeg }}" as="b" hint-placeholder-count="4"><button disabled="{{ true }}" style="padding:6px 13px;border-radius:7px;font-size:12.5px;cursor:not-allowed;font-weight:{{ b.w }};color:{{ b.c }};background:{{ b.b }}">{{ b.label }}</button></sc-for>
+                </div>
+              </div>
+              <div style="font-size:12px;color:#98a0ba;margin-bottom:16px">Parts are always joined with an underscore ( <span style="font-family:'IBM Plex Mono',monospace;color:#6b7290">_</span> ). This is fixed.</div>
+              <div style="display:flex;align-items:center;gap:12px;background:#f6f8ff;border:1px solid #e2e7fb;border-radius:10px;padding:12px 14px">
+                <span style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#8791c0">Preview</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:13.5px;color:#2b3a8c;font-weight:600">{{ previewName }}</span>
+              </div>
+            </div>
+
+            <div style="background:#fff;border:1px solid #e6e8f2;border-radius:13px;padding:18px 20px;margin-bottom:16px">
+              <div style="font-size:13px;font-weight:700;margin-bottom:2px">Multi-page numbering</div>
+              <div style="font-size:12.5px;color:#98a0ba;margin-bottom:16px">Items with several scanned pages append a running page number after an underscore — <b style="color:#6b7290;font-weight:600">_1, _2, … _10</b>. Numbers are not padded. This is fixed.</div>
+              <div style="display:flex;align-items:center;gap:12px;background:#f6f8ff;border:1px solid #e2e7fb;border-radius:10px;padding:12px 14px">
+                <span style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#8791c0;flex:none">Preview</span>
+                <div style="display:flex;flex-wrap:wrap;gap:8px"><sc-for list="{{ seqPreview }}" as="fn" hint-placeholder-count="3"><span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#2b3a8c;background:#fff;border:1px solid #dde3fb;border-radius:7px;padding:4px 9px">{{ fn }}</span></sc-for></div>
+              </div>
+            </div>
+          </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+    </div>
+  </div>
+
+  <!-- toast -->
+  <sc-if value="{{ toast }}" hint-placeholder-val="">
+    <div style="position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:#232945;color:#fff;padding:12px 20px;border-radius:11px;font-size:13.5px;font-weight:500;box-shadow:0 8px 28px rgba(20,25,50,.28);animation:fadein .18s;z-index:50">{{ toast }}</div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  S = {
+    done:    {g:'✓', c:'#1f9d57', bg:'#e6f6ec', l:'Done'},
+    running: {g:'⟳', c:'#2f6fed', bg:'#e7effd', l:'Running'},
+    pending: {g:'○', c:'#9aa0b8', bg:'#f1f2f7', l:'Pending'},
+    failed:  {g:'✗', c:'#d93a2c', bg:'#fdecea', l:'Failed'},
+    reupload:{g:'↻', c:'#c8811a', bg:'#fbf1df', l:'Re-upload'},
+  };
+  stageDefs = [['pdf','PDF'],['thumb','Thumbnail'],['ocr','OCR'],['meta','Metadata'],['upload','Uploaded']];
+  langOpts = ['Montenegrin','Serbian','Church Slavonic','Italian','Russian'];
+  MAIN = [['title','Title','text',true],['author','Author','text',false],['year','Publication year','text',false],['lang','Language','enum',false],['place','Place of publication','text',false],['publisher','Publisher','text',false],['subject','Subject','multi',false],['phys','Physical description','text',false],['note','Note','text',false]];
+  CHILD = [['serialTitle','Serial title','text',true,'p'],['publisher','Publisher','text',false,'p'],['place','Place of publication','text',false,'p'],['lang','Language','enum',false,'p'],['subject','Subject','multi',false,'p'],['volumeYear','Volume / Year','text',true,'i'],['issueNo','Issue number','text',true,'i'],['issueDate','Issue date','date',true,'i']];
+  provMeta = {cobiss:{l:'COBISS',c:'#2f6fed',bg:'#e7effd'},parent:{l:'From parent',c:'#7a5bd0',bg:'#f0ebfb'},user:{l:'Edited',c:'#5a8f6e',bg:'#e9f4ee'}};
+
+  COBISS = {
+    title:'Gorski vijenac : istoričesko sobitije pri svršetku XVII vijeka',
+    author:'Petar II Petrović Njegoš', year:'1847', lang:'Montenegrin',
+    place:'Beč', publisher:'Jermenski manastir',
+    subject:['Epska poezija','Crnogorska književnost'],
+    phys:'IV, 264 str. ; 21 cm', note:'Prvo izdanje.'
+  };
+
+  parentPool = [
+    {name:'Prosvjeta (serial)',id:'NB-9021',type:'Serial',canPassData:true,passesData:true,inherit:{serialTitle:'Prosvjeta',publisher:'Društvo Prosvjeta',place:'Cetinje',lang:'Montenegrin',subject:['Periodika','Kultura']}},
+    {name:'Glas Crnogorca (serial)',id:'NB-9044',type:'Serial',canPassData:true,passesData:true,inherit:{serialTitle:'Glas Crnogorca',publisher:'Državna štamparija',place:'Cetinje',lang:'Montenegrin',subject:['Periodika','Novine']}},
+    {name:'Cetinjski ljetopis (serial)',id:'NB-9077',type:'Serial',canPassData:true,passesData:false,inherit:{serialTitle:'Cetinjski ljetopis',place:'Cetinje',lang:'Montenegrin',subject:['Periodika']}},
+    {name:'Digitized periodicals',id:'NB-COL-3',type:'Collection',canPassData:false,passesData:false},
+  ];
+
+  makeItems() {
+    const m = (o)=>{const r={};for(const k in o)r[k]={v:o[k].v!==undefined?o[k].v:o[k],p:o[k].p||'user'};return r;};
+    return [
+      {id:'njegos',folder:'/unprocessed/njegos_gorski_vijenac',title:'Gorski vijenac',backendId:'',sources:'24 TIFFs',level:'main',stages:{pdf:'pending',thumb:'pending',ocr:'pending',meta:'pending',upload:'pending'},meta:{title:{v:'Gorski vijenac',p:'user'}}},
+      {id:'glas1',folder:'/unprocessed/glas_crnogorca_1873_01',title:'Glas Crnogorca, 1873, br. 1',backendId:'',sources:'40 TIFFs',level:'child',stages:{pdf:'failed',thumb:'pending',ocr:'pending',meta:'pending',upload:'pending'},error:'PDF build failed — source resolution too low (72 dpi).',meta:{}},
+      {id:'zeta',folder:'/unprocessed/zeta_1931',title:'Zeta, 1931',backendId:'',sources:'12 TIFFs',level:'main',stages:{pdf:'pending',thumb:'pending',ocr:'pending',meta:'pending',upload:'pending'},meta:{}},
+      {id:'prosvjeta89',folder:'/unprocessed/prosvjeta_1889_04',title:'Prosvjeta, 1889, br. 4',backendId:'',sources:'18 TIFFs',level:'child',batchId:'b14',stages:{pdf:'done',thumb:'done',ocr:'done',meta:'pending',upload:'pending'},parents:[{name:'Prosvjeta (serial)',id:'NB-9021',type:'Serial',canPassData:true,passesData:true,inherit:{serialTitle:'Prosvjeta',publisher:'Društvo Prosvjeta',place:'Cetinje',lang:'Montenegrin',subject:['Periodika','Kultura']}}],
+        meta:{serialTitle:{v:'Prosvjeta',p:'parent'},publisher:{v:'Društvo Prosvjeta',p:'parent'},place:{v:'Cetinje',p:'parent'},lang:{v:'Montenegrin',p:'parent'},subject:{v:['Periodika','Kultura'],p:'parent'}}},
+      {id:'grlica',folder:'/processed/grlica_kalendar_1835',title:'Grlica: kalendar za 1835',backendId:'NB-10442',sources:'56 TIFFs',level:'main',batchId:'b12',uploaded:true,stages:{pdf:'done',thumb:'done',ocr:'done',meta:'done',upload:'done'},meta:m({title:'Grlica: kalendar crnogorski i primorski',author:'Dimitrije Milaković',year:'1835',lang:'Montenegrin',place:'Cetinje'})},
+      {id:'onogost',folder:'/processed/onogost_1921',title:'Onogošt, 1921',backendId:'NB-10501',sources:'33 TIFFs',level:'main',stages:{pdf:'done',thumb:'done',ocr:'done',meta:'done',upload:'done'},reupload:true,meta:m({title:'Onogošt',year:'1921',lang:'Montenegrin',place:'Nikšić'})},
+      {id:'luca',folder:'/unprocessed/luca_1895_02',title:'Luča, 1895, sv. 2',backendId:'',sources:'21 TIFFs',level:'main',stages:{pdf:'pending',thumb:'pending',ocr:'pending',meta:'pending',upload:'pending'},meta:{}},
+      {id:'crnogorka',folder:'/processed/crnogorka_1884',title:'Crnogorka, 1884',backendId:'NB-10388',sources:'44 TIFFs',level:'main',batchId:'b12',uploaded:true,stages:{pdf:'done',thumb:'done',ocr:'done',meta:'done',upload:'done'},meta:m({title:'Crnogorka',year:'1884',lang:'Montenegrin',place:'Cetinje'})},
+      {id:'prosvjeta92',folder:'/unprocessed/prosvjeta_1892_11',title:'Prosvjeta, 1892, br. 11',backendId:'',sources:'16 TIFFs',level:'child',batchId:'b14',stages:{pdf:'done',thumb:'done',ocr:'done',meta:'pending',upload:'pending'},meta:{}},
+      {id:'boka',folder:'/unprocessed/boka_1909',title:'Boka, 1909',backendId:'',sources:'29 TIFFs',level:'main',stages:{pdf:'failed',thumb:'pending',ocr:'pending',meta:'pending',upload:'pending'},error:'OCR engine crashed on page 14 — corrupt image stream.',meta:{}},
+      {id:'vijesti1',folder:'/unprocessed/vijesti_1990_03',title:'Vijesti, 1990, br. 3',backendId:'',sources:'22 TIFFs',level:'child',batchId:'b13',stages:{pdf:'pending',thumb:'pending',ocr:'pending',meta:'pending',upload:'pending'},meta:{}},
+      {id:'vijesti2',folder:'/unprocessed/vijesti_1990_04',title:'Vijesti, 1990, br. 4',backendId:'',sources:'19 TIFFs',level:'child',batchId:'b13',stages:{pdf:'pending',thumb:'pending',ocr:'pending',meta:'pending',upload:'pending'},meta:{}},
+      {id:'pobjeda1',folder:'/unprocessed/pobjeda_1948_01',title:'Pobjeda, 1948, br. 1',backendId:'',sources:'30 TIFFs',level:'main',batchId:'b16',stages:{pdf:'done',thumb:'done',ocr:'done',meta:'done',upload:'pending'},meta:m({title:'Pobjeda',year:'1948',lang:'Montenegrin',place:'Cetinje'})},
+      {id:'pobjeda2',folder:'/unprocessed/pobjeda_1948_02',title:'Pobjeda, 1948, br. 2',backendId:'',sources:'28 TIFFs',level:'main',batchId:'b16',stages:{pdf:'done',thumb:'done',ocr:'done',meta:'done',upload:'pending'},meta:m({title:'Pobjeda',year:'1948',lang:'Montenegrin',place:'Cetinje'})},
+      {id:'pobjeda3',folder:'/unprocessed/pobjeda_1948_03',title:'Pobjeda, 1948, br. 3',backendId:'',sources:'26 TIFFs',level:'main',batchId:'b16',stages:{pdf:'done',thumb:'done',ocr:'failed',meta:'pending',upload:'pending'},error:'OCR engine crashed on page 9 — corrupt image stream.',meta:m({title:'Pobjeda',year:'1948',lang:'Montenegrin',place:'Cetinje'})},
+      {id:'slovo1',folder:'/unprocessed/slovo_ljubve_1970',title:'Slovo ljubve, 1970',backendId:'',sources:'41 TIFFs',level:'main',batchId:'b17',stages:{pdf:'done',thumb:'done',ocr:'done',meta:'done',upload:'pending'},meta:m({title:'Slovo ljubve',year:'1970',lang:'Montenegrin',place:'Cetinje'})},
+      {id:'slovo2',folder:'/unprocessed/slovo_ljubve_1971',title:'Slovo ljubve, 1971',backendId:'',sources:'37 TIFFs',level:'main',batchId:'b17',stages:{pdf:'done',thumb:'done',ocr:'done',meta:'done',upload:'pending'},meta:m({title:'Slovo ljubve',year:'1971',lang:'Montenegrin',place:'Cetinje'})},
+    ];
+  }
+  makeBatches() {
+    return [
+      {id:'b17',no:17,created:'Today · 11:20',itemIds:['slovo1','slovo2'],type:'to-process',stage:'ready',running:false,progress:100,proc:{slovo1:'done',slovo2:'done'},failSet:[],uploaded:false,cobissId:'',parents:[],parentSource:null,publish:'draft',visibility:'private'},
+      {id:'b16',no:16,created:'Today · 10:45',itemIds:['pobjeda1','pobjeda2','pobjeda3'],type:'to-process',stage:'processing',running:false,progress:67,proc:{pobjeda1:'done',pobjeda2:'done',pobjeda3:'failed'},failSet:['pobjeda3'],uploaded:false,cobissId:'',parents:[],parentSource:null,publish:'record',visibility:'public'},
+      {id:'b14',no:14,created:'Today · 09:58',itemIds:['prosvjeta89','prosvjeta92'],type:'to-process',stage:'metadata',running:false,progress:0,proc:{},failSet:[],uploaded:false,cobissId:'',parents:[{name:'Prosvjeta (serial)',id:'NB-9021',type:'Serial',canPassData:true,passesData:true,inherit:{serialTitle:'Prosvjeta',publisher:'Društvo Prosvjeta',place:'Cetinje',lang:'Montenegrin',subject:['Periodika','Kultura']}}],parentSource:null,publish:'draft',visibility:'public'},
+      {id:'b13',no:13,created:'Today · 09:30',itemIds:['vijesti1','vijesti2'],type:'to-process',stage:'setup',running:false,progress:0,proc:{},failSet:[],uploaded:false,cobissId:'',parents:[{name:'Glas Crnogorca (serial)',id:'NB-9044',type:'Serial',canPassData:true,passesData:true,inherit:{serialTitle:'Glas Crnogorca',publisher:'Državna štamparija',place:'Cetinje',lang:'Montenegrin',subject:['Periodika','Novine']}}],parentSource:null,publish:'draft',visibility:'public'},
+      {id:'b12',no:12,created:'Yesterday · 16:20',itemIds:['grlica','crnogorka'],type:'to-process',stage:'uploaded',running:false,progress:100,proc:{grlica:'done',crnogorka:'done'},failSet:[],uploaded:true,cobissId:'',parents:[],parentSource:null,publish:'record',visibility:'public'},
+    ];
+  }
+
+  state = {
+    screen:'overview', filter:'all', query:'',
+    selected:[], firstRun:false, rowMenu:null, toast:'',
+    activeBatchId:null, batchTab:'setup', curIdx:0, navStyle:'b', itemPicker:false,
+    selectedId:null, visited:{}, showValidation:false,
+    cobissLoading:false, cobissDone:false, cobissId:'', overwriteField:null, fieldMenu:null,
+    tokenShown:false, apiUrl:'https://api.nbcg.me', testResult:'', testOk:true, theme:'light',
+    settingsTab:'configure', naming:{prefix:'NBCG',base:'cobiss',suffix:''},
+    syncing:false, syncPct:0, lastSync:'Today · 09:42',
+    items:null, batches:null, nextBatchNo:18,
+  };
+  componentDidMount(){ if(!this.state.items) this.setState({items:this.makeItems(),batches:this.makeBatches()}); }
+
+  SELECTABLE = ['to-process','stopped','needs-reupload','uploaded'];
+  getBatch(id){ return (this.state.batches||[]).find(b=>b.id===id); }
+  itemById(id){ return (this.state.items||[]).find(i=>i.id===id); }
+  schemaFor(it){ return it.level==='child'?this.CHILD:this.MAIN; }
+  computeMissing(it){ const sc=this.schemaFor(it); return sc.filter(f=>f[3]&&!(it.meta[f[0]]&&it.meta[f[0]].v&&(!Array.isArray(it.meta[f[0]].v)||it.meta[f[0]].v.length))).length; }
+
+  derive(it){
+    if(it.uploaded) return 'uploaded';
+    if(it.batchId){ const b=this.getBatch(it.batchId); if(b&&!b.uploaded) return 'in-progress'; }
+    if(it.reupload) return 'needs-reupload';
+    const s=it.stages;
+    if(Object.values(s).some(x=>x==='failed')) return 'stopped';
+    if(s.upload==='done') return 'uploaded';
+    return 'to-process';
+  }
+  badge(st){return {
+    'to-process':{l:'To process',c:'#737a94',bg:'#eef0f6'},
+    'in-progress':{l:'In progress',c:'#2f6fed',bg:'#e7effd'},
+    'stopped':{l:'Stopped',c:'#d93a2c',bg:'#fdecea'},
+    'needs-reupload':{l:'Needs re-upload',c:'#c8811a',bg:'#fbf1df'},
+    'uploaded':{l:'Uploaded',c:'#1f9d57',bg:'#e6f6ec'},
+  }[st];}
+  typeLabels={'to-process':'unprocessed','in-progress':'in progress','stopped':'stopped','needs-reupload':'needs re-upload','uploaded':'done'};
+  cell(it,key){
+    let s=it.stages[key];
+    let meta=this.S[s];
+    if(key==='upload'&&it.reupload&&s==='done') meta=this.S.reupload;
+    const lbl=this.stageDefs.find(d=>d[0]===key)[1];
+    const spin=s==='running', ring=s==='pending';
+    return {spin,dot:!spin,color:meta.c,dotBg:ring?'transparent':meta.c,dotBorder:ring?('1.5px solid '+meta.c):'none',title:lbl+' — '+meta.l};
+  }
+  flash(msg){ this.setState({toast:msg}); clearTimeout(this._t); this._t=setTimeout(()=>this.setState({toast:''}),2400); }
+
+  // ---------- batch creation / navigation ----------
+  createBatch(ids,type){
+    if(!ids.length) return;
+    const no=this.state.nextBatchNo; const id='b'+no;
+    const single=ids.length===1;
+    const batch={id,no,created:'Just now',itemIds:ids.slice(),type,stage:single?'metadata':'setup',running:false,progress:0,proc:{},failSet:[],uploaded:false,cobissId:'',parents:[],parentSource:null,publish:'draft',visibility:'public'};
+    this.setState(s=>({
+      batches:[batch,...s.batches],
+      items:s.items.map(it=>ids.includes(it.id)?{...it,batchId:id}:it),
+      nextBatchNo:no+1, selected:[], rowMenu:null,
+      screen:'batchwork', activeBatchId:id, batchTab:single?'metadata':'setup', curIdx:0,
+      selectedId:ids[0], visited:{[ids[0]]:true}, showValidation:false, cobissDone:false, overwriteField:null, itemPicker:false,
+    }));
+    this.flash('Batch #0'+no+' created — '+ids.length+' item'+(ids.length>1?'s':'')+' moved to In progress.');
+  }
+  openBatch(id){
+    const b=this.getBatch(id); if(!b) return;
+    const tab = b.uploaded?'proc':(b.itemIds.length===1?'metadata':(b.stage==='setup'?'setup':(b.stage==='metadata'?'metadata':'proc')));
+    this.setState({screen:'batchwork',activeBatchId:id,batchTab:tab,curIdx:0,selectedId:b.itemIds[0],visited:{[b.itemIds[0]]:true},rowMenu:null,showValidation:false,cobissDone:false,overwriteField:null,itemPicker:false});
+  }
+  openItem(it){
+    if(it.batchId){ const b=this.getBatch(it.batchId); if(b){ this.openBatch(b.id); return; } }
+    this.createBatch([it.id], this.derive(it));
+  }
+  updateBatch(id,patch){ this.setState(s=>({batches:s.batches.map(b=>b.id===id?{...b,...patch}:b)})); }
+
+  // ---------- setup tab ----------
+  addSetupParent(){
+    const b=this.getBatch(this.state.activeBatchId); if(!b) return;
+    const next=this.parentPool.find(p=>!b.parents.some(x=>x.id===p.id));
+    if(!next){ this.flash('No more sample parents to link.'); return; }
+    const anyPasser=b.parents.some(p=>p.passesData);
+    this.updateBatch(b.id,{parents:[...b.parents,{...next,passesData:next.canPassData&&!anyPasser}]});
+  }
+  removeSetupParent(pid){
+    const b=this.getBatch(this.state.activeBatchId); if(!b) return;
+    const parents=b.parents.filter(p=>p.id!==pid);
+    const src=b.parentSource===pid?null:b.parentSource;
+    this.updateBatch(b.id,{parents,parentSource:src});
+  }
+  setSetupDataParent(pid){
+    const b=this.getBatch(this.state.activeBatchId); if(!b) return;
+    this.updateBatch(b.id,{parents:b.parents.map(p=>p.id===pid?{...p,passesData:!p.passesData}:{...p,passesData:false}),parentSource:null});
+  }
+  removeItemParent(pid){
+    this.setState(s=>({items:s.items.map(it=>it.id!==s.selectedId?it:{...it,parents:(it.parents||[]).filter(p=>p.id!==pid)})}));
+  }
+  setItemDataParent(pid){
+    this.setState(s=>({items:s.items.map(it=>{
+      if(it.id!==s.selectedId) return it;
+      const parents=(it.parents||[]).map(p=>p.id===pid?{...p,passesData:!p.passesData}:{...p,passesData:false});
+      let meta={...it.meta}; const p=parents.find(x=>x.id===pid);
+      if(p&&p.passesData&&p.inherit){ for(const k in p.inherit){ const c=meta[k]; const empty=!c||(Array.isArray(c.v)?!c.v.length:!c.v); if(empty) meta[k]={v:p.inherit[k],p:'parent',src:pid}; } }
+      return {...it,parents,meta};
+    })}));
+  }
+  setFieldSource(id,key,pid){
+    this.setState(s=>({items:s.items.map(it=>{
+      if(it.id!==id) return it;
+      const p=(it.parents||[]).find(x=>x.id===pid);
+      if(!p||!p.inherit||p.inherit[key]===undefined) return it;
+      return {...it,meta:{...it.meta,[key]:{v:p.inherit[key],p:'parent',src:pid}}};
+    }),fieldMenu:null}));
+  }
+  setFieldManual(id,key){
+    this.setState(s=>({items:s.items.map(it=>{
+      if(it.id!==id) return it;
+      const cur=it.meta[key];
+      return {...it,meta:{...it.meta,[key]:{v:cur?cur.v:'',p:'user'}}};
+    }),fieldMenu:null}));
+  }
+  toggleFieldMenu(key){ this.setState(s=>({fieldMenu:s.fieldMenu===key?null:key})); }
+  setupContinue(){
+    const b=this.getBatch(this.state.activeBatchId); if(!b) return;
+    const src = b.parents.find(p=>p.passesData) || null;
+    this.setState(s=>({
+      items:s.items.map(it=>{
+        if(!b.itemIds.includes(it.id)) return it;
+        let meta={...it.meta};
+        if(src&&src.inherit){ for(const k in src.inherit){ const cur=meta[k]; const empty=!cur||(Array.isArray(cur.v)?!cur.v.length:!cur.v); if(empty) meta[k]={v:src.inherit[k],p:'parent',src:src.id}; } }
+        if(b.cobissId){ for(const k in this.COBISS){ meta[k]={v:this.COBISS[k],p:'cobiss'}; } }
+        return {...it,parents:b.parents.slice(),meta};
+      }),
+      batches:s.batches.map(x=>x.id===b.id?{...x,stage:x.stage==='setup'?'metadata':x.stage}:x),
+      batchTab:'metadata', curIdx:0, selectedId:b.itemIds[0], visited:{[b.itemIds[0]]:true}, showValidation:false, cobissDone:false, overwriteField:null,
+    }));
+    this.flash('Applied to all items. Fill in per-item metadata.');
+  }
+
+  // ---------- metadata tab ----------
+  markVisited(id){ this.setState(s=>({visited:{...s.visited,[id]:true}})); }
+  jump(i){
+    const b=this.getBatch(this.state.activeBatchId); if(!b) return;
+    const id=b.itemIds[i];
+    this.setState(s=>({curIdx:i,selectedId:id,visited:{...s.visited,[id]:true},itemPicker:false,cobissDone:false,overwriteField:null,cobissId:'',fieldMenu:null}));
+  }
+  prevItem(){ if(this.state.curIdx>0) this.jump(this.state.curIdx-1); }
+  nextItem(){
+    const b=this.getBatch(this.state.activeBatchId); if(!b) return;
+    const cur=this.itemById(this.state.selectedId);
+    if(cur && this.computeMissing(cur)>0){ this.setState({showValidation:true}); this.flash('Complete the required fields before continuing.'); return; }
+    if(this.state.curIdx < b.itemIds.length-1){ this.jump(this.state.curIdx+1); }
+    else { this.gotoProcessing(); }
+  }
+  gotoProcessing(){
+    const b=this.getBatch(this.state.activeBatchId); if(!b) return;
+    const invalidIdx=b.itemIds.findIndex(id=>this.computeMissing(this.itemById(id))>0);
+    if(invalidIdx!==-1){
+      const n=b.itemIds.filter(id=>this.computeMissing(this.itemById(id))>0).length;
+      this.setState({showValidation:true});
+      this.jump(invalidIdx);
+      this.flash("Can't start processing — "+n+' item'+(n>1?'s':'')+' still ha'+(n>1?'ve':'s')+' incomplete metadata.');
+      return;
+    }
+    this.updateBatch(b.id,{stage:b.uploaded?b.stage:'processing'});
+    this.setState({batchTab:'proc',showValidation:false});
+  }
+  setField(id,key,val){
+    this.setState(s=>({items:s.items.map(it=>it.id!==id?it:{...it,meta:{...it.meta,[key]:{v:val,p:'user'}}})}));
+  }
+  addMulti(id,key,e){
+    if(e.key!=='Enter'||!e.target.value.trim())return; e.preventDefault();
+    const val=e.target.value.trim(); const t=e.target;
+    this.setState(s=>({items:s.items.map(it=>{
+      if(it.id!==id)return it;
+      const cur=(it.meta[key]&&it.meta[key].v)||[];
+      return {...it,meta:{...it.meta,[key]:{v:[...cur,val],p:'user'}}};
+    })}));
+    t.value='';
+  }
+  addParentItemFn(){
+    const it=this.itemById(this.state.selectedId); if(!it) return;
+    const cur=it.parents||[];
+    const next=this.parentPool.find(p=>!cur.some(x=>x.id===p.id));
+    if(!next){ this.flash('No more sample parents to link.'); return; }
+    const anyPasser=cur.some(p=>p.passesData);
+    const linked={...next,passesData:next.canPassData&&!anyPasser};
+    this.setState(s=>({items:s.items.map(x=>{
+      if(x.id!==it.id) return x;
+      let meta={...x.meta};
+      if(linked.passesData&&linked.inherit){ for(const k in linked.inherit){ const c=meta[k]; const empty=!c||(Array.isArray(c.v)?!c.v.length:!c.v); if(empty) meta[k]={v:linked.inherit[k],p:'parent',src:linked.id}; } }
+      return {...x,parents:[...cur,linked],meta};
+    })}));
+    this.flash(linked.passesData?'Parent linked — empty fields filled from it.':'Parent linked. Choose it per field, or click “can pass data” to make it the source.');
+  }
+  applyCobiss(overwrite){
+    this.setState(s=>({items:s.items.map(it=>{
+      if(it.id!==s.selectedId)return it;
+      const meta={...it.meta};
+      for(const k in this.COBISS){
+        const has=meta[k]&&((Array.isArray(meta[k].v)&&meta[k].v.length)||(!Array.isArray(meta[k].v)&&meta[k].v));
+        if(!has||overwrite) meta[k]={v:this.COBISS[k],p:'cobiss'};
+      }
+      return {...it,meta};
+    }),cobissLoading:false,cobissDone:true,overwriteField:null}));
+  }
+  getCobiss(){
+    const it=this.itemById(this.state.selectedId);
+    if(!this.state.cobissId) this.setState({cobissId:'24512006'});
+    this.setState({cobissLoading:true});
+    setTimeout(()=>{
+      const conflict=(it.meta.title&&it.meta.title.v&&it.meta.title.p==='user')?'Title':null;
+      if(conflict) this.setState({cobissLoading:false,overwriteField:conflict});
+      else this.applyCobiss(true);
+    },900);
+  }
+
+  // ---------- processing tab ----------
+  anyOtherRunning(id){ return (this.state.batches||[]).some(b=>b.running&&b.id!==id); }
+  startProcess(){
+    const b=this.getBatch(this.state.activeBatchId); if(!b||b.uploaded) return;
+    if(this.anyOtherRunning(b.id)){ this.flash('Another batch is processing — only one runs at a time.'); return; }
+    const failId = b.itemIds.length>=2 ? b.itemIds[b.itemIds.length-1] : null;
+    this.updateBatch(b.id,{running:true,progress:0,stage:'processing',proc:Object.fromEntries(b.itemIds.map(id=>[id,'queued'])),failSet:failId?[failId]:[]});
+    clearInterval(this._proc);
+    this._proc=setInterval(()=>this.tickProc(),650);
+  }
+  tickProc(){
+    this.setState(s=>({batches:s.batches.map(b=>{
+      if(b.id!==s.activeBatchId||!b.running) return b;
+      const proc={...b.proc}; const ids=b.itemIds;
+      const running=ids.find(id=>proc[id]==='running');
+      if(running) proc[running]=(b.failSet||[]).includes(running)?'failed':'done';
+      const next=ids.find(id=>proc[id]==='queued');
+      if(next) proc[next]='running';
+      const resolved=ids.filter(id=>proc[id]==='done'||proc[id]==='failed').length;
+      const active=ids.some(id=>proc[id]==='queued'||proc[id]==='running');
+      const anyFail=ids.some(id=>proc[id]==='failed');
+      return {...b,proc,progress:Math.round(resolved/ids.length*100),running:active,stage:active?'processing':(anyFail?'processing':'ready')};
+    })}));
+    const b=this.getBatch(this.state.activeBatchId);
+    if(!b||!b.running) clearInterval(this._proc);
+  }
+  rerunItem(id){
+    const b=this.getBatch(this.state.activeBatchId); if(!b) return;
+    if(this.anyOtherRunning(b.id)){ this.flash('Another batch is processing.'); return; }
+    this.updateBatch(b.id,{running:true,proc:{...b.proc,[id]:'running'},failSet:(b.failSet||[]).filter(x=>x!==id)});
+    this.flash('Re-running '+this.itemById(id).title+'…');
+    setTimeout(()=>this.resolveRerun([id]),1000);
+  }
+  rerunAllFailed(){
+    const b=this.getBatch(this.state.activeBatchId); if(!b) return;
+    if(this.anyOtherRunning(b.id)){ this.flash('Another batch is processing.'); return; }
+    const failed=b.itemIds.filter(id=>b.proc[id]==='failed'); if(!failed.length) return;
+    const proc={...b.proc}; failed.forEach(id=>proc[id]='running');
+    this.updateBatch(b.id,{running:true,proc,failSet:[]});
+    this.flash('Re-running '+failed.length+' failed item'+(failed.length>1?'s':'')+'…');
+    setTimeout(()=>this.resolveRerun(failed),1200);
+  }
+  resolveRerun(ids){
+    this.setState(s=>({batches:s.batches.map(b=>{
+      if(b.id!==s.activeBatchId) return b;
+      const proc={...b.proc}; ids.forEach(id=>proc[id]='done');
+      const resolved=b.itemIds.filter(id=>proc[id]==='done'||proc[id]==='failed').length;
+      const active=b.itemIds.some(id=>proc[id]==='queued'||proc[id]==='running');
+      const anyFail=b.itemIds.some(id=>proc[id]==='failed');
+      return {...b,proc,progress:Math.round(resolved/b.itemIds.length*100),running:active,stage:active?'processing':(anyFail?'processing':'ready')};
+    })}));
+  }
+  doUpload(){
+    const b=this.getBatch(this.state.activeBatchId); if(!b||b.stage!=='ready') return;
+    this.setState(s=>({
+      batches:s.batches.map(x=>x.id===b.id?{...x,uploaded:true,stage:'uploaded',progress:100}:x),
+      items:s.items.map(it=>b.itemIds.includes(it.id)?{...it,uploaded:true,reupload:false,stages:{...it.stages,upload:'done'},folder:it.folder.replace('/unprocessed','/processed'),backendId:it.backendId||('NB-'+(10600+Math.floor(Math.random()*90)))}:it),
+    }));
+    this.flash('Batch #0'+b.no+' uploaded — '+b.itemIds.length+' item'+(b.itemIds.length>1?'s':'')+' published.');
+  }
+
+  doSync(){
+    if(this.state.syncing)return;
+    this.setState({syncing:true,syncPct:0});
+    clearInterval(this._sync);
+    this._sync=setInterval(()=>{
+      this.setState(s=>{
+        const p=s.syncPct+Math.random()*16+7;
+        if(p>=100){clearInterval(this._sync);this.flash('Sync complete — metadata up to date.');return {syncPct:100,syncing:false,lastSync:'Just now'};}
+        return {syncPct:p};
+      });
+    },380);
+  }
+
+  renderVals(){
+    const st=this.state;
+    const items=st.items||this.makeItems();
+    const batches=st.batches||[];
+    const icon=(p)=>`<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7">${p}</svg>`;
+    const icons={
+      overview:icon('<rect x="2.5" y="2.5" width="6" height="6" rx="1.5"/><rect x="11.5" y="2.5" width="6" height="6" rx="1.5"/><rect x="2.5" y="11.5" width="6" height="6" rx="1.5"/><rect x="11.5" y="11.5" width="6" height="6" rx="1.5"/>'),
+      batches:icon('<rect x="2.5" y="3" width="15" height="4.5" rx="1.4"/><rect x="2.5" y="9" width="15" height="4.5" rx="1.4"/><path d="M5 16.5h10"/>'),
+      settings:icon('<circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r="1.8" fill="currentColor" stroke="none"/>'),
+      sync:icon('<path d="M16 4.5A7 7 0 1 0 17 10"/><polyline points="16 2 16 5 13 5"/>'),
+    };
+    const activeBatchCount=batches.filter(b=>!b.uploaded).length;
+    const isBW=st.screen==='batchwork';
+    const menu=[
+      {key:'overview',label:'Overview',badge:''},
+      {key:'batches',label:'Batches',badge:activeBatchCount?String(activeBatchCount):''},
+      {key:'sync',label:'Sync',badge:''},
+      {key:'settings',label:'Settings',badge:''},
+    ].map(n=>{const active=st.screen===n.key||(n.key==='batches'&&isBW);return {...n,icon:icons[n.key],active:active?1:0,bg:active?'rgba(255,255,255,.14)':'transparent',color:active?'#ffffff':'#c3c9ef',weight:active?600:500,onClick:()=>this.setState({screen:n.key})};});
+
+    const online=!st.firstRun;
+    const conn={dot:online?'#5ee0a0':'#f0a24b',halo:online?'rgba(94,224,160,.2)':'rgba(240,162,75,.2)',label:online?'Connected':'Offline',host:'api.nbcg.me'};
+
+    const counts={};for(const it of items){const d=this.derive(it);counts[d]=(counts[d]||0)+1;}
+
+    // ---------- overview ----------
+    const segDefs=[['all','All','#9aa0b8'],['to-process','Unprocessed','#737a94'],['in-progress','In progress','#2f6fed'],['stopped','Stopped','#d93a2c'],['needs-reupload','Needs re-upload','#c8811a'],['uploaded','Done','#1f9d57']];
+    const segCounts={all:items.length,'to-process':counts['to-process']||0,'in-progress':counts['in-progress']||0,'stopped':counts['stopped']||0,'needs-reupload':counts['needs-reupload']||0,'uploaded':counts['uploaded']||0};
+    const segs=segDefs.map(([k,l,dot])=>{const a=st.filter===k;return {label:l,count:segCounts[k],dot,dotOpacity:k==='all'?0:1,onClick:()=>this.setState({filter:k,selected:[],rowMenu:null}),weight:a?600:500,color:a?'#2b3a8c':'#6b7290',bg:a?'#fff':'transparent',countColor:a?'#2b3a8c':'#9aa1bb',countBg:a?'#e7ebfb':'#dfe2ee'};});
+
+    const selectable=this.SELECTABLE.includes(st.filter);
+    const q=st.query.toLowerCase();
+    const match=(it)=>{const d=this.derive(it);const okF=st.filter==='all'||st.filter===d;const okQ=!q||it.title.toLowerCase().includes(q)||it.folder.toLowerCase().includes(q)||(it.backendId||'').toLowerCase().includes(q);return okF&&okQ;};
+    const visible=items.filter(match);
+    const rows=visible.map(it=>{
+      const d=this.derive(it);const b=this.badge(d);const stopped=d==='stopped';const inProg=d==='in-progress';
+      const accent=stopped?'#d93a2c':(d==='needs-reupload'?'#c8811a':(inProg?'#2f6fed':'transparent'));
+      const batchTag=it.batchId?('in Batch #0'+(this.getBatch(it.batchId)||{}).no):'';
+      return {
+        title:it.title,folder:it.folder.split('/').pop(),sources:it.sources,backendId:it.backendId,batchTag,
+        error:stopped?it.error:'',accent,
+        rowBg:stopped?'#fef7f6':(inProg?'#fbfcff':'#fff'),
+        rowHover:{background:stopped?'#fdeeec':'#f4f6fe'},
+        cells:this.stageDefs.map(([k])=>this.cell(it,k)),
+        stateLabel:b.l,stateColor:b.c,stateBg:b.bg,
+        selectable, checked:st.selected.includes(it.id),
+        lockIcon:!selectable&&inProg,
+        onCheck:()=>this.setState(s=>({selected:s.selected.includes(it.id)?s.selected.filter(x=>x!==it.id):[...s.selected,it.id]})),
+        onOpen:(e)=>{if(e&&e.stopPropagation)e.stopPropagation();this.setState({rowMenu:null});this.openItem(it);},
+        onRowClick:(e)=>{if(e&&e.stopPropagation)e.stopPropagation();this.setState({rowMenu:null});if(selectable){this.setState(s=>({selected:s.selected.includes(it.id)?s.selected.filter(x=>x!==it.id):[...s.selected,it.id]}));}else{this.openItem(it);}},
+        openLabel:it.batchId?'Open batch':'Open as batch',
+        stop:(e)=>e.stopPropagation(),
+        menuOpen:st.rowMenu===it.id,
+        toggleMenu:(e)=>{e.stopPropagation();this.setState(s=>({rowMenu:s.rowMenu===it.id?null:it.id}));},
+        onOpenFolder:(e)=>{e.stopPropagation();this.setState({rowMenu:null});this.flash('Opening '+it.folder+' in Explorer…');},
+      };
+    });
+    const selType=st.filter==='all'?'':this.typeLabels[st.filter]||'';
+    const scopeNote = st.filter==='all' ? 'Batches group one item type at a time — pick a specific state (Unprocessed, Stopped, Needs re-upload, Done) to select items.' : (st.filter==='in-progress' ? 'In-progress items already belong to a batch — open the batch to work on them.' : '');
+
+    // ---------- batches list ----------
+    const stLabel={setup:'Setup',metadata:'Metadata',processing:'Processing',ready:'Ready to upload',uploaded:'Uploaded'};
+    const stColor={setup:{c:'#737a94',bg:'#eef0f6'},metadata:{c:'#7a5bd0',bg:'#f0ebfb'},processing:{c:'#2f6fed',bg:'#e7effd'},ready:{c:'#1f9d57',bg:'#e6f6ec'},uploaded:{c:'#1f9d57',bg:'#e6f6ec'}};
+    const stageIndex={setup:0,metadata:1,processing:2,ready:2,uploaded:2};
+    const cardStageDefs=[['Setup',0],['Metadata',1],['Process',2]];
+    const batchCards=batches.map(b=>{
+      const sc=stColor[b.stage];const idx=stageIndex[b.stage];const doneAll=b.stage==='uploaded';
+      const stages=cardStageDefs.map(([label,i],n)=>{
+        const complete = doneAll || i<idx; const current = !doneAll && i===idx;
+        const c = complete?'#1f9d57':(current?'#2f6fed':'#9aa0b8');
+        const bg = complete?'#e6f6ec':(current?'#e7effd':'#f1f2f7');
+        return {label,glyph:complete?'✓':String(i+1),c,bg:(complete||current)?bg:'#fff',bd:(complete||current)?'none':'1.5px solid #e0e3ee',textC:current?'#2a3050':(complete?'#4a5170':'#a2aac2'),weight:current?700:600,connector:n<2,lineC:(complete||(doneAll))?'#bfe6cd':'#e6e8f2'};
+      });
+      const typeCount=b.itemIds.length+' '+(this.typeLabels[b.type]||b.type);
+      return {number:'Batch #0'+b.no,created:b.created,countLabel:typeCount+' · '+(doneAll?'archived':stLabel[b.stage].toLowerCase()),
+        statusLabel:stLabel[b.stage],statusColor:sc.c,statusBg:sc.bg,running:b.running,notRunning:!b.running,
+        stages,pct:b.progress+'%',border:b.running?'#cdd6f7':'#e6e8f2',onOpen:()=>this.openBatch(b.id)};
+    });
+
+    // ---------- batch work ----------
+    const b=this.getBatch(st.activeBatchId);
+    let bw={},bwTabs=[],fields=[],files=[],parents=[],nav={},procItems=[],navStyles=[];
+    let tabSetup=false,tabMeta=false,tabProc=false,validationBanner='';
+    let setupCobiss='',setupCobissSet=false,setupParents=[],hasSetupParents=false,needsParentSource=false,parentSourceOptions=[],setupBlocked=false,setupBtnBg='#2b3a8c';
+    let publishOpts=[],visOpts=[];
+    let hasParents=false,cobissId=st.cobissId,cobissBtn='Get data',cobissLoading=st.cobissLoading,cobissDone=st.cobissDone,overwrite=st.overwriteField,metaEditable=true;
+    let prevColor='#6b7290',prevOpacity='1',nextLabel='Next item →',nextBg='#2b3a8c',nextHelper='',navBodyGap='11px';
+    let navIsA=st.navStyle==='a',navIsB=st.navStyle==='b',navIsC=st.navStyle==='c';
+    let procSummary='',procPct='0%',showStart=true,showUpload=false,showRerunAll=false,startLabel='▶ Start processing',startBg='#2b3a8c',startOpacity='1',startBlockedNote='',uploadedBanner=false,uploadedTitle='',uploadedSub='';
+    const mk=(a)=>({w:a?600:500,c:a?'#2b3a8c':'#6b7290',b:a?'#fff':'transparent'});
+
+    if(b){
+      const readonly=b.uploaded;
+      metaEditable=!readonly;
+      bw={number:'Batch #0'+b.no,statusLabel:stLabel[b.stage],statusColor:stColor[b.stage].c,statusBg:stColor[b.stage].bg,readonly,
+        count:b.itemIds.length,countLabel:b.itemIds.length+' '+(this.typeLabels[b.type]||b.type)+' · created '+b.created,
+        saveLabel:readonly?'Archived':'All changes saved',
+        publishLabel:b.publish==='record'?'Record':'Draft',visibilityLabel:b.visibility.charAt(0).toUpperCase()+b.visibility.slice(1)};
+
+      const tabEnabled={setup:true,metadata:b.stage!=='setup',proc:['processing','ready','uploaded'].includes(b.stage)};
+      const tabDefs=[['setup','1','Setup'],['metadata','2','Metadata'],['proc','3','Processing & Upload']];
+      bwTabs=tabDefs.map(([k,num,label])=>{const active=st.batchTab===k;const en=tabEnabled[k];return {label,num,onClick:()=>{if(en)this.setState({batchTab:k,itemPicker:false});},weight:active?600:500,color:active?'#2b3a8c':(en?'#6b7290':'#c3c8dc'),bd:active?'#2b3a8c':'transparent',opacity:en?'1':'.55',numC:active?'#fff':(en?'#6b7290':'#c3c8dc'),numBg:active?'#2b3a8c':'#eef0f6'};});
+
+      tabSetup=st.batchTab==='setup';tabMeta=st.batchTab==='metadata';tabProc=st.batchTab==='proc';
+
+      // setup
+      setupCobiss=b.cobissId;setupCobissSet=!!b.cobissId;
+      const buildParentRow=(p,scope)=>{
+        const setDataParent=()=> scope==='setup'?this.setSetupDataParent(p.id):this.setItemDataParent(p.id);
+        const m = p.passesData
+          ? {markShow:true,markC:'#1f9d57',markBg:'#e6f6ec',markBd:'#bfe6cd',markIcon:'↧',markLabel:'passes data',markCursor:'pointer',markTitle:'Passing its shared fields down — click to stop',markOnClick:setDataParent}
+          : (p.canPassData
+            ? {markShow:true,markC:'#8991ab',markBg:'#f1f2f7',markBd:'#dfe2ee',markIcon:'○',markLabel:'can pass data',markCursor:'pointer',markTitle:'Click to make this the data-passing parent',markOnClick:setDataParent}
+            : {markShow:false,markC:'',markBg:'',markBd:'',markIcon:'',markLabel:'',markCursor:'default',markTitle:'',markOnClick:()=>{}});
+        return {name:p.name,id:p.id,typeLabel:p.type,typeInitial:(p.type||'?').charAt(0),...m,hideRemove:readonly,markShow:m.markShow&&!readonly,onRemove:()=> scope==='setup'?this.removeSetupParent(p.id):this.removeItemParent(p.id)};
+      };
+      setupParents=b.parents.map(p=>buildParentRow(p,'setup'));
+      hasSetupParents=b.parents.length>0;
+      setupBtnBg='#2b3a8c';
+      publishOpts=[['draft','Draft'],['record','Record']].map(([k,l])=>({label:l,onClick:()=>{if(!readonly)this.updateBatch(b.id,{publish:k});},...mk(b.publish===k)}));
+      visOpts=[['public','Public'],['private','Private'],['hidden','Hidden']].map(([k,l])=>({label:l,onClick:()=>{if(!readonly)this.updateBatch(b.id,{visibility:k});},...mk(b.visibility===k)}));
+
+      // current item + navigator
+      const bItems=b.itemIds.map(id=>this.itemById(id)).filter(Boolean);
+      const total=bItems.length;
+      const curIdx=Math.min(st.curIdx,total-1);
+      const curItem=bItems[curIdx]||bItems[0];
+      const statusOf=(it)=>{const miss=this.computeMissing(it);const vis=!!st.visited[it.id];return miss===0?'valid':(vis?'incomplete':'untouched');};
+      const navCol={valid:{c:'#1f9d57',bg:'#e6f6ec',bd:'#bfe6cd',rail:'#1f9d57'},incomplete:{c:'#c8811a',bg:'#fbf1df',bd:'#ecd8a8',rail:'#e0982f'},untouched:{c:'#9aa0b8',bg:'#f1f2f7',bd:'#e0e3ee',rail:'#cfd3e2'}};
+      const chips=bItems.map((it,i)=>{const stt=statusOf(it);const col=navCol[stt];const active=i===curIdx;return {
+        title:(i+1)+'. '+it.title, short:it.title, badge:stt==='valid'?'✓':(stt==='incomplete'?'!':String(i+1)),
+        c:col.c, bg:active?col.bg:'#fff', bd:active?col.c:col.bd, textC:active?'#232945':'#4a5170', weight:active?700:600, active,
+        railBg:col.rail, railBd:active?'none':'none',
+        onClick:()=>this.jump(i)};});
+      const navItemsArr=bItems.map((it,i)=>{const stt=statusOf(it);const col=navCol[stt];const active=i===curIdx;return {
+        title:it.title, sub:it.folder.split('/').pop(), badge:stt==='valid'?'✓':(stt==='incomplete'?'!':String(i+1)),
+        c:col.c, bg:active?'#eef1fd':'transparent', textC:active?'#2b3a8c':'#2a3050', weight:active?600:500,
+        statusLabel:stt==='valid'?'Ready':(stt==='incomplete'?'Incomplete':'Untouched'),
+        onClick:()=>this.jump(i)};});
+      const validCount=bItems.filter(it=>this.computeMissing(it)===0).length;
+      const incompleteCount=bItems.filter(it=>{const m=this.computeMissing(it);return m>0&&st.visited[it.id];}).length;
+      const untouchedCount=total-validCount-incompleteCount;
+      const curStt=statusOf(curItem);
+      const isChild=curItem.level==='child';
+      nav={cur1:curIdx+1,total,curTitle:curItem.title,validCount,incompleteCount,untouchedCount,pct:total?Math.round(validCount/total*100)+'%':'0%',
+        levelLabel:isChild?'Child record':'Main record',levelC:isChild?'#7a5bd0':'#2b3a8c',levelBg:isChild?'#f0ebfb':'#eef1fd',
+        chips,items:navItemsArr,curDot:navCol[curStt].c,
+        pickerOpen:st.itemPicker,togglePicker:()=>this.setState(s=>({itemPicker:!s.itemPicker})),
+        pickBg:st.itemPicker?'#fff':'#fbfbfe',pickBd:st.itemPicker?'#cdd6f7':'#e6e8f2'};
+      navBodyGap=total>1?'12px':'0';
+      navStyles=[['a','Steps'],['b','List'],['c','Rail']].map(([k,l])=>({label:l,title:'Navigator: '+l,onClick:()=>this.setState({navStyle:k,itemPicker:false}),w:st.navStyle===k?600:500,c:st.navStyle===k?'#2b3a8c':'#6b7290',b:st.navStyle===k?'#fff':'transparent'}));
+
+      // files for current item
+      const fstat=(s,d,pend)=>s==='done'?d:(s==='failed'?'failed':(s==='running'?'running…':pend));
+      const tiffCount=(curItem.sources||'').replace(/TIFFs?/,'').trim()||'—';
+      const defB={cardBg:'#fbfbfe',border:'#eef0f6',iconBg:'#eef1fd',iconC:'#2b3a8c',tag:''};
+      files=[
+        {name:tiffCount+' TIFF images',meta:'Source scans · kept local',glyph:'▦',cardBg:'#f3f4fb',border:'#dde2f0',iconBg:'#e2e7f5',iconC:'#4a5580',tag:'SOURCE'},
+        {...defB,name:'document_archive.pdf',meta:fstat(curItem.stages.pdf,'archival master','pending'),glyph:'▤'},
+        {...defB,name:'document.pdf',meta:fstat(curItem.stages.pdf,'web-ready','pending'),glyph:'▢'},
+        {...defB,name:'thumbnail.png',meta:fstat(curItem.stages.thumb,'first page','pending'),glyph:'◧'},
+        {...defB,name:'ocr.txt',meta:fstat(curItem.stages.ocr,'full text','pending'),glyph:'≣'},
+        {...defB,name:'metadata.json',meta:this.computeMissing(curItem)===0?'catalog fields ready':'incomplete',glyph:'{ }'},
+      ];
+
+      // parents for current item
+      hasParents=(curItem.parents||[]).length>0;
+      parents=(curItem.parents||[]).map(p=>buildParentRow(p,'item'));
+
+      // fields for current item
+      const schema=this.schemaFor(curItem);
+      const linkedParents=(curItem.parents||[]);
+      const fmtVal=(v)=>Array.isArray(v)?v.join(', '):String(v);
+      const shortName=(n)=>n.replace(/\s*\((serial|collection)\)\s*$/i,'');
+      fields=schema.map(([key,label,type,required,tag])=>{
+        const mv=curItem.meta[key];const value=mv?mv.v:(type==='multi'?[]:'');
+        const prov=mv?mv.p:'none';const srcId=mv?mv.src:null;
+        const empty=type==='multi'?!(value&&value.length):!value;
+        const isIssue=tag==='i';
+        const error=(required&&empty)?'This field is required.':'';
+        const flag=(isIssue&&empty&&!error)?'Still to fill':'';
+        const pm=(prov!=='none'&&prov!=='user'&&this.provMeta[prov])?this.provMeta[prov]:(prov==='user'&&!empty?this.provMeta.user:null);
+        const cand=linkedParents.filter(p=>p.inherit&&p.inherit[key]!==undefined);
+        const hasSrcPicker=cand.length>0;
+        const fromParent=prov==='parent';
+        const activeSrc=fromParent?(cand.find(p=>p.id===srcId)||(cand.length===1?cand[0]:null)):null;
+        let srcLabel='',srcC='#8991ab',srcBg='#f1f2f7';
+        if(fromParent){ srcLabel=activeSrc?shortName(activeSrc.name):'From parent'; srcC='#7a5bd0'; srcBg='#f0ebfb'; }
+        else if(prov==='cobiss'){ srcLabel='COBISS'; srcC='#2f6fed'; srcBg='#e7effd'; }
+        else if(prov==='user'&&!empty){ srcLabel='Manual'; srcC='#5a8f6e'; srcBg='#e9f4ee'; }
+        const srcOptions=cand.map(p=>{const sel=fromParent&&((srcId===p.id)||(!srcId&&cand.length===1));return {name:p.name,id:p.id,preview:fmtVal(p.inherit[key]),onPick:()=>this.setFieldSource(curItem.id,key,p.id),bg:sel?'#f0ebfb':'transparent',ringC:sel?'#7a5bd0':'#c9cee0',dot:sel?'#7a5bd0':'transparent'};});
+        const manualSel=!fromParent&&prov!=='cobiss';
+        return {label,required,col:(type==='multi'||key==='note'||key==='phys')?'1 / -1':'auto',
+          prov:hasSrcPicker?'':(pm?pm.l:''),provC:pm?pm.c:'',provBg:pm?pm.bg:'',flag,error,
+          hasSrcPicker:hasSrcPicker&&!readonly,srcPillLabel:srcLabel||'Choose source',srcPillC:srcC,srcPillBg:srcBg,
+          srcOptions,menuOpen:st.fieldMenu===key,toggleMenu:()=>this.toggleFieldMenu(key),
+          setManual:()=>this.setFieldManual(curItem.id,key),manualBg:manualSel?'#e9f4ee':'transparent',manualRing:manualSel?'#5a8f6e':'#c9cee0',manualDot:manualSel?'#5a8f6e':'transparent',
+          borderColor:error?'#e79a90':(flag?'#e6cf95':'#e6e8f2'),
+          value:type==='multi'?'':value,placeholder:label,options:type==='enum'?this.langOpts:[],
+          chips:type==='multi'?(value||[]):[],
+          isInput:type==='text',isDate:type==='date',isEnum:type==='enum',isMulti:type==='multi',disabled:readonly,notDisabled:!readonly,
+          inputBg:readonly?'#f4f5f9':'#fbfbfe',inputColor:readonly?'#6b7290':'#232945',inputCursor:readonly?'not-allowed':'text',
+          onChange:(e)=>this.setField(curItem.id,key,e.target.value),onAdd:(e)=>this.addMulti(curItem.id,key,e)};
+      });
+      const missing=this.computeMissing(curItem);
+      validationBanner=missing?(missing+' required field'+(missing>1?'s are':' is')+' still missing on this item.'):'';
+      cobissBtn=cobissLoading?'Fetching…':'Get data';
+      prevColor=curIdx===0?'#c3c8dc':'#6b7290';prevOpacity=curIdx===0?'.5':'1';
+      const isLast=curIdx===total-1;
+      const curValid=missing===0;
+      nextLabel=isLast?'Go to processing →':'Next item →';
+      nextBg=!curValid?'#a9b1d6':(isLast?'#1f9d57':'#2b3a8c');
+      nextHelper=!curValid?'Complete required fields to continue':'';
+
+      // processing
+      const proc=b.proc||{};
+      const resolved=b.itemIds.filter(id=>proc[id]==='done'||proc[id]==='failed').length;
+      const doneCount=b.itemIds.filter(id=>proc[id]==='done').length;
+      const failCount=b.itemIds.filter(id=>proc[id]==='failed').length;
+      const started=Object.keys(proc).length>0;
+      procPct=(b.progress||0)+'%';
+      const iw=b.itemIds.length===1?'item':'items';
+      if(readonly){procSummary=b.itemIds.length+' '+iw+' archived and published.';}
+      else if(b.running){procSummary=doneCount+' done · '+failCount+' failed · '+(b.itemIds.length-resolved)+' remaining — running…';}
+      else if(b.stage==='ready'){procSummary='All '+b.itemIds.length+' '+iw+' processed. Ready to upload.';}
+      else if(failCount){procSummary=doneCount+' done · '+failCount+' failed. Rerun failures, then upload.';}
+      else {procSummary='TIFF → PDF · Thumbnail · OCR · Metadata for '+b.itemIds.length+' '+iw+'. Start when ready.';}
+      showRerunAll=failCount>0&&!b.running&&!readonly;
+      showStart=!started&&!readonly&&b.stage!=='ready';
+      showUpload=b.stage==='ready'&&!readonly;
+      if(showStart&&this.anyOtherRunning(b.id)){startBg='#a9b1d6';startOpacity='.7';startBlockedNote='Another batch is currently processing — only one runs at a time.';}
+      uploadedBanner=readonly;uploadedTitle='Batch uploaded';uploadedSub=b.publish==='record'?'Published as records · '+b.visibility:'Saved as drafts · '+b.visibility;
+      const jobStatus={done:this.S.done,running:this.S.running,queued:this.S.pending,failed:this.S.failed};
+      procItems=b.itemIds.map(id=>{const it=this.itemById(id);const s=started?(proc[id]||'queued'):'idle';const meta=s==='idle'?this.S.pending:jobStatus[s];const failed=s==='failed';return {
+        title:it.title,sub:it.folder.split('/').pop()+' · '+it.sources,glyph:s==='idle'?'○':meta.g,c:meta.c,bg:meta.bg,
+        spin:s==='running',noSpin:s!=='running',statusLabel:s==='idle'?'Not started':(s==='queued'?'Queued':meta.l),
+        rowBg:failed?'#fef7f6':'#fff',error:failed?(it.error||'Processing failed on this item.'):'',
+        canRerun:failed&&!b.running&&!readonly,onRerun:()=>this.rerunItem(id)};});
+    }
+
+    // ---------- settings ----------
+    const stab=(k)=>({w:st.settingsTab===k?600:500,c:st.settingsTab===k?'#2b3a8c':'#6b7290',b:st.settingsTab===k?'#fff':'transparent'});
+    const cfgTab=stab('configure'),dataTab=stab('data');
+    const nm=st.naming;
+    const baseOpts=[['cobiss','COBISS ID','124357888'],['signature','Signature','Ms-1042'],['accession','Accession no.','2026-0417'],['title','Title slug','listina-1523']];
+    const baseSample=(baseOpts.find(o=>o[0]===nm.base)||baseOpts[0])[2];
+    const stem=[nm.prefix,baseSample,nm.suffix].filter(Boolean).join('_');
+    const previewName=stem+'.pdf';
+    const seqPreview=[1,2,10].map(n=>stem+'_'+n+'.pdf');
+    const baseSeg=baseOpts.map(o=>({label:o[1],w:nm.base===o[0]?600:500,c:nm.base===o[0]?'#2b3a8c':'#a2aac2',b:nm.base===o[0]?'#fff':'transparent'}));
+    const folders=st.firstRun?[
+      {label:'/unprocessed root (new scans arrive here)',path:'Not set',pathColor:'#a2aac2',status:'Not set',c:'#c8811a'},
+      {label:'/processed root (finished items moved here)',path:'Not set',pathColor:'#a2aac2',status:'Not set',c:'#c8811a'},
+    ]:[
+      {label:'/unprocessed root (new scans arrive here)',path:'D:\\NBCG\\scans\\unprocessed',pathColor:'#2a3050',status:'Valid',c:'#1f9d57'},
+      {label:'/processed root (finished items moved here)',path:'D:\\NBCG\\scans\\processed',pathColor:'#2a3050',status:'Valid',c:'#1f9d57'},
+    ];
+    const themes=[['light','Light'],['dark','Dark'],['system','System']].map(([k,l])=>({label:l,onClick:()=>this.setState({theme:k}),w:st.theme===k?600:500,c:st.theme===k?'#2b3a8c':'#6b7290',b:st.theme===k?'#fff':'transparent'}));
+    const realToken='nbcg_sk_7f3a9c2e14b8d6f0a5e1';
+    const tokenDisplay=st.tokenShown?realToken:(st.firstRun?'':'••••••••••••••••••••');
+    const tc=st.testOk?{c:'#1f9d57',g:'✓'}:{c:'#d93a2c',g:'✗'};
+
+    // ---------- sync ----------
+    const stoppedCount=counts['stopped']||0;const reupCount=counts['needs-reupload']||0;
+    const syncStages=['Contacting api.nbcg.me…','Requesting catalog metadata…','Matching against archive records…','Writing updated metadata…','Finalising…'];
+    const syncStage=syncStages[Math.min(syncStages.length-1,Math.floor(st.syncPct/20))];
+    const syncStats=[{label:'Records checked',value:'1,284',color:'#232945'},{label:'Metadata updated',value:'47',color:'#2f6fed'},{label:'Up to date',value:'1,235',color:'#232945'},{label:'Missed',value:'2',color:'#c8811a'}];
+    const logDefs=[['warn','1,284 records checked · 47 updated','2 missed — backend timeout · 12s','Today · 09:42'],['ok','1,282 records checked · 12 updated','All metadata current · 9s','Yesterday · 18:10'],['ok','1,282 records checked · 5 updated','All metadata current · 8s','Yesterday · 09:15'],['ok','1,279 records checked · 31 updated','All metadata current · 11s','Jul 20 · 18:04'],['ok','1,279 records checked · 8 updated','All metadata current · 8s','Jul 20 · 09:20']];
+    const logColor={ok:{dot:'#2e9e5b',halo:'rgba(46,158,91,.16)'},warn:{dot:'#e0982f',halo:'rgba(224,152,47,.16)'}};
+    const syncLog=logDefs.map(([s,summary,detail,time])=>({summary,detail,time,dot:logColor[s].dot,halo:logColor[s].halo}));
+
+    return {
+      menu,conn,
+      isOverview:st.screen==='overview',isBatches:st.screen==='batches',isBatchWork:isBW,isSync:st.screen==='sync',isSettings:st.screen==='settings',
+      firstRun:st.firstRun,notFirstRun:!st.firstRun,
+      goSettings:()=>this.setState({screen:'settings'}),goOverview:()=>this.setState({screen:'overview'}),
+      query:st.query,onQuery:(e)=>this.setState({query:e.target.value}),
+      segs,stageCols:this.stageDefs.map(d=>d[1]),rows,noRows:visible.length===0,
+      showSelectAll:selectable&&visible.length>0,
+      selectAllGlyph:st.selected.length===visible.length&&visible.length>0?'✓':'',
+      selectAllLabel:(st.selected.length===visible.length&&visible.length>0)?'Clear selection':('Select all '+visible.length),
+      selectAllVisible:()=>this.setState(s=>({selected:(s.selected.length===visible.length)?[]:visible.map(v=>v.id)})),
+      scopeNote,
+      hasSelection:st.selected.length>0,selCount:st.selected.length,selTypeLabel:selType,
+      createBatchSel:()=>this.createBatch(st.selected,st.filter),clearSel:()=>this.setState({selected:[]}),
+      menuItemHover:{background:'#f4f6fe'},menuBtnHover:{background:'#eef0f7',color:'#6b7290'},openBtnHover:{background:'#f4f6fe',color:'#2b3a8c',borderColor:'#cdd6f7'},cardHover:{borderColor:'#cdd6f7'},srcPillHover:{filter:'brightness(.96)'},srcOptHover:{background:'#f6f4fc'},
+
+      // batches list
+      batchCards,noBatches:batches.length===0,
+
+      // batch work
+      bw,bwTabs,tabSetup,tabMeta,tabProc,backToBatches:()=>this.setState({screen:'batches'}),
+      setupCobiss,onSetupCobiss:(e)=>this.updateBatch(st.activeBatchId,{cobissId:e.target.value}),setupCobissSet,setupDisabled:!metaEditable,
+      setupParents,hasSetupParents,addSetupParent:()=>this.addSetupParent(),
+      needsParentSource,parentSourceOptions,setupBlocked,setupBtnBg,setupContinue:()=>this.setupContinue(),
+      publishOpts,visOpts,
+      nav,navStyles,navIsA,navIsB,navIsC,navBodyGap,
+      validationBanner,files,
+      cobissId,onCobissId:(e)=>this.setState({cobissId:e.target.value}),getCobiss:()=>this.getCobiss(),cobissLoading,cobissDone,cobissBtn,
+      overwrite,applyOverwrite:()=>this.applyCobiss(true),keepMine:()=>this.applyCobiss(false),
+      hasParents,parents,addParentItem:()=>this.addParentItemFn(),metaEditable,
+      fields,prevItem:()=>this.prevItem(),nextItem:()=>this.nextItem(),prevColor,prevOpacity,nextLabel,nextBg,nextHelper,
+      procSummary,procPct,showStart,showUpload,showRerunAll,startLabel,startBg,startOpacity,startBlockedNote,
+      startProcess:()=>this.startProcess(),rerunAllFailed:()=>this.rerunAllFailed(),doUpload:()=>this.doUpload(),procItems,
+      uploadedBanner,uploadedTitle,uploadedSub,
+
+      // sync
+      syncing:st.syncing,syncPct:Math.round(st.syncPct)+'%',syncStage,syncBtn:st.syncing?'Syncing…':'Sync now',syncBarMargin:st.syncing?'18px':'0',
+      lastSync:st.lastSync,nextSync:'Every 6h · next 15:42',doSync:()=>this.doSync(),syncStats,syncLog,
+      syncAttention:(stoppedCount+reupCount)?((stoppedCount+reupCount)+' item'+((stoppedCount+reupCount)>1?'s':'')+' need attention'):'',
+      syncAttentionSub:(stoppedCount?stoppedCount+' stopped/errored':'')+(stoppedCount&&reupCount?', ':'')+(reupCount?reupCount+' awaiting re-upload':''),
+      goOverviewStopped:()=>this.setState({screen:'overview',filter:'stopped',selected:[]}),
+
+      // settings
+      isCfgTab:st.settingsTab==='configure',isDataTab:st.settingsTab==='data',
+      setCfgTab:()=>this.setState({settingsTab:'configure'}),setDataTab:()=>this.setState({settingsTab:'data'}),
+      cfgTab,dataTab,nm,baseSeg,previewName,seqPreview,
+      folders,themes,apiUrl:st.apiUrl,onApiUrl:(e)=>this.setState({apiUrl:e.target.value}),
+      tokenDisplay,tokenSpacing:st.tokenShown?'0':'1px',tokenToggle:st.tokenShown?'Hide':'Show',toggleToken:()=>this.setState({tokenShown:!st.tokenShown}),
+      testConn:()=>{const ok=!st.firstRun;this.setState({testOk:ok,testResult:ok?'Connected — authenticated as “cataloger@nbcg.me” (write access).':'Unauthorized — token rejected (401). Check the access token.'});},
+      testResult:st.testResult,testColor:tc.c,testGlyph:tc.g,saveSettings:()=>this.flash('Settings saved.'),
+      toast:st.toast,
+    };
+  }
+}
+</script>
+</body>
+</html>
