@@ -15,12 +15,13 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import {
+  BatchTab,
   availableTabs as availableTabsFn,
+  enterMetadata,
   isArchived,
   openTabFor,
   requiresUnlock,
   type Batch,
-  type BatchTab,
 } from "@domain/batch";
 import { useBatchesStore } from "./useBatches";
 
@@ -77,10 +78,40 @@ export const useBatchWorkStore = defineStore("batchWork", () => {
     unlocked.value = false;
   }
 
-  /** Switch tabs (no-op for an unavailable tab, e.g. Setup on a single-item
-   * batch). */
+  /**
+   * Switch tabs (no-op for an unavailable tab, e.g. Setup on a single-item
+   * batch), advancing the batch's furthest-stage marker if this moves it on.
+   *
+   * The advance lives **here**, not in the view. `Batch.stage` records the
+   * furthest progress reached, but only `initialStageFor` (at create) and
+   * `enterProcessing` ever wrote it — so a multi-item batch sat at `setup` until
+   * its first processing run however much metadata work was done, and reopening
+   * it dropped the operator back on Setup (`open()` clears the session tab, so
+   * `resolvedTab` falls back to `tabForStage`). `enterMetadata` existed as the
+   * missing counterpart but had no caller; a doc note assigning that caller to
+   * the GUI left the fix inert, which is the failure this project keeps
+   * repeating. Persisting where the tab actually changes needs no view code and
+   * cannot be forgotten.
+   */
   function setTab(tab: BatchTab): void {
-    if (availableTabs.value.includes(tab)) activeTab.value = tab;
+    if (!availableTabs.value.includes(tab)) return;
+    activeTab.value = tab;
+    advanceStageFor(tab);
+  }
+
+  /**
+   * Move `stage` forward for a tab the operator just entered. Fire-and-forget via
+   * `persistRun`: a tab switch must stay instant, and the marker is a progress
+   * hint — a failed write is retried by the next switch, not worth blocking on.
+   *
+   * `enterMetadata` owns the "never regress" rule and returns the same object
+   * when there is nothing to do, so this is safe to call on every switch.
+   */
+  function advanceStageFor(tab: BatchTab): void {
+    const b = current.value;
+    if (!b || tab !== BatchTab.Metadata) return;
+    const next = enterMetadata(b);
+    if (next !== b) batches.persistRun(next);
   }
 
   /** Unlock a read-only (Done) batch for re-work (docs/01 "Editing a published

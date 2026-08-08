@@ -58,8 +58,10 @@ Four object types drive the app (full field lists in
   and `meta` (the catalogue field values, each with provenance).
 - **Batch** — a **local** working set of items processed together. Groups one
   item state at a time; only one batch runs the pipeline at a time.
-- **Parent record** — a catalogue record an item is filed under (fetched from the
-  backend collections list as `{ id, name, collectionType, … }`). A parent is
+- **Parent record** — a catalogue record an item is filed under. Found via
+  `GET /api/search` — there is **no backend collections endpoint**, and
+  `collectionType` is a **number inside the record's `metadata`**, not a column
+  (verified; see [PROJECT-KNOWLEDGE §4](PROJECT-KNOWLEDGE.md)). A parent is
   **eligible to pass data** (its shared fields copy down) only when its
   `collectionType` is in the data-passing set (a serial-type; exact value(s) TBD
   and configurable — more types may pass data later); other types can be linked

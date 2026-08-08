@@ -141,9 +141,10 @@ in `overrides`, which also carries the per-item `contentKind`).
 ## Handoff — GUI (`.vue`) & Arch (`.rs`/`.py`)
 
 _Logic lane (Jernej, `.ts`) done 2026-08-04. Typechecks (`vue-tsc`) + builds
-(`vite build`) clean; the pure batch logic is unit-tested (`npm test` — 41 cases
-in `batch.test.ts` as of 2026-08-08, some of them Epic 06's run reducers; the
-whole suite is 566). Adversarially reviewed (reactivity / lane-boundaries /
+(`vite build`) clean; the pure batch logic is unit-tested (`npm test` — 42 cases
+in `batch.test.ts` as of 2026-08-08, some of them Epic 06's run reducers, plus 5
+in `useBatchWork.test.ts`; the whole suite is green — count in
+[PROJECT-KNOWLEDGE §5](../PROJECT-KNOWLEDGE.md)). Adversarially reviewed (reactivity / lane-boundaries /
 completeness); two real defects found + fixed: crash-recovery was running on
 every `load()` (would reset a legitimately-running batch once Epic 06 lands) —
 now **gated to the first load of the session**; and the batch workspace didn't
@@ -260,9 +261,25 @@ Two visible consequences:
 missing counterpart to `enterProcessing` (idempotent, never regresses a later
 stage, safe to call on every tab change).
 
-**Owed by GUI:** the *caller*. Advancing on "operator left Setup for Metadata" is
-a UI event, and `useBatchWork.setTab` only mutates the session-local `activeTab`
-today — it must also persist `enterMetadata(batch)` through `useBatches.update`.
+> ### ⚠️ …and that fix was inert for the rest of the day
+>
+> The line that stood here said the *caller* was **owed by GUI** — "advancing on
+> tab change is a UI event". That was wrong, and wrong in the way this project
+> keeps being wrong: `useBatchWork.setTab` is a **Pinia store in the `.ts` lane**.
+> The GUI calls it, but *what it does* is logic-lane code. So `enterMetadata`
+> shipped with **zero call sites**, the bug it was written to fix was still live,
+> and the doc recorded it as fixed.
+>
+> Identical in shape to `UPLOAD_MAX_FILES` (declared for two epics, never
+> enforced) and to `contentKinds` ("sourced from `Batch.overrides`" — by nobody).
+> A reducer with no caller is not a fix.
+>
+> **Now wired** (2026-08-08): `useBatchWork.setTab` advances the stage through
+> `useBatches.persistRun` — synchronous in-memory update, fire-and-forget
+> write-through, since a tab switch must stay instant and a missed write is
+> retried by the next switch. Pinned by `stores/useBatchWork.test.ts`, including
+> two cases confirmed to fail without the call. **GUI owes nothing here** beyond
+> calling `setTab`, which it already had to.
 
 ### "One item type per batch" is enforced by construction only
 

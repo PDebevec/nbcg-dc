@@ -93,8 +93,8 @@ lives in [Epic 01](01-app-shell.md); this epic is the screen + the naming rules.
 ## Progress — logic lane (`.ts`) pass, 2026-08-07
 
 Verified against the running backend on `http://localhost:3000` (health, schema,
-ETag/`304`, and the failure modes below). Typechecks (`vue-tsc`) clean; the suite
-is **496 unit tests green** (was 409).
+ETag/`304`, and the failure modes below). Typechecks (`vue-tsc`) clean; suite
+green (total in [PROJECT-KNOWLEDGE §5](../PROJECT-KNOWLEDGE.md)).
 
 ### Three backend facts this epic turned up
 
@@ -231,6 +231,29 @@ empty form into an obvious error for any future client.
 - **Theme resolution** (`prefers-color-scheme` → effective theme) is left to
   presentation on purpose: it is DOM work, and `design/theme.ts` sits in the GUI
   lane per [code structure](../04-code-structure.md).
+
+### Doc-vs-code review, 2026-08-08 — `save()` could half-apply
+
+`save()` persisted the config, committed it to `config.value`, and *then* wrote
+the token. If the token write failed (a locked keyring, a missing
+`config_set_secret`), the store was left in a state it has no name for:
+`config.value` — what `useConnection.host` and `useSync.host` display — named the
+**new** backend, while `applyClient()` had never run so every actual request
+still went to the **old** one, and `save()` returned `false` as though nothing had
+happened.
+
+The existing failure test only covered `saveConfig` throwing, which is the branch
+that was already correct.
+
+**Fixed** by staging: both writes complete before *either* is committed to
+reactive state, so the app either moved to the new backend or did not. A partial
+write can still reach disk (config persisted, token not); the next `load()`
+reconciles that, and the operator sees an unsaved-looking form rather than a
+silently half-applied one. Test confirmed to fail against the old ordering.
+
+This is the epic's own stated substance — "the draft-vs-saved **ordering
+guarantees**" — so it is worth being precise about what the guarantee is: *the
+running client never disagrees with `config`.*
 
 ### Not yet built (noted)
 

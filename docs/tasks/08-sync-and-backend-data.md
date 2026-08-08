@@ -182,6 +182,11 @@ schema file does not show; it is documented and ignored.
   reachability** (the boot connection check is fire-and-forget, so reading
   `isOnline` immediately would always see "unknown" and skip the launch fetch) →
   sync if due.
+  — **Corrected 2026-08-08:** awaiting it meant *opening a second probe*, because
+  `useConnection.check()` did not join one already in flight — it only superseded
+  it by generation. Every launch spent two health requests to learn one fact.
+  `check()` now returns the in-flight promise, so this awaits **boot's** probe.
+  Pinned by `stores/useConnection.test.ts` (the store's first tests).
 - **`services/api/collections.ts`** — now delegates its HTTP to
   `services/api/search`, so the parent picker shares the pagination guard, the
   `limit` clamp, and the 404 handling. Its own job is just the `hitToParent`

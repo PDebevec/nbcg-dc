@@ -4,7 +4,9 @@
 > especially the `.ts` logic lane and its integration with the `nbcg` backend.
 > Everything here is verified against the real code (backend surveyed
 > 2026-08-03) — where it disagrees with the planning docs in `docs/`, **trust
-> this file** (see §8 for the specific discrepancies).
+> this file** (see §8 for the specific discrepancies). §9 and §10 record the two
+> review passes that checked this file *against the code*, rather than the
+> reverse; §10 is the most recent state.
 
 ---
 
@@ -435,8 +437,12 @@ being a write counter.
 
 ## 5. What `nbcg-dc` has now (logic lane, Epics 01–08 + 10 — DONE)
 
-Typechecks (`vue-tsc`) + builds (`vite build`) clean; **561 unit tests green**.
-Last updated 2026-08-08 (the live re-verification audit — see §9).
+Typechecks (`vue-tsc`) + builds (`vite build`) clean; **618 unit tests green**.
+Last updated 2026-08-08 (the doc-vs-code review — see §10).
+
+> The suite count is stated **here only**. It used to appear in four files with
+> three different values (561 / 566 / 567), none of them current, because every
+> pass added its own. Epic docs now say "the suite is green" and link here.
 
 ```
 src/
@@ -562,6 +568,22 @@ Seam-1 layer that lands alongside the GUI: `composables/useSettings`,
 `useMetadataForm`, `useProcessing`, `useUpload`, `useSync`, `useBackendSearch`,
 `useThumbnailPicker`, plus the Epic 04 metadata store. Each epic's task doc lists
 its own deferred pieces under "Still owed by the logic lane".
+
+**Two open decisions are blocking, and both are Jernej's**, not another lane's —
+they are the only things in the logic lane waiting on a person rather than on the
+GUI:
+
+- [Cover shots & thumbnail choice](tasks/cover-shots-and-thumbnail-choice.md) —
+  how a cover / non-page image is identified. Until it is answered, a book's
+  open-binding shot is split down the middle and the title page is the thumbnail.
+  It also decides where `BatchItemOverride` grows next.
+- [Naming base §1](tasks/naming-base-and-unicode-filenames.md) — whether the
+  operator may override the folder-derived naming base. `sa vodenim zigom`
+  ("with a watermark", a scanning note) currently becomes an item's base name and
+  its `metadata.json` key.
+
+Neither is expensive to implement — `domain/naming` and `domain/batch` are
+single-sourced — but guessing would bake in a transformation nobody asked for.
 
 Two concrete follow-ups Epic 09 left behind, both in Epic 07's upload flow —
 **resolved 2026-08-08:**
@@ -693,3 +715,64 @@ Two more habits earned their keep:
 - **A guard on "one item type per batch."** Enforced today by Overview's selection
   scoping only; a proper guard needs the item states at the call site. Recorded in
   [Epic 03](tasks/03-batches-and-lifecycle.md) as a decision, not an oversight.
+
+---
+
+## 10. The 2026-08-08 doc-vs-code review — reading the docs against the code
+
+A pass over every `.md` in `docs/` against the code implementing it. The §9 fixes
+all held up. Four new defects, three inert mechanisms, and a test gap. Suite
+567 → **618**.
+
+| # | Defect | Why it was invisible |
+|---|---|---|
+| 1 | **An empty OCR `.txt` still went into `extractedTexts`** — which stores `NO_TEXT` *and* enqueues Tika, overwriting it, for a file uploaded with `doOCR: false` precisely to avoid that. | `201 Created`. The rule was in `dto.ts` in capitals and enforced nowhere. |
+| 2 | **`patchOnBackend` read `.version` off a possibly-empty PATCH body.** Against a pre-2026-08-07 backend that is a `TypeError` — not an `ApiError`, so it escapes the outcome mapping and reaches the operator raw. | Never hit, because the dev backend is current. `connectParents` twenty lines away guards the identical skew and explains why. |
+| 3 | **`useSettings.save()` committed the config before the token write settled.** A failed token write left `config` naming the new host while the live client still called the old one — and `save()` returned `false`. | The only failure test covered the *other* branch. |
+| 4 | **`useConnection.check()` did not join an in-flight probe**, so boot's fire-and-forget check and `useSync.initialise()`'s awaited one were two requests. | Both worked. It cost a round-trip, not correctness. |
+
+### Three mechanisms that existed but were not connected
+
+The §9 lesson, found three more times in one pass:
+
+- **`enterMetadata` had no caller.** §9 recorded it as "fixed the half that is
+  logic" and assigned the caller to GUI. But `useBatchWork.setTab` is a **Pinia
+  store — `.ts`**, not GUI, so the fix was inert and the bug it addressed was
+  still live. Now wired there.
+- **`splitSpreads` had no `BatchItemOverride` field at all**, so every run
+  hard-coded `false`. The one book that needs it (`ОКТОИХ петогласник 2`) could
+  not be split by any code path. Field added; `buildRunRequest` sources it off the
+  batch like `contentKinds`.
+- **`primaryThumbnails`** — checked and left. Genuinely blocked on the Epic 04
+  store, not overlooked.
+
+> **A lane label is not an owner.** Twice now, work in the `.ts` lane has been
+> parked on another lane by a doc note — `parentStates` ("the caller's job"),
+> `enterMetadata` ("advancing on tab change is a UI event"). Both were sitting in
+> stores, which are `.ts`. The GUI *triggers* these; it does not implement them.
+> Before writing "owed by GUI", check which file the code would go in.
+
+### The test gap this pass closed
+
+**`services/api/client.ts` had no test file**, so nothing in the suite asserted
+that the Bearer token reaches the wire — the single line every backend call in
+the app depends on. The resource services do exercise the client through a fake
+`fetchImpl`, but every one of their harnesses records `{method, url, body}` and
+**drops headers**, so the gap was invisible from a coverage-by-proxy argument.
+`client.test.ts` now covers auth, URL building, JSON/multipart bodies, the full
+status→kind mapping, non-JSON error bodies, timeout vs. caller-abort, and the
+`acceptStatuses`/304 path (36 cases).
+
+### Doc repairs
+
+- **Epic 05 had no `Progress — logic lane` section and every box unticked**, while
+  the README and §7 both called it done and the code was fully built
+  (`domain/parent`, `domain/provenance`, `services/api/{cobiss,collections}`). It
+  also still cited `GET /api/cobiss/:id/preview` — the last file in the repo doing
+  so — plus a "backend collections list" that does not exist and a
+  "multiple records" error that was never a thing.
+- **The suite total lived in four files with three values.** It is stated in §5
+  only; epic docs say "suite green" and link there.
+- **`[x]` meant two different things** (logic-lane done in 03/07/08/10, all-lanes
+  done in 04/06). One convention, defined in
+  [the roadmap](tasks/README.md#what-a-checkbox-means).

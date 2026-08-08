@@ -111,6 +111,22 @@ export interface BatchItemOverride {
    * (docs/05-real-scan-data.md).
    */
   contentKind?: ContentKind | null;
+  /**
+   * Whether to split two-page spreads into single pages during the `pdf` stage.
+   *
+   * Omitted/null means don't split. Not a visible stage — a sub-step of the
+   * image→PDF build (`py/split_spreads.py`), carried to the runner as
+   * `ItemRunRequest.splitSpreads`. Needed for landscape 2-up scans like
+   * `ОКТОИХ петогласник 2` and wrong for portrait page scans, and nothing can
+   * detect which from filenames, so it is the operator's call.
+   *
+   * It lives here because `services/pipeline` had a `splitSpreads` option with
+   * **nowhere to read it from** — no field on the batch, no caller passing one —
+   * so every run hard-coded `false` and the spread books could never be split.
+   * The Setup-tab control that *sets* it is still owed by GUI, but the value now
+   * has a home and a path to the runner.
+   */
+  splitSpreads?: boolean | null;
 }
 
 /**
@@ -444,9 +460,10 @@ export function allItemsDone(batch: Batch): boolean {
  *  - the three-step indicator never shows Metadata as *active*; it jumps from
  *    Setup straight to Processing and only marks Metadata done retroactively.
  *
- * Added 2026-08-08 as the missing counterpart to `enterProcessing`. The *caller*
- * is still owed by the GUI lane — advancing on tab change is a UI event, and
- * `useBatchWork.setTab` only mutates the session-local tab today.
+ * Added 2026-08-08 as the missing counterpart to `enterProcessing`, and wired to
+ * its caller — `stores/useBatchWork.setTab` — the same day it was found to have
+ * none. Idempotent and never regressing, so calling it on every tab switch is
+ * safe.
  */
 export function enterMetadata(batch: Batch): Batch {
   if (batch.stage === BatchStage.Setup) {

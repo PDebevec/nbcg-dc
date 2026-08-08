@@ -29,32 +29,54 @@ export const useConnectionStore = defineStore("connection", () => {
   // result — a slower earlier check must not clobber a fresher state.
   let generation = 0;
 
-  /** Ping the backend for reachability and update state. */
-  async function check(): Promise<ReachabilityResult | null> {
+  /**
+   * The request currently in flight, so concurrent callers **join** it instead of
+   * opening a second one.
+   *
+   * `boot()` fires a check without awaiting it and then hands off to
+   * `useSync.initialise()`, which needs a settled answer before deciding whether
+   * to run the launch sync — so it awaited a check of its own. Both were real
+   * requests, the second superseded the first by generation, and every launch
+   * cost two health pings to learn one fact.
+   */
+  let inFlight: Promise<ReachabilityResult | null> | null = null;
+
+  /** Ping the backend for reachability and update state. Concurrent calls share
+   * one request. */
+  function check(): Promise<ReachabilityResult | null> {
     if (!isApiClientConfigured()) {
       state.value = "unknown";
-      return null;
+      return Promise.resolve(null);
     }
+    if (inFlight) return inFlight;
+
     const gen = ++generation;
     checking.value = true;
     state.value = "checking";
-    try {
-      const result = await checkConnection(getApiClient(), {
-        baseUrl: host.value,
-      });
-      if (gen !== generation) return result; // superseded — don't apply
-      lastResult.value = result;
-      state.value = connectionStateFromResult(result);
-      return result;
-    } catch (err) {
-      if (gen === generation) {
-        logger.error("connection", "Reachability check failed unexpectedly.", err);
-        state.value = "offline";
+
+    const task = (async (): Promise<ReachabilityResult | null> => {
+      try {
+        const result = await checkConnection(getApiClient(), {
+          baseUrl: host.value,
+        });
+        if (gen !== generation) return result; // superseded — don't apply
+        lastResult.value = result;
+        state.value = connectionStateFromResult(result);
+        return result;
+      } catch (err) {
+        if (gen === generation) {
+          logger.error("connection", "Reachability check failed unexpectedly.", err);
+          state.value = "offline";
+        }
+        return null;
+      } finally {
+        if (gen === generation) checking.value = false;
+        inFlight = null;
       }
-      return null;
-    } finally {
-      if (gen === generation) checking.value = false;
-    }
+    })();
+
+    inFlight = task;
+    return task;
   }
 
   return { state, lastResult, checking, host, isOnline, check };

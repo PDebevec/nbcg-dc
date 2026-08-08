@@ -293,6 +293,28 @@ describe("save", () => {
     expect(store.dirty).toBe(true);
     expect(store.saving).toBe(false);
   });
+
+  // The config write can succeed and the token write fail. `config` is what the
+  // UI shows as the current host; `configureApiClient` is where calls actually
+  // go. Committing the config before the token write settled left those two
+  // pointing at different backends while `save()` reported failure.
+  it("does not move the app to the new host when the token write fails", async () => {
+    const store = await loadedStore();
+    const config = await import("@services/config");
+    vi.spyOn(config, "setApiToken").mockRejectedValueOnce(new Error("keyring locked"));
+
+    const clientCalls = calls.configureApiClient.length;
+    store.editDraft({ backendBaseUrl: "https://api.nbcg.me" });
+    store.editToken(JWT2);
+    await expect(store.save()).resolves.toBe(false);
+
+    // Saved state and the live client agree: neither moved.
+    expect(store.config.backendBaseUrl).toBe("http://localhost:3000");
+    expect(calls.configureApiClient.length).toBe(clientCalls);
+    // The edits survive so the operator can retry.
+    expect(store.draft.backendBaseUrl).toBe("https://api.nbcg.me");
+    expect(store.dirty).toBe(true);
+  });
 });
 
 describe("token display", () => {

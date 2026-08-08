@@ -9,8 +9,10 @@
  *    `id` + `version: 0`). A `cobissId` in the metadata yields a deterministic
  *    id, so a re-create of the same COBISS record `409`s ("already exists").
  *  - `PATCH /api/items/:id` — optimistic-concurrency update: `expectedVersion`
- *    is REQUIRED, metadata is SHALLOW-merged (send only changed keys), and a true
- *    no-op returns an EMPTY body (→ `undefined`). `409` on version mismatch.
+ *    is REQUIRED, metadata is SHALLOW-merged (send only changed keys), and the
+ *    response always carries `{ version }` — the new one on a real change, the
+ *    unchanged one when there was nothing to write (it returned an empty body
+ *    before the 2026-08-07 fix). `409` on version mismatch.
  *  - `POST /api/items/transition` — move ids between DRAFT/RECORD (needs BOTH
  *    manage scopes).
  *  - `DELETE /api/items` — hard delete (body-on-DELETE).

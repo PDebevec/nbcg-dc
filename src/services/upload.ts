@@ -215,10 +215,13 @@ export interface ItemUploadResult {
    * (2026-08-07) instead of leaving it to a CDC-lagged re-read, so it is carried
    * here rather than discarded.
    *
-   * NOTE: applying it is the caller's job, because mapping a `parentId` back to a
-   * locally-tracked item needs the item list, which this service does not have.
-   * That lands with the upload composable/store (deferred with the GUI) — see
-   * docs/tasks/07. Parents that are not local items simply have nothing to update.
+   * These are **already applied** — {@link applyParentStates} runs inside
+   * `uploadItem`, right after the connects. They are surfaced here for the caller
+   * to render, not to act on. (This was briefly parked for the deferred upload
+   * store on the grounds that mapping a `parentId` back to a local item needs the
+   * item list; it needs only a `listItems` dep, and leaving it parked meant a
+   * connected parent's next ordinary `PATCH` would `409`.) Parents the archive
+   * does not track locally simply have nothing to update.
    */
   parentStates: RelationWriteResult[];
   /** A human message for a toast (on non-`uploaded` outcomes). */
@@ -547,9 +550,19 @@ async function createOnBackend(
  * optimistic concurrency always applies. Sends ONLY changed keys.
  *
  * Returns the version to mirror: the backend's reported version when a request
- * was made — always present since the 2026-08-07 fix — or the prior version when
- * we determined locally that there was nothing to send and skipped the call
- * entirely.
+ * was made, or the prior version when we determined locally that there was
+ * nothing to send and skipped the call entirely.
+ *
+ * The response is read defensively for the same reason {@link connectParents}
+ * reads its own: `PATCH` returned an **empty body** for a no-op before the
+ * 2026-08-07 fix, which decodes to `undefined`. The app is installed on a
+ * workstation while the backend is deployed independently, so a newer app
+ * talking to an older backend is a real scenario — and `res.version` on
+ * `undefined` throws a `TypeError`, which is not an `ApiError`, so it would reach
+ * the operator as a raw "Cannot read properties of undefined" instead of a
+ * handled outcome. Falling back to the prior version costs nothing: against an
+ * old backend a no-op left the version unchanged anyway, and a real change still
+ * reports one.
  */
 async function patchOnBackend(
   _item: Item,
@@ -575,7 +588,7 @@ async function patchOnBackend(
   if (visibilityChanged) body.visibilityStatus = ctx.visibility;
 
   const res = await withRetry(() => deps.updateItem(backendId, body, {}), deps);
-  return res.version;
+  return typeof res?.version === "number" ? res.version : priorVersion;
 }
 
 /** Upload a create's assets: one request per role group, `extractedTexts` (PDF
@@ -592,18 +605,22 @@ async function uploadCreateAssets(
   for (const group of plan.groups) {
     const files = await Promise.all(group.assets.map((a) => toUploadFile(a, deps)));
     // Scope the text map to the filenames actually in this request (only the WEB
-    // group carries PDFs, so the THUMBNAIL request sends none).
+    // group carries PDFs, so the THUMBNAIL request sends none), then hold back
+    // any empty entry — sending one enqueues the Tika run this upload exists to
+    // avoid (see `splitEmptyTexts`).
     const groupTexts = pickTexts(extractedTexts, group.assets);
+    const { supplied, emptyFilenames } = splitEmptyTexts(groupTexts);
     const attachments = await withRetry(
       () =>
         deps.uploadFiles(backendId, files, {
           role: group.role,
           doOCR: false,
-          extractedTexts: groupTexts,
+          extractedTexts: supplied,
         }),
       deps,
     );
-    await repairMangledText(attachments, group.assets, groupTexts, deps, warnings);
+    await repairMangledText(attachments, group.assets, supplied, deps, warnings);
+    await settleEmptyTexts(attachments, group.assets, emptyFilenames, deps);
     all.push(...attachments);
   }
   return all;
@@ -612,11 +629,13 @@ async function uploadCreateAssets(
 /**
  * Recover the full text of any file whose filename the backend altered.
  *
- * Verified 2026-08-07: a multipart filename containing non-ASCII characters comes
- * back as `??????` — and since `extractedTexts` is keyed **by filename**, the
- * backend finds no match and stores nothing, returning `201` with
- * `textExtractionStatus: NOT_EXTRACTED`. Silent full-text loss on exactly the
- * Cyrillic material this library catalogues
+ * Verified 2026-08-07, corrected 2026-08-08: the backend parses a multipart
+ * filename as Latin-1 when it is really UTF-8, so a non-ASCII name comes back
+ * altered — as **mojibake** (`ОКТОИХ…` → `ÐÐÐ¢…`, reversible) or, from a stack
+ * that transcodes first, as a lossy `??????`. Either way, since `extractedTexts`
+ * is keyed **by filename**, the backend finds no match and stores nothing,
+ * returning `201` with `textExtractionStatus: NOT_EXTRACTED`. Silent full-text
+ * loss on exactly the Cyrillic material this library catalogues
  * (`nbcg/todo/backend-multipart-filename-not-utf8.md`, P1).
  *
  * `PUT /api/files/:fileId/text` is keyed by **id**, not filename, so it is immune
@@ -649,12 +668,7 @@ async function repairMangledText(
     const attachment = attachments[i];
     if (attachment.filename === expected) continue;
 
-    warnings.push({
-      code: "filename-mangled",
-      message:
-        `The backend stored "${attachment.filename}" instead of "${expected}" ` +
-        `— non-ASCII characters were lost.`,
-    });
+    warnings.push(mangledFilenameWarning(expected, attachment.filename));
 
     const text = texts[expected];
     if (!text) continue; // nothing to recover for this file
@@ -675,6 +689,25 @@ async function repairMangledText(
   }
 }
 
+/**
+ * The operator-facing warning for a filename the backend stored corrupted.
+ *
+ * One builder for both paths (first upload and re-upload), because they describe
+ * the same backend bug and used to word it differently — one said the characters
+ * were "lost", which is wrong for the mojibake shape and would have the operator
+ * expect unrecoverable damage. The text is deliberately about the *stored name*
+ * only: `services/upload` repairs the full text either way, and the name is the
+ * part solely the backend can fix.
+ */
+function mangledFilenameWarning(sent: string, stored: string): UploadWarning {
+  return {
+    code: "filename-mangled",
+    message:
+      `The backend stored "${sent}" as "${stored}" — it corrupts non-ASCII ` +
+      `filenames. The full text was attached correctly; only the stored name is affected.`,
+  };
+}
+
 /** The subset of `texts` whose keys are among this group's filenames. */
 function pickTexts(
   texts: Record<string, string>,
@@ -686,6 +719,84 @@ function pickTexts(
     if (names.has(filename)) out[filename] = text;
   }
   return out;
+}
+
+/**
+ * Split an `extractedTexts` map into the entries that are safe to send and the
+ * filenames whose OCR text turned out to be **empty**.
+ *
+ * An empty-string entry is the one shape that must never reach the map.
+ * `files.service.upload` stores text when the key is *present*
+ * (`suppliedText !== undefined` → `null` + `NO_TEXT`) but picks the Tika queue
+ * with a **truthiness** test (`!extractedTexts?.[filename]`) — so `{"x.pdf": ""}`
+ * writes `NO_TEXT` *and* enqueues server-side extraction, which then overwrites
+ * it. The stored result is whatever Tika happened to find, on a `201`, for a file
+ * the archive explicitly uploaded with `doOCR: false`.
+ *
+ * Reachable in ordinary use: a blank scan, or an OCR run that wrote `<base>.txt`
+ * and found nothing. `domain/upload.textPairs` pairs on the file *existing*, not
+ * on it having content.
+ *
+ * The remedy is the one `dto.ts` prescribes — omit the key here, then set the
+ * text explicitly by id afterwards ({@link settleEmptyTexts}).
+ */
+export function splitEmptyTexts(texts: Record<string, string>): {
+  supplied: Record<string, string>;
+  emptyFilenames: string[];
+} {
+  const supplied: Record<string, string> = {};
+  const emptyFilenames: string[] = [];
+  for (const [filename, text] of Object.entries(texts)) {
+    if (text === "") emptyFilenames.push(filename);
+    else supplied[filename] = text;
+  }
+  return { supplied, emptyFilenames };
+}
+
+/**
+ * Record a genuinely-empty OCR result on the files it belongs to, by **id**.
+ *
+ * `PUT /api/files/:fileId/text` with `""` stores null + `NO_TEXT` and — unlike
+ * upload — never enqueues extraction, so this is the only way to say "we ran OCR
+ * and it found nothing" and have it stick.
+ *
+ * Pairing is **positional**, for the same reason {@link repairMangledText} is:
+ * the backend returns one attachment per uploaded file in request order, and the
+ * filename it returns cannot be trusted (see `domain/naming`).
+ *
+ * Best-effort. The upload itself succeeded, and the fallback state (whatever the
+ * backend's own extraction produced) is imperfect but not damaging, so a failure
+ * here is logged rather than failing the item.
+ */
+async function settleEmptyTexts(
+  attachments: FileAttachment[],
+  sent: DiscoveredAsset[],
+  emptyFilenames: readonly string[],
+  deps: UploadDeps,
+): Promise<void> {
+  if (emptyFilenames.length === 0) return;
+  if (attachments.length !== sent.length) {
+    logger.warn(
+      "upload",
+      `Upload returned ${attachments.length} attachments for ${sent.length} files; ` +
+        "cannot pair the empty OCR results positionally.",
+    );
+    return;
+  }
+
+  const empty = new Set(emptyFilenames);
+  for (let i = 0; i < sent.length; i += 1) {
+    if (!empty.has(sent[i].filename)) continue;
+    try {
+      await withRetry(() => deps.setFileText(attachments[i].id, ""), deps);
+    } catch (err) {
+      logger.warn(
+        "upload",
+        `Could not record the empty OCR result for "${sent[i].filename}".`,
+        err,
+      );
+    }
+  }
 }
 
 /**
@@ -744,12 +855,7 @@ async function pushReplaceAssets(
       }
       claimed.add(match.id);
       if (isMangledFilename(match.filename, asset.filename)) {
-        warnings.push({
-          code: "filename-mangled",
-          message:
-            `The backend stored "${asset.filename}" as "${match.filename}" ` +
-            `— non-ASCII characters were corrupted on upload.`,
-        });
+        warnings.push(mangledFilenameWarning(asset.filename, match.filename));
       }
       if (!replaceExisting) continue; // present + unchanged → leave it be
       const file = await toUploadFile(asset, deps);
@@ -770,10 +876,18 @@ async function pushReplaceAssets(
         const textAsset = textByPdf.get(asset.filename);
         if (textAsset) extractedTexts[asset.filename] = await deps.readTextFile(textAsset.path);
       }
+      // Same empty-entry hazard as the create path — see `splitEmptyTexts`.
+      const { supplied, emptyFilenames } = splitEmptyTexts(extractedTexts);
       const created = await withRetry(
-        () => deps.uploadFiles(backendId, files, { role: group.role, doOCR: false, extractedTexts }),
+        () =>
+          deps.uploadFiles(backendId, files, {
+            role: group.role,
+            doOCR: false,
+            extractedTexts: supplied,
+          }),
         deps,
       );
+      await settleEmptyTexts(created, fresh, emptyFilenames, deps);
       out.push(...created);
     }
   }

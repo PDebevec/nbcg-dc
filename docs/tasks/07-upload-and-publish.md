@@ -96,8 +96,9 @@ re-upload after re-processing.
 ## Progress — logic lane (`.ts`) pass, 2026-08-06
 
 The Upload **backend connection + functionality** (Jernej's `.ts` lane) is built.
-Typechecks (`vue-tsc`) + builds (`vite build`) clean; 58 new unit tests (307
-green total); adversarially reviewed. The checkboxes above reflect the
+Typechecks (`vue-tsc`) + builds (`vite build`) clean; 58 new unit tests at the
+time (the suite total lives in
+[PROJECT-KNOWLEDGE §5](../PROJECT-KNOWLEDGE.md)); adversarially reviewed. The checkboxes above reflect the
 logic-lane work — the GUI rendering + native impls each bullet also needs are the
 handoffs below. This pass was **scoped to backend/functionality**, so the Pinia
 run store + the composable + the tab `.vue` are intentionally deferred (see
@@ -288,6 +289,50 @@ warning was not followed. `uploadBlockers` now goes through `planThumbnail`, and
 `UploadGateInput` gained an optional `contentKind` so a caller that ran the item
 with a book/graphical override can have the gate reason about the same input shape
 the run did. Test confirmed to fail without the fix.
+
+## Doc-vs-code review, 2026-08-08 (second pass)
+
+Two more in this epic's upload path, both found by reading `dto.ts`'s own
+warnings against the code that is supposed to obey them.
+
+### 1. An empty OCR result triggered the exact Tika run the upload avoids
+
+`dto.UploadFilesParts` says it in capitals: an **empty-string** `extractedTexts`
+entry stores `NO_TEXT` *and still enqueues Tika* (the queue filter is a
+truthiness test), which then overwrites it — "if OCR genuinely produced nothing,
+upload without the key and call `PUT /api/files/:fileId/text` with `""`
+afterwards."
+
+`buildExtractedTexts` read every paired `.txt` straight into the map with no
+emptiness check, and so did the fresh-upload branch of `pushReplaceAssets`. A
+blank scan, or an OCR run that wrote `<base>.txt` and found nothing, produced
+exactly the documented failure — on a `201`, for a file uploaded with
+`doOCR: false` precisely to keep the backend out of it. `domain/upload.textPairs`
+pairs on the text file *existing*, not on it having content, so nothing upstream
+filtered it either.
+
+Fixed with `splitEmptyTexts` (hold the empty entries back) + `settleEmptyTexts`
+(state them afterwards by **file id**, where nothing is enqueued — paired
+positionally, since the returned filename cannot be trusted). Three tests, one
+confirmed to fail without the fix — it asserted the sent payload was `{}` and got
+`{"gorski.pdf": ""}`.
+
+**The shape, again:** the rule was written correctly in `dto.ts`, restated
+correctly in PROJECT-KNOWLEDGE §4, and enforced nowhere. Same as
+`UPLOAD_MAX_FILES`, same as the COBISS timeout.
+
+### 2. `patchOnBackend` trusted a response shape its own neighbour distrusts
+
+`connectParents`, twenty lines away, explicitly tolerates a pre-2026-08-07
+backend answering with an empty body, and says why: *"the app is installed on a
+workstation while the backend is deployed independently, so a newer app talking
+to an older backend is a real scenario."* `patchOnBackend` then did
+`return res.version` on the same class of response. Against that backend it
+throws a `TypeError` — not an `ApiError`, so it escapes the outcome mapping and
+reaches the operator as `Cannot read properties of undefined (reading 'version')`.
+
+Now falls back to the prior version, which is what an old backend's no-op meant
+anyway. Test confirmed to fail without the fix (with that exact `TypeError`).
 
 ### Still open — deliberately not built
 

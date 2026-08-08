@@ -176,8 +176,10 @@ export interface UploadRecordDto {
  *    syncs;
  *  - it carries `title`, so the Overview table reflects a title edited on the
  *    website;
- *  - it carries {@link SyncRecordDto.orphaned}, the "tracked id is gone from the
- *    backend" flag.
+ *  - it carries {@link SyncRecordDto.missStreak}, the consecutive-miss counter
+ *    that "orphaned" is **derived** from (`domain/sync.isOrphaned`). There is no
+ *    `orphaned` field, deliberately — a stored flag would need un-setting when a
+ *    record reappears, and the counter already implies it.
  *
  * `version` may be **null** when the read was CDC-lagged or ambiguous; a null
  * means "leave the stored version alone", not "clear it" — the stored version

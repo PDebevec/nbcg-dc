@@ -49,9 +49,14 @@ in the folder:
 ## Tasks
 
 **Lane legend:** each item notes its lane status — `.ts` = Jernej (logic),
-`.vue` = GUI, `.rs`/`.py` = Arch. ✅ done · ◻ to do. Checkboxes stay unticked
-until a task is complete **end-to-end** (all lanes); the logic-lane (`.ts`)
-portion of Epic 06 is done — see **Progress**.
+`.vue` = GUI, `.rs`/`.py` = Arch. ✅ done · ◻ to do.
+
+> **Checkboxes track the logic lane**, per
+> [the roadmap convention](README.md#what-a-checkbox-means) — so `[x]` here means
+> the `.ts` work is done and the per-item `.rs`/`.py`/`.vue` annotations say what
+> is left. This doc previously held out for end-to-end completion, which made a
+> finished logic lane read as unstarted and made `[x]` mean something different
+> here than in Epics 03/07/08/10.
 
 - [ ] ⛔ Choose the **Python invocation strategy** (sidecar / system / native) —
       see [overview](../00-project-overview.md) and
@@ -61,7 +66,7 @@ portion of Epic 06 is done — see **Progress**.
 - [ ] Make [`py/ocr.py`](../../py/ocr.py) **cross-platform**: replace the
       Linux-only `resource.setrlimit` cap with a Windows-safe approach.
       — **`.py` ◻ (Arch).**
-- [ ] Wrap the scripts as first-class **operations** producing folder-named
+- [x] Wrap the scripts as first-class **operations** producing folder-named
       outputs: `pdf` (archival `<name>_archive.pdf` + web `<name>.pdf`),
       `thumbnail` (`<name>_thumb.png`), `ocr` (`<name>.txt`). Reuse
       [`py/web.py`](../../py/web.py) and [`py/ocr.py`](../../py/ocr.py).
@@ -72,7 +77,7 @@ portion of Epic 06 is done — see **Progress**.
       (`stages` + `inputShape` + `webPdfBases` + `primaryThumbnail` +
       `thumbnailNeedsChoice`). **`.rs`/`.py`
       ◻** map each `(inputShape, stage)` → the right script + write the outputs.
-- [ ] **Adaptive input handling**: branch the pipeline on folder contents (TIFFs
+- [x] **Adaptive input handling**: branch the pipeline on folder contents (TIFFs
       / supplied PDF with no TIFFs / images with no PDF), and process **multiple
       PDFs/images** into multiple upload candidates — preserving each discovered
       file's own filename so its OCR text matches by base name.
@@ -120,7 +125,7 @@ portion of Epic 06 is done — see **Progress**.
   use the plan's `thumbnail.needsChoice` (not `files.needsThumbnailChoice` alone)
   so the multi-PDF case is caught. **◻ (logic)** persist the operator's pick on
   the item (with the Epic 04 metadata store). **`.vue` ◻** the grid picker.
-- [ ] **Job runner** in the Rust core: queue, concurrency limit (OCR is
+- [x] **Job runner** in the Rust core: queue, concurrency limit (OCR is
       memory-heavy), start/cancel, per-item success/failure, streaming
       progress + logs to the UI as events.
       — **`.ts` ✅ (contract + drive)** `ipc.jobs` (`start`/`cancel`/`reprocess`)
@@ -129,7 +134,7 @@ portion of Epic 06 is done — see **Progress**.
       calls; `stores/useProcessing.ts` folds events → coarse batch state
       (write-through) + live progress. **`.rs` ◻** the actual queue / concurrency
       cap / cancel / streaming behind the commands.
-- [ ] **Per-workstation single-run lock**: enforce one batch processing at a
+- [x] **Per-workstation single-run lock**: enforce one batch processing at a
       time; Start/Rerun while another batch runs is blocked with the standard
       message (uses the guard from [batches](03-batches-and-lifecycle.md)).
       — **`.ts` ✅** `anyOtherRunning`/`singleRunBlockedMessage` (Epic 03) checked
@@ -150,7 +155,7 @@ portion of Epic 06 is done — see **Progress**.
   (Epic 03) drive the bar + the primary-action transitions. **◻ (logic —
   deferred with GUI)** the `useProcessing` **composable** (the view-model, per
   the Epic 04 precedent). **`.vue` ◻** the tab itself.
-- [ ] **Rerun at two grains**: a single failed item, or all failed items in the
+- [x] **Rerun at two grains**: a single failed item, or all failed items in the
       batch. On all-resolved, the batch stage becomes `ready`.
       — **`.ts` ✅** `useProcessing.rerunItem` (re-runs an item's failed stage +
       any downstream stages the failure left pending) and `rerunFailed`
@@ -161,7 +166,7 @@ portion of Epic 06 is done — see **Progress**.
       — **`.rs` ◻ (Arch).** Contract: the logic lane treats a stage as `done`
       only on a `job://stage-changed` with `status: done`, so a half-written
       output never reads complete.
-- [ ] **Dirty flag → needs re-upload**: producing new derived outputs (e.g. after
+- [x] **Dirty flag → needs re-upload**: producing new derived outputs (e.g. after
       TIFFs change) sets a SQLite "derived-changed-since-upload" flag that
       surfaces as **Needs re-upload** (Epics 02, 07). Driven by new PDF/OCR only —
       **never** by metadata.
@@ -171,7 +176,7 @@ portion of Epic 06 is done — see **Progress**.
       state machine (Epic 02). **`.rs` ◻** set the SQLite flag when the runner
       writes new outputs (the run's `mode` distinguishes a fresh run from a
       re-process).
-- [ ] **Re-process action** (explicit): rebuild any stage (archival PDF, web PDF,
+- [x] **Re-process action** (explicit): rebuild any stage (archival PDF, web PDF,
       thumbnail, OCR) on demand, overwriting old outputs. On an already-uploaded
       item it is an explicit, guarded action (the same **Edit / re-process** gate
       as Metadata) and **marks the item Needs re-upload**; optionally auto-detect
@@ -182,7 +187,7 @@ portion of Epic 06 is done — see **Progress**.
       Edit/re-process gate (`useBatch.readOnly`/`unlock`, Epic 03). **`.rs` ◻**
       rebuild + set the dirty flag. **`.vue` ◻** the action control + the
       auto-detect suggestion.
-- [ ] **Skip-if-done**: skip stages SQLite marks complete unless the user forces a
+- [x] **Skip-if-done**: skip stages SQLite marks complete unless the user forces a
       re-run, so big batches don't needlessly re-OCR.
       — **`.ts` ✅** `stagesToRun` reduces each item to the stages that actually
       need running (skips `done` unless `force`); the runner receives exactly that
@@ -192,8 +197,9 @@ portion of Epic 06 is done — see **Progress**.
 
 ## Progress — logic lane (`.ts`) pass, 2026-08-05
 
-**Shipped (typechecks + builds clean; `vitest` green — 59 new tests, 249 total;
-adversarially reviewed across correctness / contract / convention / test-coverage,
+**Shipped (typechecks + builds clean; `vitest` green — 59 new tests at the time;
+suite total in [PROJECT-KNOWLEDGE §5](../PROJECT-KNOWLEDGE.md); adversarially
+reviewed across correctness / contract / convention / test-coverage,
 all confirmed findings fixed).** The `.ts` decision here (consistent with how
 `domain/files.ts` keeps asset classification out of Rust): the **adaptive
 branching is computed in `.ts`** and handed to the native runner as a
@@ -294,10 +300,27 @@ tests, including one confirmed to fail without the fix.
 the Setup-tab book/graphical control. Nothing populates it yet, so the override is
 now wired end-to-end but always empty in practice.
 
-**Still owed, same shape:** `primaryThumbnails` (already flagged as deferred) and
-`splitSpreads` — the latter has **no `BatchItemOverride` field at all**, so it is
-hard-coded `false` in every run and needs a home on the batch before any UI can
-set it.
+### `splitSpreads` had the same hole, one step worse — fixed 2026-08-08
+
+Flagged in this section as "needs a home on the batch before any UI can set it",
+and then left there. It was worse than `contentKinds`: that at least had a
+`BatchItemOverride` field nothing read, whereas `splitSpreads` had **no field at
+all**, so `buildItemRunRequest` fell through to `false` on every run and
+`py/split_spreads.py` could never be asked to run. `ОКТОИХ петогласник 2` — the
+landscape 2-up book that is the *reason* the option exists (docs/05) — could not
+be split by any code path.
+
+**Fixed:** `BatchItemOverride.splitSpreads` exists, and `buildRunRequest` sources
+it off the batch exactly as it sources `contentKinds`, so no caller has to
+remember. Pinned by two tests in `services/pipeline.test.ts`.
+
+**Still owed by GUI:** the per-item control that sets it (Setup tab, next to the
+book/graphical toggle). As with `contentKind`, the path is now wired end-to-end
+and simply always empty until something populates it.
+
+**Still deferred:** `primaryThumbnails` — genuinely blocked, not overlooked. The
+operator's thumbnail pick has to be *persisted somewhere* first, and that is the
+Epic 04 metadata working-model store, which lands with the GUI.
 
 ### This epic's warning to Epic 07 had not been followed
 

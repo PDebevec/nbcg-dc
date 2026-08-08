@@ -242,6 +242,40 @@ describe("buildRunRequest", () => {
     const req = buildRunRequest(batch, mapOf(a, b), { mode: "run" });
     expect(req.items.find((i) => i.itemId === "b")?.inputShape).toBe("page-images");
   });
+
+  // Same shape as the contentKind hole, one step worse: `splitSpreads` had no
+  // `BatchItemOverride` field at all, so every run hard-coded `false` and a
+  // landscape 2-up scan (`ОКТОИХ петогласник 2`) could never be split.
+  it("honours the batch's per-item splitSpreads override", () => {
+    const item = makeItem({
+      id: "pages",
+      folderName: "pages",
+      assets: [asset("pages", "1.jpg"), asset("pages", "2.jpg"), asset("pages", "3.jpg")],
+    });
+
+    const off = buildRunRequest(makeBatch(["pages"]), mapOf(item), { mode: "run" });
+    expect(off.items[0].splitSpreads).toBe(false);
+
+    const batch = makeBatch(["pages"]);
+    batch.overrides = { pages: { splitSpreads: true } };
+    const on = buildRunRequest(batch, mapOf(item), { mode: "run" });
+    expect(on.items[0].splitSpreads).toBe(true);
+  });
+
+  it("lets an explicit splitSpreads option beat the batch override", () => {
+    const item = makeItem({
+      id: "pages",
+      folderName: "pages",
+      assets: [asset("pages", "1.jpg"), asset("pages", "2.jpg"), asset("pages", "3.jpg")],
+    });
+    const batch = makeBatch(["pages"]);
+    batch.overrides = { pages: { splitSpreads: true } };
+    const req = buildRunRequest(batch, mapOf(item), {
+      mode: "run",
+      splitSpreads: { pages: false },
+    });
+    expect(req.items[0].splitSpreads).toBe(false);
+  });
 });
 
 describe("applyStageChanged", () => {

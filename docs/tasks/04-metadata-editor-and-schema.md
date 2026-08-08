@@ -15,6 +15,13 @@ provenance automation that feeds it lives in
 **Lane legend for the checklist:** each item notes its lane status —
 `.ts` = Jernej (logic), `.vue` = GUI, `.rs`/`.py` = Arch. ✅ done · ◻ to do.
 
+> **Checkboxes track the logic lane**, per
+> [the roadmap convention](README.md#what-a-checkbox-means). The items still
+> unticked here are the ones with real `.ts` work left — all of it the deferred
+> **metadata working-model store + `useMetadataForm`**, which holds the per-item
+> values and current index. Everything pure that it needs already exists, so those
+> boxes are one piece of work away from all ticking at once.
+
 ## Schemas (from the backend, main vs child)
 
 Two schemas, chosen by item `level` (mirrors the prototype's `MAIN`/`CHILD`):
@@ -43,14 +50,14 @@ enum currently offers: Montenegrin, Serbian, Church Slavonic, Italian, Russian.
       exposes `optionLabel()` + a `humanizeKey()` fallback for the field label.
       Backend already ships the endpoint (see PROJECT-KNOWLEDGE §4) — no backend
       task outstanding.
-- [ ] **Dynamic form renderer**: build inputs from the schema — text, enum
+- [x] **Dynamic form renderer**: build inputs from the schema — text, enum
       (`<select>`), multi (tag chips + add-on-Enter), date — with labels,
       required markers, two-column layout, and full-width for long/multi fields.
       — **`.ts` ✅ (model)** `buildFormModel()` / `fieldsForLevel()` in
       `domain/metadata-form.ts` give the level-filtered, group+order-sorted field
       model; `optionLabel()` resolves enum labels. **`.vue` ◻** GUI renders the
       inputs from that model (widget per `FieldDescriptor.type`/`itemType`).
-- [ ] **Validation**: required fields non-empty (a multi field needs ≥1 tag);
+- [x] **Validation**: required fields non-empty (a multi field needs ≥1 tag);
       enum values constrained to allowed options; inline errors; the field
       border/flag reflects required-but-empty vs issue-still-to-fill.
       — **`.ts` ✅** `validateField()` / `validateItem()` / `isItemValid()`
@@ -71,7 +78,7 @@ enum currently offers: Montenegrin, Serbian, Church Slavonic, Italian, Russian.
       — **`.ts` ✅ (rules)** `firstIncompleteIndex()`, `canAdvance()`. **◻ (logic
       — next)** wire into the batch-work store's advance action; **`.vue` ◻**
       button state + "N remaining" toast.
-- [ ] **Files strip**: the item's assets with live state — source TIFFs (local),
+- [x] **Files strip**: the item's assets with live state — source TIFFs (local),
       `<name>_archive.pdf`, the **web PDF(s)**, the **image(s)**, `<name>.txt`,
       `<name>.json` — reflecting stage status and names (folder-derived for
       single-item outputs; discovered extra PDFs/images keep their own names —

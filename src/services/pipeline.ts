@@ -61,10 +61,12 @@ export interface BuildRunOptions {
    * auto-primary, else null (unresolved). */
   primaryThumbnails?: Record<string, string | null>;
   /** Per-item content override (book / graphical work); omit to detect from the
-   * filenames. Sourced from `Batch.overrides[itemId].contentKind`. */
+   * filenames. {@link buildRunRequest} reads this off `Batch.overrides` itself —
+   * pass it only to override the operator's own override. */
   contentKinds?: Record<string, ContentKind | null>;
   /** Per-item spread splitting — split 2-up scans into single pages inside the
-   * `pdf` stage. Omit/false to leave scans as they are. */
+   * `pdf` stage. Sourced off `Batch.overrides` by {@link buildRunRequest}, same
+   * as {@link BuildRunOptions.contentKinds}; omit/false leaves scans as they are. */
   splitSpreads?: Record<string, boolean>;
 }
 
@@ -111,15 +113,19 @@ export function buildItemRunRequest(
  * so a request may carry fewer items than the batch (or none — the caller should
  * treat an empty `items` as "nothing to do" and not start a run).
  *
- * **Sources the per-item content override from the batch itself.**
+ * **Sources the per-item operator overrides from the batch itself.**
  * `BuildRunOptions.contentKinds` documented itself as "sourced from
  * `Batch.overrides[itemId].contentKind`" but nothing ever did that sourcing —
  * every caller omitted it, so every real run planned with `kind: "auto"` and the
  * operator's book/graphical override was silently inert. That override exists
  * because auto-detection is wrong in *both* directions on real scanner output,
  * and each mistake is damaging (docs/05-real-scan-data.md): a 260-page book read
- * as a graphical work gets no PDF and no OCR. An explicit `opts.contentKinds`
- * still wins, so a caller can override the override.
+ * as a graphical work gets no PDF and no OCR.
+ *
+ * `splitSpreads` had the same hole and worse: no `BatchItemOverride` field at
+ * all, so it was hard-coded `false` on every run and a landscape 2-up scan could
+ * never be split. Both are read here, off the object that already has them, so
+ * no caller has to remember. An explicit `opts.*` still wins.
  */
 export function buildRunRequest(
   batch: Batch,
@@ -128,11 +134,12 @@ export function buildRunRequest(
 ): BatchRunRequest {
   const ids = opts.itemIds ?? batch.itemIds;
   const contentKinds = { ...contentKindsFrom(batch), ...opts.contentKinds };
+  const splitSpreads = { ...splitSpreadsFrom(batch), ...opts.splitSpreads };
   const items: ItemRunRequest[] = [];
   for (const id of ids) {
     const item = itemsById.get(id);
     if (!item) continue;
-    const req = buildItemRunRequest(item, { ...opts, contentKinds });
+    const req = buildItemRunRequest(item, { ...opts, contentKinds, splitSpreads });
     if (req) items.push(req);
   }
   return { batchId: batch.id, mode: opts.mode, items };
@@ -147,6 +154,16 @@ function contentKindsFrom(batch: Batch): Record<string, ContentKind | null> {
     if (override?.contentKind != null) kinds[itemId] = override.contentKind;
   }
   return kinds;
+}
+
+/** The per-item spread-splitting overrides recorded on a batch. Items with no
+ * override are omitted and fall through to `false` (don't split). */
+function splitSpreadsFrom(batch: Batch): Record<string, boolean> {
+  const split: Record<string, boolean> = {};
+  for (const [itemId, override] of Object.entries(batch.overrides)) {
+    if (override?.splitSpreads != null) split[itemId] = override.splitSpreads;
+  }
+  return split;
 }
 
 // ── drive ─────────────────────────────────────────────────────────────────

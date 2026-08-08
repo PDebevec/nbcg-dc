@@ -73,9 +73,13 @@ export type UploadWarningCode =
   /** The backend classified the supplied text as garbled/no-text. */
   | "ocr-garbage"
   /**
-   * The backend stored a **different filename** than the one sent — verified
-   * 2026-08-07: a multipart filename with non-ASCII characters comes back as
-   * `??????` (`nbcg/todo/backend-multipart-filename-not-utf8.md`).
+   * The backend stored a **different filename** than the one sent — it parses the
+   * multipart filename as Latin-1 when it is really UTF-8
+   * (`nbcg/todo/backend-multipart-filename-not-utf8.md`, P1, open).
+   *
+   * Two shapes are reachable depending on the HTTP stack that built the body:
+   * **mojibake** (`ОКТОИХ…` → `ÐÐÐ¢…`, losslessly reversible) and a **lossy**
+   * `??????`. `domain/naming.isSameUploadedFilename` handles both.
    *
    * It matters beyond cosmetics because `extractedTexts` is keyed **by filename**,
    * so a mangled name silently drops the full text. `services/upload` re-attaches

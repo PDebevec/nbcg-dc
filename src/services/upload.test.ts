@@ -259,6 +259,51 @@ describe("uploadItem — create", () => {
   });
 });
 
+// ── the empty-OCR-text trap ────────────────────────────────────────────────
+//
+// `dto.UploadFilesParts`: an empty-string `extractedTexts` entry stores NO_TEXT
+// *and* still enqueues Tika (the queue filter is a truthiness test), which then
+// overwrites it. So an OCR run that produced nothing must NOT go in the map — it
+// is set by id afterwards, where nothing is enqueued.
+
+describe("uploadItem — empty OCR text", () => {
+  it("never sends an empty extractedTexts entry, and records it by id instead", async () => {
+    const deps = fakeDeps({ readTextFile: vi.fn(async () => "") });
+    const res = await uploadItem(makeItem(), CTX, deps);
+
+    expect(res.status).toBe("uploaded");
+
+    // The WEB request carries no key for the PDF at all — an empty-string entry
+    // here is exactly what enqueues the Tika run this upload avoids.
+    const webCall = (deps.uploadFiles as any).mock.calls[1];
+    expect(webCall[2].extractedTexts).toEqual({});
+    expect(webCall[2].extractedTexts).not.toHaveProperty("gorski.pdf");
+
+    // …and the empty result is stated explicitly on the attachment, by id.
+    expect(deps.setFileText).toHaveBeenCalledWith("att-gorski.pdf", "");
+  });
+
+  it("still sends a non-empty text in the map (no id round-trip)", async () => {
+    const deps = fakeDeps();
+    await uploadItem(makeItem(), CTX, deps);
+
+    const webCall = (deps.uploadFiles as any).mock.calls[1];
+    expect(webCall[2].extractedTexts).toEqual({ "gorski.pdf": "OCR text" });
+    expect(deps.setFileText).not.toHaveBeenCalled();
+  });
+
+  it("does not fail the upload when recording the empty result fails", async () => {
+    const deps = fakeDeps({
+      readTextFile: vi.fn(async () => ""),
+      setFileText: vi.fn(async () => {
+        throw apiError("server", 500);
+      }),
+    });
+    const res = await uploadItem(makeItem(), CTX, deps);
+    expect(res.status).toBe("uploaded");
+  });
+});
+
 // ── gating ─────────────────────────────────────────────────────────────────
 
 describe("uploadItem — gating", () => {
@@ -489,6 +534,29 @@ describe("uploadItem — replace", () => {
     expect(deps.uploadFiles).not.toHaveBeenCalled();
     // a replace stays in /processed
     expect(deps.moveToProcessed).not.toHaveBeenCalled();
+  });
+
+  // Deployment skew: the app is installed on a workstation while the backend is
+  // deployed independently, so a newer app can meet a pre-2026-08-07 backend that
+  // still answers a no-op PATCH with an empty body (→ `undefined`). Reading
+  // `.version` off that throws a TypeError, which is not an ApiError and would
+  // reach the operator raw. `connectParents` already tolerates this; so must this.
+  it("survives a backend that answers PATCH with an empty body", async () => {
+    const deps = fakeDeps({
+      readMirror: vi.fn(async () => MIRROR),
+      updateItem: vi.fn(async () => undefined as never),
+      listFiles: vi.fn(async () => [attachment("gorski.pdf", { id: "f-pdf" })]),
+    });
+    const res = await uploadItem(
+      replaceItem(),
+      { ...CTX, metadata: { title: "New title", year: "2020" } },
+      deps,
+    );
+
+    expect(res.status).toBe("uploaded");
+    // Falls back to the version we already knew, rather than crashing or
+    // mirroring `undefined` — which would break the next PATCH's expectedVersion.
+    expect((deps.writeMirror as any).mock.calls[0][1].version).toBe(3);
   });
 
   // Regression: the backend stores non-ASCII multipart filenames corrupted, so a

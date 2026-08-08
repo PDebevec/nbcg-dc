@@ -217,6 +217,9 @@ export const useSyncStore = defineStore("sync", () => {
    * Then waits for reachability to actually settle: `boot()` kicks the check off
    * without awaiting it, so reading `isOnline` here would still see the initial
    * "unknown" and skip the launch fetch every time.
+   *
+   * `useConnection.check()` joins a request already in flight, so awaiting it
+   * here settles on **boot's** check rather than opening a second one.
    */
   async function initialise(): Promise<void> {
     await loadHistory();

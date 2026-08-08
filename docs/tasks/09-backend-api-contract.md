@@ -208,7 +208,7 @@ gap; no task was filed. The one thing that matters for us is recorded in
 
 **Status: done** (2026-08-07). Every capability row resolves to a real, verified
 endpoint; the two open items are backend gaps, not archive work. `vue-tsc`
-clean, 496 tests green.
+clean, suite green (total in [PROJECT-KNOWLEDGE §5](../PROJECT-KNOWLEDGE.md)).
 
 Built / changed in this pass — all `.ts`, all Seam 3:
 

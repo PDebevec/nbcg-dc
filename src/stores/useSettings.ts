@@ -210,17 +210,35 @@ export const useSettingsStore = defineStore("settings", () => {
   }
 
   /**
-   * Persist the draft: config first, then the token, then reconfigure the client
-   * so the app switches to the new backend in one step. Returns whether it saved.
+   * Persist the draft, then switch the running app over in one step. Returns
+   * whether it saved.
+   *
+   * **Both writes happen before either is committed to reactive state.** These
+   * fields point the whole app at a backend, and `config` is what
+   * `useConnection.host` / `useSync.host` display while `applyClient()` is what
+   * the `ApiClient` actually requests. Committing the config as soon as it
+   * persisted meant a failing token write left those two disagreeing — the UI
+   * naming the new host, every call still going to the old one, and `save()`
+   * returning `false` as if nothing had happened. Staging the commit keeps the
+   * in-memory state coherent whatever fails: either the app moved to the new
+   * backend or it did not.
+   *
+   * A partial write can still reach *disk* (config persisted, token not); the
+   * next `load()` reconciles that, and the operator sees an unsaved-looking form
+   * rather than a silently half-applied one.
    */
   async function save(): Promise<boolean> {
     if (!validation.value.valid) return false;
     saving.value = true;
     try {
-      config.value = await saveConfig(draft.value);
-      if (draftToken.value !== null) {
-        await setApiToken(draftToken.value);
-        apiToken.value = draftToken.value || null;
+      const savedConfig = await saveConfig(draft.value);
+      const savedToken = draftToken.value;
+      if (savedToken !== null) await setApiToken(savedToken);
+
+      // Both persisted — commit.
+      config.value = savedConfig;
+      if (savedToken !== null) {
+        apiToken.value = savedToken || null;
         draftToken.value = null;
       }
       applyClient();
