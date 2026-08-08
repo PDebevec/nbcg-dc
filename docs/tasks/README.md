@@ -1,7 +1,26 @@
 # NBCG-DC — Task Roadmap
 
 > Status: planning — aligned to the **v1.4.0 design**
-> Last updated: 2026-07-23
+> Last updated: 2026-08-08
+
+> ### Audit pass, 2026-08-08 — epics 01–11, logic lane
+>
+> All eleven epics were re-checked against the **running** backend and the actual
+> code. The wire contract held (**60/60 live checks**); the code did not — **five
+> real defects**, four of them silent successes. Fixed in-lane; suite 546 → 567.
+> Per-epic detail is in each doc's *Audit pass* section; the cross-cutting lesson
+> is in [PROJECT-KNOWLEDGE §9](../PROJECT-KNOWLEDGE.md).
+>
+> - **07** — Cyrillic re-uploads **duplicated** attachments (filename-keyed match
+>   against a name the backend corrupts); COBISS preview timed out *before* the
+>   backend's own 30 s budget and blamed the network; a multi-PDF item could
+>   publish with an **unresolved thumbnail**.
+> - **06** — the operator's **ContentKind override was inert**; every run planned
+>   `auto`.
+> - **03** — `Batch.stage` never advanced Setup → Metadata.
+>
+> Three of these were rules that existed **only as prose** in a doc comment. See
+> §9 for why that keeps happening and what to do instead.
 
 Phased task breakdown for building the app, restructured around the
 **batch-centric** v1.4.0 design. Tasks are at "epic" altitude — each will be
@@ -14,7 +33,13 @@ Start with [00-project-overview](../00-project-overview.md) →
 [01-concept-and-ux](../01-concept-and-ux.md) →
 [02-architecture](../02-architecture.md) →
 [03-open-questions](../03-open-questions.md) →
-[04-code-structure](../04-code-structure.md), then the epics below.
+[04-code-structure](../04-code-structure.md) →
+[05-real-scan-data](../05-real-scan-data.md), then the epics below.
+
+> [05-real-scan-data](../05-real-scan-data.md) is measured from **actual scanner
+> output** and overrides the earlier docs' assumptions about folder contents —
+> notably that scans are JPG, not TIFF, which invalidated Epic 06's input
+> classification until it was fixed on 2026-08-07.
 
 ## Epics
 
@@ -27,22 +52,24 @@ Start with [00-project-overview](../00-project-overview.md) →
 | 05 | [COBISS, parents & provenance](05-cobiss-parents-and-provenance.md) | Setup tab, COBISS prefill, parent linking, provenance + per-field source | 03, 04, 08, 09 |
 | 06 | [Processing pipeline & jobs](06-processing-pipeline-and-jobs.md) | 5-stage pipeline, job runner, Processing tab, rerun, dirty flag | 01, 02, 03, 04 |
 | 07 | [Upload & publish](07-upload-and-publish.md) | Upload tab, create+assets+parents, visibility, write-through, re-upload | 02, 03, 04, 05, 06, 09 |
-| 08 | [Sync & backend data](08-sync-and-backend-data.md) | Sync screen (6h auto, tiles, log), search, match, refresh-local | 01, 02, 09 |
-| 09 | [Backend API contract](09-backend-api-contract.md) | Confirm/extend endpoints (see `nbcg/todo/backend-archive-*`) | — |
-| 10 | [Settings & naming](10-settings-and-naming.md) | Settings screen (Configure + Data), Test connection, folder-derived naming | 01, 09 |
+| 08 | [Sync & backend data](08-sync-and-backend-data.md) ✅ *(logic lane)* | Sync screen (6h auto, tiles, log), search, match, refresh-local | 01, 02, 09 |
+| 09 | [Backend API contract](09-backend-api-contract.md) ✅ *(logic lane)* | Contract verified live end-to-end; data model documented; 1 P3 backend gap filed in `nbcg/todo` | — |
+| 10 | [Settings & naming](10-settings-and-naming.md) ✅ *(logic lane)* | Settings screen (Configure + Data), Test connection, folder-derived naming | 01, 09 |
 | 11 | [Packaging & distribution](11-packaging-and-distribution.md) | Windows build, Python bundling, updater, first-run | 01, 06, 10 |
 
 > Backend changes the archive needs live in the **`nbcg` repo** under
-> [`todo/backend-archive-*`](../../../nbcg/todo): identity/verify (new), schema
-> endpoint (+ inheritable/issue flags), COBISS preview, external full-text
-> ingest, replace-file, optimistic concurrency, attachment roles,
-> relations integrity. Visibility already exists in the backend.
+> [`todo/backend-archive-*`](../../../nbcg/todo). Most are already done: schema
+> endpoint (inheritable/issue flags **present**), COBISS preview, external
+> full-text ingest, replace-file, optimistic concurrency (**`expectedVersion`
+> present**), attachment roles, and visibility all exist. **No identity/verify
+> endpoint** is needed (single-user, static token — verified on use). See the
+> verified contract in [`PROJECT-KNOWLEDGE.md`](../PROJECT-KNOWLEDGE.md).
 
 ## Suggested phasing
 
-- **Phase 0 — Foundations:** Epic 01; Epic 09 kickoff (the
-  `nbcg/todo/backend-archive-*` changes, esp. **identity/verify** + the schema
-  endpoint + external full-text ingest).
+- **Phase 0 — Foundations:** Epic 01; Epic 09 kickoff (confirm the
+  `nbcg/todo/backend-archive-*` changes, esp. the schema endpoint + external
+  full-text ingest). Auth is a static token — no identity endpoint.
 - **Phase 1 — Arrivals & batches:** Epics 02, 03. See the arrivals table with
   derived state; create/open batches.
 - **Phase 2 — Processing (works offline):** Epic 06 — the PDF / OCR /
@@ -54,7 +81,18 @@ Start with [00-project-overview](../00-project-overview.md) →
 - **Phase 4 — Upload:** Epic 07. Closes the loop: batch → process → describe →
   upload → write-through → move to `/processed`.
 - **Phase 5 — Ship:** Epics 10, 11. Settings/naming polish; packaged Windows
-  installer for staff.
+  installer for staff. Epic 10's logic lane is **done**; Epic 11 is Arch's.
+
+## Follow-ups from the first real scan data (2026-08-07)
+
+Not epics — findings from running the pipeline against actual scanner output
+([05-real-scan-data](../05-real-scan-data.md)). Both are real work with owners.
+
+| Task | Lane | Why it matters |
+|------|------|----------------|
+| [`py/` vs real scanner output](py-real-data-mismatches.md) | **Arch** (`.py`) | Five mismatches, three of them silent: `web.py` sorts pages lexicographically (**shuffles a 260-page book**), requires `jpg/`+`tif/` subfolders that no real folder has, and its output names mean the *opposite* of the convention for `<name>.pdf`. Plus UTF-8 stdout (a verified crash on Cyrillic folders) and `ocr.py`'s Linux-only `setrlimit`. **Epic 06 cannot run on real data until these are fixed.** |
+| [Cover shots & thumbnail choice](cover-shots-and-thumbnail-choice.md) | logic (`.ts`) + **decision** | A scan folder is not homogeneous: front matter, text spreads, and a photograph of the open binding all sit together. The cover is the only badly-split image (0.76 balance vs 0.96 median) *and* is probably the best thumbnail — and it is last, not first. Needs a call on how non-page images are identified. |
+| [Naming base & unicode filenames](naming-base-and-unicode-filenames.md) | logic (`.ts`) + **decision** | `sa vodenim zigom` ("with a watermark") is a scanning note, not an identifier, yet becomes the base name. And `ОКТОИХ петогласник 2.pdf` — Cyrillic **with spaces** — now goes through multipart upload, SeaweedFS, and download, none of it ever tested with a non-ASCII filename. `extractedTexts` is keyed **by filename**, so a mangled name loses the OCR text silently. |
 
 ## Backlog (maybe)
 

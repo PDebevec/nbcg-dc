@@ -14,6 +14,20 @@
     "noEmit": true,
     "jsx": "preserve",
 
+    /* Path aliases — keep in sync with vite.config.ts resolve.alias.
+       Lane boundaries (see docs/04-code-structure.md) are enforced by these.
+       Paths resolve relative to this file (no baseUrl needed in TS 5+). */
+    "paths": {
+      "@app/*": ["./src/app/*"],
+      "@domain/*": ["./src/domain/*"],
+      "@services/*": ["./src/services/*"],
+      "@ipc/*": ["./src/ipc/*"],
+      "@stores/*": ["./src/stores/*"],
+      "@composables/*": ["./src/composables/*"],
+      "@ui/*": ["./src/components/*"],
+      "@lib/*": ["./src/lib/*"]
+    },
+
     /* Linting */
     "strict": true,
     "noUnusedLocals": true,

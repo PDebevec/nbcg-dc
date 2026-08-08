@@ -129,11 +129,14 @@
   (required in `CreateItemDto`) — no backend change; the app just sends
   `visibilityStatus`.
 
-- **Test connection needs a backend identity endpoint** — Settings → Test
-  connection must verify the token and report the caller's email + access level.
-  No such endpoint exists yet (the Keycloak principal carries `email` + roles,
-  so it is a thin add) — filed as
-  `nbcg/todo/backend-archive-identity-verify.md`.
+- **No identity/verify endpoint — auth is a static token, verified on use.**
+  The app is single-workstation, single-user (no login), so there is no caller
+  to identify. The static Keycloak bearer token is authenticated by the backend
+  at the point of use (a bad token fails the first real write with `401`/`403`).
+  Settings → Test connection is therefore just a reachability ping
+  (`GET /api/health`); it does **not** show email/access level. (The backend has
+  no `/api/me` or `/api/auth/verify` route, and none is needed. Revisit only if
+  per-user login is ever added — then an identity endpoint + display can follow.)
 
 ## Still open
 

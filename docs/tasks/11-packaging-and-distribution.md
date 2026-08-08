@@ -23,6 +23,36 @@ so there is nothing to set up by hand.
 - [ ] Smoke-test the packaged build on a clean Windows machine (no dev tools, no
       Python preinstalled).
 
+## Logic lane (`.ts`) — nothing owed, checked 2026-08-08
+
+This epic is **entirely Arch/DevOps**. Every checkbox above is `.rs` / CI / Python
+packaging. The logic lane's only touchpoint is the **first-run setup flow**, and
+the pieces it needs already exist from Epics 01 and 10:
+
+| First-run needs | Already built |
+|---|---|
+| "Not configured yet" detection | `domain/config.isConfigured()` → `useSettings.configured` |
+| Roots + base URL + token entry, with validation | `stores/useSettings` (draft/save/revert), `domain/config.validateConfig` |
+| Folder picking + "is this a real folder?" | `services/config.pickDirectory` / `probeRoot` (`RootValidity`, incl. `unknown` when there is no filesystem to probe) |
+| Test connection | `services/api/health.checkConnection` → classified `ok` / `not-nbcg-api` / `server-error` / `unreachable` |
+| Installed app version for the Settings footer | `services/config.getAppVersion()` |
+
+So first-run is a **GUI assembly job** over existing logic, not new logic.
+
+**Two capability items that fail *silently* if missed** (repeated from Epic 01
+because they only bite in a packaged build, which is this epic):
+
+- **`core:app:allow-version`** — without it `getAppVersion()` falls back to the
+  compiled-in constant, so the Settings version line drifts from the installed
+  bundle and reports the wrong version after an update. No error, just a wrong
+  number.
+- **The `config_*_secret` commands** — without them the Keycloak token falls back
+  to webview `localStorage` **in plain text**. That fallback exists for the `vite`
+  dev session; shipping it would put a live credential on disk unencrypted.
+
+Also still required from Epic 01: register `tauri-plugin-http` and allow-list the
+backend host, or every backend call is denied at runtime.
+
 ## Acceptance
 
 - A signed (if possible) Windows installer produces a working app on a clean

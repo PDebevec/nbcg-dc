@@ -131,17 +131,27 @@ The archive talks only to `/api/*`. **Existing** endpoints:
 | COBISS import (async, **creates** item — *not used by the archive create flow; it previews then `POST /api/items`, to avoid orphan drafts*) | `POST /api/import/cobiss` · `GET /api/import/jobs/:jobId` |
 | Search / read-by-id / children | `GET /api/search` · `GET /api/search/:id` · `GET /api/search/:id/children` |
 
-**New backend work we requested** (see `nbcg/todo/backend-archive-*`): an
-**identity / verify** endpoint (powers Settings → Test connection: returns the
-caller's email + access level, or 401), a field **schema** endpoint
-(`GET /api/schema/record`, serving both the **main** and **child** field sets and
-flagging which fields are parent-inheritable / issue-identifying), a synchronous
-**COBISS preview** (`GET /api/cobiss/:id/preview`), **external full-text ingest**
-(archive OCR text supplied as an `extractedTexts` map on upload — **implemented**), a **replace-file** endpoint (`PUT /api/files/:fileId`,
-atomic swap of the web PDF + full text for re-upload, keeping a stable attachment
-id), **optimistic concurrency** (`version` + `If-Match` → 409), **attachment
-roles** (web vs thumbnail), and **item_relations integrity** (an internal cleanup
-of dangling relations/counts on delete — no endpoint).
+| Field schema | `GET /api/schema/record?level=main\|child` (strong ETag; `parentInheritable` / `issueIdentifying` flags per field) |
+| COBISS preview (sync, no persist) | `GET /api/import/cobiss/preview/:cobissId` |
+| Replace one attachment (stable id) | `PUT /api/files/:fileId` |
+| Visibility counts (only scoped GET) | `GET /api/items/stats` |
+| Reachability | `GET /api/health` |
+
+**Everything the archive needs already exists** (confirmed 2026-08-07, Epic 09).
+The list once filed as "new backend work we requested" has been overtaken:
+the **schema** endpoint ships with the `parentInheritable` / `issueIdentifying`
+flags and a `levels` array; **COBISS preview** is live at
+`GET /api/import/cobiss/preview/:cobissId` (**not** `/api/cobiss/:id/preview` —
+the old path in these docs was wrong); **external full-text ingest**
+(`extractedTexts` map on upload) and **attachment roles** are implemented;
+**replace-file** exists as `PUT /api/files/:fileId`; and **optimistic
+concurrency** shipped as a required `expectedVersion` body field (→ `409`),
+not as an `If-Match` header. The only outstanding item is **item_relations
+integrity** (an internal cleanup of dangling relations/counts on delete — no
+endpoint). The P3 filed by Epic 09 — relation writes bumping the parent's
+`version` without reporting it — was **fixed backend-side on 2026-08-07**:
+`connect`/`disconnect` now return the parent's post-write state (see
+[Epic 09 → Backend gaps](tasks/09-backend-api-contract.md)).
 
 **Already present, just wire it:** the backend models **visibility** as
 `VisibilityStatus { PUBLIC, PRIVATE, HIDDEN }` on both `Draft` and `Record`
@@ -157,9 +167,12 @@ straight to `visibilityStatus` — no backend change needed.
    refresh in the background (see
    [maybe: read-after-write refresh](tasks/maybe-read-after-write-refresh.md)).
    We are **not** adding a direct Postgres read-by-id.
-2. **Concurrency.** Updates are last-write-wins until the `version`/`If-Match`
-   work lands. Metadata `PATCH` shallow-merges only the keys sent, so send
-   **only changed fields**.
+2. **Concurrency.** `PATCH /api/items/:id` requires `expectedVersion` and `409`s
+   on a mismatch — not last-write-wins, and not an `If-Match` header. Metadata
+   shallow-merges only the keys sent, so send **only changed fields**. Note that
+   `POST /api/relations/connect` and `POST /api/items/transition` both bump
+   `version` **without returning it**, so a cached version can go stale without
+   the archive touching the item (Epic 09).
 
 ## Auth
 
@@ -186,7 +199,7 @@ sequenceDiagram
     participant App as Archive (Vue+Rust)
     participant API as nbcg backend
     U->>App: Select /unprocessed folder, enter COBISS id, "Get data"
-    App->>API: GET /api/cobiss/:id/preview   (no persist)
+    App->>API: GET /api/import/cobiss/preview/:cobissId   (no persist)
     API-->>App: normalized metadata → prefill form
     U->>App: Run pipeline (tiff→pdf, ocr, downscale)
     App->>App: build web PDF + ocr .txt; update SQLite

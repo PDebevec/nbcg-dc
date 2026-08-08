@@ -1,7 +1,7 @@
 # NBCG-DC — Project Overview
 
 > Status: understanding / planning
-> Last updated: 2026-07-20
+> Last updated: 2026-08-07
 
 ## What this is
 
@@ -60,6 +60,41 @@ clicks possible to go from "folder of scans" to "correctly uploaded record".
 | Local index      | SQLite (folders, processing & upload state) |
 | Heavy file work  | Python scripts (PaddleOCR, Pillow, etc.)    |
 | Backend / target | `nbcg` website API (NestJS/Prisma/Postgres) |
+
+## Endpoints
+
+Where the archive points. The two the app itself configures are
+`backendBaseUrl` + `apiPrefix` (Settings → Configure; defaults in
+`src/domain/config.ts`).
+
+| What | Local dev | Production |
+| ---- | --------- | ---------- |
+| **`nbcg` API** | `http://localhost:3000` — also reachable on the LAN at `http://172.21.221.80:3000` | `https://api.nbcg.me` |
+| **Keycloak** | `http://localhost:8082` (realm `nbcg`) | *(TBD)* |
+| Keycloak admin console | `http://localhost:8082/admin/master/console/#/nbcg` | — |
+| OpenSearch (backend-internal) | `http://localhost:9200` | — |
+
+**The host does NOT include `/api`** — the backend sets a global `/api` prefix,
+so the full URL is `<backendBaseUrl>` + `/api` + `<path>`, e.g.
+`http://localhost:3000/api/health`. This resolves the open question flagged in
+[PROJECT-KNOWLEDGE §4](PROJECT-KNOWLEDGE.md) (verified against the running
+backend on 2026-08-07); keep `apiPrefix` at its `/api` default unless a reverse
+proxy rewrites it.
+
+**Auth** is a static Keycloak bearer token in app config — no login, no identity
+endpoint (see [PROJECT-KNOWLEDGE §3](PROJECT-KNOWLEDGE.md)). To mint one against
+the local realm:
+
+```bash
+curl -s -d 'client_id=nbcg-api' -d 'grant_type=password' \
+     -d 'username=<user>' -d 'password=<password>' \
+     http://localhost:8082/realms/nbcg/protocol/openid-connect/token
+```
+
+> The token needs **view** scopes, not just `records:manage`/`drafts:manage`.
+> `*:manage` implies view so a normal token is fine, but a write-only token
+> makes every uploaded item read back as `404` — which breaks sync. See
+> [Epic 08](tasks/08-sync-and-backend-data.md).
 
 ## Success criteria (draft)
 

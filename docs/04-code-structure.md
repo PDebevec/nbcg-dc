@@ -64,7 +64,7 @@ src/
       client.ts                         base client (auth header, base URL, error mapping)
       items.ts files.ts relations.ts    create/patch/transition · upload/replace/text · connect
       search.ts cobiss.ts schema.ts     search/children · preview · GET /schema/record
-      collections.ts identity.ts        parent list (+collectionType) · verify (test connection)
+      collections.ts health.ts          parent list (+collectionType) · reachability (test connection)
       dto.ts                            backend DTO types
     pipeline.ts                         orchestrates the 5-stage run (calls ipc.jobs, updates stores)
     upload.ts                           create/replace + assets + relations + write-through
@@ -200,7 +200,7 @@ meets only at the seams:
 | 07 Upload & publish | upload summary UI | `services/upload`, `api/items`+`files`+`relations` | `core/fs` move → `/processed` |
 | 08 Sync & backend data | sync screen, tiles, log | `services/sync`, `api/search`, `stores/useSync` | — |
 | 09 API contract | — | `services/api` + `dto` (aligns with backend team) | — |
-| 10 Settings & naming | settings screens/controls | `services/config`, `ipc.config`, `api/identity` | secure store (`core/config`) |
+| 10 Settings & naming | settings screens/controls | `services/config`, `ipc.config`, `api/health` | secure store (`core/config`) |
 | 11 Packaging | — | — | bundling, Python sidecar, updater, CI |
 
 ## Getting started per lane

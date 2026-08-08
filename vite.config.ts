@@ -2,11 +2,26 @@ import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 // @ts-expect-error type error without @types/node package
 import process from "node:process";
+// @ts-expect-error type error without @types/node package
+import { fileURLToPath, URL } from "node:url";
 const host = process.env.TAURI_DEV_HOST;
+
+// Path aliases — keep in sync with tsconfig.json compilerOptions.paths.
+const alias = {
+  "@app": fileURLToPath(new URL("./src/app", import.meta.url)),
+  "@domain": fileURLToPath(new URL("./src/domain", import.meta.url)),
+  "@services": fileURLToPath(new URL("./src/services", import.meta.url)),
+  "@ipc": fileURLToPath(new URL("./src/ipc", import.meta.url)),
+  "@stores": fileURLToPath(new URL("./src/stores", import.meta.url)),
+  "@composables": fileURLToPath(new URL("./src/composables", import.meta.url)),
+  "@ui": fileURLToPath(new URL("./src/components", import.meta.url)),
+  "@lib": fileURLToPath(new URL("./src/lib", import.meta.url)),
+};
 
 // https://vite.dev/config/
 export default defineConfig(() => ({
   plugins: [vue()],
+  resolve: { alias },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
