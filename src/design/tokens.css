@@ -1,0 +1,138 @@
+/*
+ * Design tokens — the single source of truth for colour, type, radius and
+ * shadow, extracted from the v1.4.0 prototype
+ * (desktop-app-interface-design/project/NBCG Archive.dc.html).
+ *
+ * Components reference these variables only; raw hex values stay out of
+ * component styles so the dark theme can re-map the palette in one place.
+ */
+
+:root {
+  /* ── type ─────────────────────────────────────────────────────────── */
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  /* ── brand / primary (indigo) ─────────────────────────────────────── */
+  --c-primary: #2b3a8c;
+  --c-primary-hover: #22307a;
+  --c-primary-soft: #eef1fd;       /* soft indigo fill (banners, icons) */
+  --c-primary-soft-border: #cdd6f7;
+  --c-primary-faint: #f4f6fe;      /* secondary-button fill */
+  --c-primary-gradient: linear-gradient(90deg, #2b3a8c, #4658c0);
+  --c-rail-gradient: linear-gradient(180deg, #283583 0%, #1c2660 100%);
+
+  /* ── neutrals: text ───────────────────────────────────────────────── */
+  --c-text: #1f2437;               /* body */
+  --c-text-strong: #232945;        /* headings, row titles */
+  --c-text-mid: #2a3050;           /* menu items, values */
+  --c-text-label: #3a4160;         /* form labels */
+  --c-text-muted: #6b7290;         /* descriptions, secondary */
+  --c-text-faint: #98a0ba;         /* hints, meta lines */
+  --c-text-dim: #a2aac2;           /* timestamps, disabled-ish */
+  --c-text-thead: #8991ab;         /* table header */
+
+  /* ── neutrals: surfaces ───────────────────────────────────────────── */
+  --c-bg: #f4f5fb;                 /* main area */
+  --c-bg-page: #eef0f7;            /* page behind everything */
+  --c-surface: #ffffff;            /* cards, tables */
+  --c-surface-thead: #f7f8fc;      /* table head strip */
+  --c-surface-input: #fbfbfe;      /* inputs at rest */
+  --c-surface-input-alt: #f1f2f9;  /* framed inputs (COBISS, search) */
+  --c-surface-seg: #eaecf5;        /* segmented-control track */
+  --c-surface-pill: #eef0f6;       /* neutral pills, disabled tab dots */
+  --c-surface-disabled: #f3f4f8;   /* read-only inputs */
+
+  /* ── borders ──────────────────────────────────────────────────────── */
+  --c-border: #e6e8f2;             /* default card/input border */
+  --c-border-row: #eef0f6;         /* table row separators */
+  --c-border-dashed: #d5d9ea;      /* empty-state dashes, multi-add input */
+  --c-border-strong: #e0e3ee;
+
+  /* ── status: running / info (blue) ────────────────────────────────── */
+  --c-info: #2f6fed;
+  --c-info-bg: #e7effd;
+  --c-spinner-track: #d3ddf5;
+
+  /* ── status: success (green) ──────────────────────────────────────── */
+  --c-success: #1f9d57;
+  --c-success-strong: #2e9e5b;
+  --c-success-bg: #e6f6ec;
+  --c-success-border: #bfe6cd;
+  --c-success-text: #1a7a45;
+
+  /* ── status: danger (red) ─────────────────────────────────────────── */
+  --c-danger: #d93a2c;
+  --c-danger-text: #c23a2c;
+  --c-danger-deep: #b83224;
+  --c-danger-bg: #fdecea;
+  --c-danger-border: #f4c7c1;
+  --c-danger-row: #fef7f6;
+
+  /* ── status: warning / re-upload (amber) ──────────────────────────── */
+  --c-warn: #c8811a;
+  --c-warn-deep: #8a6410;
+  --c-warn-bg: #fbf1df;
+  --c-warn-border: #ecd8a8;
+  --c-warn-banner: #fbf3e1;
+
+  /* ── status: neutral stage (gray) ─────────────────────────────────── */
+  --c-idle: #737a94;
+  --c-idle-dot: #9aa0b8;
+  --c-idle-bg: #eef0f6;
+  --c-idle-bg-alt: #f1f2f7;
+
+  /* ── parent records (purple) ──────────────────────────────────────── */
+  --c-parent: #7a5bd0;
+  --c-parent-bg: #f0ebfb;
+  --c-parent-icon: #6b4fca;
+  --c-parent-icon-bg: #efe9fb;
+  --c-parent-text: #3f3369;
+  --c-parent-meta: #8871c9;
+  --c-parent-card: #faf9fe;
+  --c-parent-card-border: #e7e1f6;
+  --c-parent-btn: #5b41a8;
+  --c-parent-btn-bg: #f7f4fd;
+  --c-parent-btn-border: #ddd0f4;
+
+  /* ── provenance tags ──────────────────────────────────────────────── */
+  --c-prov-cobiss: #2f6fed;
+  --c-prov-cobiss-bg: #e7effd;
+  --c-prov-parent: #7a5bd0;
+  --c-prov-parent-bg: #f0ebfb;
+  --c-prov-user: #5a8f6e;
+  --c-prov-user-bg: #e9f4ee;
+
+  /* ── rail (dark indigo sidebar) ───────────────────────────────────── */
+  --c-rail-text: #eaecfa;
+  --c-rail-text-idle: #c3c9ef;
+  --c-rail-text-faint: #a9b0e0;
+  --c-rail-heading: #8b93cf;
+  --c-rail-active-bg: rgba(255, 255, 255, 0.14);
+  --c-rail-chip-bg: rgba(255, 255, 255, 0.12);
+  --c-rail-chip-border: rgba(255, 255, 255, 0.16);
+  --c-rail-footer-bg: rgba(255, 255, 255, 0.07);
+  --c-conn-online: #5ee0a0;
+  --c-conn-online-halo: rgba(94, 224, 160, 0.2);
+  --c-conn-offline: #f0a24b;
+  --c-conn-offline-halo: rgba(240, 162, 75, 0.2);
+
+  /* ── misc ─────────────────────────────────────────────────────────── */
+  --c-toast-bg: #232945;
+  --c-scrollbar: #cdd1e2;
+  --c-scrollbar-hover: #b4b9d2;
+  --c-disabled-btn: #a9b1d6;       /* disabled primary button fill */
+
+  /* ── radius ───────────────────────────────────────────────────────── */
+  --r-xs: 5px;
+  --r-sm: 7px;
+  --r-md: 9px;
+  --r-lg: 11px;
+  --r-xl: 13px;
+  --r-2xl: 16px;
+  --r-pill: 20px;
+
+  /* ── shadows ──────────────────────────────────────────────────────── */
+  --shadow-card: 0 1px 3px rgba(30, 40, 90, 0.05);
+  --shadow-menu: 0 14px 34px rgba(20, 25, 50, 0.18);
+  --shadow-toast: 0 8px 28px rgba(20, 25, 50, 0.28);
+}
