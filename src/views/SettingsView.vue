@@ -11,6 +11,7 @@ const {
   apiUrlError,
   setApiUrl,
   tokenValue,
+  tokenPlaceholder,
   tokenShown,
   toggleToken,
   setToken,
@@ -100,9 +101,9 @@ const themeOptions = [
             <div class="token-box">
               <input
                 class="mono-input bare"
+                :type="tokenShown ? 'text' : 'password'"
                 :value="tokenValue"
-                :readonly="!tokenShown"
-                placeholder="paste the access token"
+                :placeholder="tokenPlaceholder"
                 @input="setToken(($event.target as HTMLInputElement).value)"
               />
               <button class="token-toggle" @click="toggleToken()">

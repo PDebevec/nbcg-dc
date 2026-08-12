@@ -78,12 +78,17 @@ export function useSettingsScreen() {
   const apiUrlError = computed(() => validation.value.errors.backendBaseUrl ?? null);
   const theme = computed(() => draft.value.theme);
 
-  /** What the token field shows: the draft in-clear when revealed, else the
-   * masked summary of whatever is effective. */
-  const tokenValue = computed(() => {
-    if (tokenShown.value) return draftToken.value ?? "";
-    return tokenDisplay.value;
-  });
+  /** The token field's editable value — always the draft, so pasting works
+   * whether or not it is revealed (the view masks it with type=password). */
+  const tokenValue = computed(() => draftToken.value ?? "");
+
+  /** Masked summary of the currently effective token, shown as the field's
+   * placeholder when no draft edit is pending. */
+  const tokenPlaceholder = computed(() =>
+    tokenDisplay.value.present
+      ? tokenDisplay.value.masked
+      : "paste the access token",
+  );
 
   const testMessage = computed(() => testResult.value?.message ?? null);
   const testOk = computed(() => testResult.value?.reachable ?? false);
@@ -164,6 +169,7 @@ export function useSettingsScreen() {
     apiUrlError,
     setApiUrl,
     tokenValue,
+    tokenPlaceholder,
     tokenShown,
     toggleToken,
     setToken,
