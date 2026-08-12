@@ -94,6 +94,12 @@ src/
 
 ### Native `src-tauri/` — [ARCH/DEVOPS DEV]
 
+> **As built:** the layout below is now real for everything except `jobs/` and
+> `python/` — 23 of the 26 commands, the SQLite index and the watcher are
+> implemented and tested. See
+> [06 – Native core & dev setup](06-native-core-and-dev-setup.md) for the
+> schema, the design decisions behind it, and the toolchain needed to build it.
+
 ```
 src-tauri/
   tauri.conf.json  capabilities/  icons/  build.rs  Cargo.toml   (bundling, DevOps)

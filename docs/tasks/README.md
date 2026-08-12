@@ -83,6 +83,12 @@ Start with [00-project-overview](../00-project-overview.md) →
 [04-code-structure](../04-code-structure.md) →
 [05-real-scan-data](../05-real-scan-data.md), then the epics below.
 
+> [06-native-core-and-dev-setup](../06-native-core-and-dev-setup.md) records what
+> the Rust lane **actually implements** (as against 04, which describes the
+> intended layout), plus the toolchain a developer needs to build or run it.
+> Read it before picking up any `.rs` work — or before wondering why a fresh
+> clone shows an empty Overview.
+
 > [05-real-scan-data](../05-real-scan-data.md) is measured from **actual scanner
 > output** and overrides the earlier docs' assumptions about folder contents —
 > notably that scans are JPG, not TIFF, which invalidated Epic 06's input
@@ -103,6 +109,14 @@ Start with [00-project-overview](../00-project-overview.md) →
 | 09 | [Backend API contract](09-backend-api-contract.md) ✅ *(logic lane)* | Contract verified live end-to-end; data model documented; 1 P3 backend gap filed in `nbcg/todo` | — |
 | 10 | [Settings & naming](10-settings-and-naming.md) ✅ *(logic lane)* | Settings screen (Configure + Data), Test connection, folder-derived naming | 01, 09 |
 | 11 | [Packaging & distribution](11-packaging-and-distribution.md) | Windows build, Python bundling, updater, first-run | 01, 06, 10 |
+
+> **Native lane, 2026-08-12.** The `config_*` / `fs_*` / `index_*` / `batch_*` /
+> `sync_*` commands — 23 of the 26 in `src/ipc/bindings.ts` — are **implemented
+> and tested** (73 Rust tests), together with the SQLite index and the
+> `fs://changed` watcher. That clears the *Owed by Arch* sections of Epics 02,
+> 03, 08 and 10, and the non-jobs half of 07. Still outstanding: `jobs_*` + the
+> three `job://*` events (Epic 06), the Python fixes, and packaging (Epic 11).
+> Details in [06-native-core-and-dev-setup](../06-native-core-and-dev-setup.md).
 
 > Backend changes the archive needs live in the **`nbcg` repo** under
 > [`todo/backend-archive-*`](../../../nbcg/todo). Most are already done: schema
