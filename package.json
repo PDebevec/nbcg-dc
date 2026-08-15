@@ -6,10 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
-    "preview": "vite preview",
+    "preview": ".\\src-tauri\\target\\release\\nbcg-dc.exe",
     "test": "vitest run",
     "test:watch": "vitest",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri-build": "tauri build"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.3.0",

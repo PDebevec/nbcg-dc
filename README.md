@@ -14,6 +14,12 @@ npm install
 npm run tauri dev
 ```
 
+## Testing build
+```bash
+npm run build
+npm run preview
+```
+
 **`npm run tauri dev` requires Rust and VS Build Tools** — see
 [docs/06 – Native core & developer setup](docs/06-native-core-and-dev-setup.md)
 for why, and for what you can do without them.
