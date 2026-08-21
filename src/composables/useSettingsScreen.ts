@@ -93,6 +93,35 @@ export function useSettingsScreen() {
   const testMessage = computed(() => testResult.value?.message ?? null);
   const testOk = computed(() => testResult.value?.reachable ?? false);
 
+  /** Raw text of the data-passing types field while it is being edited (so a
+   * trailing comma survives typing); null = show the parsed draft. */
+  const dataPassingRaw = ref<string | null>(null);
+
+  /** Comma-separated `collectionType` numbers whose parents may pass data. */
+  const dataPassingTypes = computed(
+    () => dataPassingRaw.value ?? draft.value.dataPassingCollectionTypes.join(", "),
+  );
+
+  function parseDataPassingTypes(raw: string): number[] {
+    const list = raw
+      .split(/[,\s;]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map(Number)
+      .filter((n) => Number.isInteger(n) && n >= 0);
+    return Array.from(new Set(list));
+  }
+
+  function setDataPassingTypes(raw: string): void {
+    dataPassingRaw.value = raw;
+    store.editDraft({ dataPassingCollectionTypes: parseDataPassingTypes(raw) });
+  }
+
+  /** Normalise the field once editing ends (blur). */
+  function commitDataPassingTypes(): void {
+    dataPassingRaw.value = null;
+  }
+
   // ── actions ──────────────────────────────────────────────────────────────
 
   function setApiUrl(value: string): void {
@@ -175,6 +204,9 @@ export function useSettingsScreen() {
     setToken,
     theme,
     setTheme,
+    dataPassingTypes,
+    setDataPassingTypes,
+    commitDataPassingTypes,
     testing,
     testMessage,
     testOk,

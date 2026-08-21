@@ -1,33 +1,53 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import type { FieldView } from "@composables/useMetadataForm";
+import MetaInput from "./MetaInput.vue";
 
 const props = defineProps<{ field: FieldView; editable: boolean }>();
 
 const emit = defineEmits<{
-  change: [key: string, value: string];
-  addChip: [key: string, value: string];
+  change: [key: string, value: unknown];
   pickSource: [key: string, parentId: string];
   manual: [key: string];
 }>();
 
 const menuOpen = ref(false);
 
-function onInput(event: Event): void {
-  emit("change", props.field.key, (event.target as HTMLInputElement).value);
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function onSelect(event: Event): void {
-  emit("change", props.field.key, (event.target as HTMLSelectElement).value);
+/** A primitive top-level field: pass the value straight through. */
+function onPrimitive(value: unknown): void {
+  emit("change", props.field.key, value);
 }
 
-function onChipKeydown(event: KeyboardEvent): void {
-  if (event.key !== "Enter") return;
-  const input = event.target as HTMLInputElement;
-  if (!input.value.trim()) return;
-  event.preventDefault();
-  emit("addChip", props.field.key, input.value);
-  input.value = "";
+/** An object field: patch one child key on the current object value. */
+function onChild(childKey: string, value: unknown): void {
+  const base = isObject(props.field.raw) ? { ...props.field.raw } : {};
+  base[childKey] = value;
+  emit("change", props.field.key, base);
+}
+
+/** An object-list field: patch one child key on one entry. */
+function onEntryChild(index: number, childKey: string, value: unknown): void {
+  const list = Array.isArray(props.field.raw) ? [...props.field.raw] : [];
+  const entry = isObject(list[index]) ? { ...(list[index] as Record<string, unknown>) } : {};
+  entry[childKey] = value;
+  list[index] = entry;
+  emit("change", props.field.key, list);
+}
+
+function addEntry(): void {
+  const list = Array.isArray(props.field.raw) ? [...props.field.raw] : [];
+  list.push({});
+  emit("change", props.field.key, list);
+}
+
+function removeEntry(index: number): void {
+  const list = Array.isArray(props.field.raw) ? [...props.field.raw] : [];
+  list.splice(index, 1);
+  emit("change", props.field.key, list);
 }
 
 function pick(parentId: string): void {
@@ -96,43 +116,58 @@ function manual(): void {
       </div>
     </div>
 
-    <input
-      v-if="field.kind === 'text'"
-      :value="field.value"
-      :disabled="!editable"
-      :placeholder="field.label"
-      :class="{ invalid: field.error, flagged: field.flag }"
-      @input="onInput"
-    />
-    <input
-      v-else-if="field.kind === 'date'"
-      type="date"
-      :value="field.value"
-      :disabled="!editable"
-      :class="{ invalid: field.error, flagged: field.flag }"
-      @input="onInput"
-    />
-    <select
-      v-else-if="field.kind === 'enum'"
-      :value="field.value"
-      :disabled="!editable"
-      :class="{ invalid: field.error, flagged: field.flag }"
-      @change="onSelect"
-    >
-      <option value="">— select —</option>
-      <option v-for="opt in field.options" :key="opt" :value="opt">
-        {{ opt }}
-      </option>
-    </select>
-    <div v-else class="chips">
-      <span v-for="chip in field.chips" :key="chip" class="chip">{{ chip }}</span>
-      <input
-        v-if="editable"
-        class="chip-input"
-        :placeholder="field.label"
-        @keydown="onChipKeydown"
-      />
+    <!-- object: a sub-form of primitive children -->
+    <div v-if="field.kind === 'object'" class="sub-form" :class="{ invalid: field.error }">
+      <div v-for="child in field.children" :key="child.key" class="sub-field">
+        <span class="sub-label">{{ child.label }}</span>
+        <MetaInput
+          :field="child"
+          :editable="editable"
+          compact
+          @change="onChild(child.key, $event)"
+        />
+      </div>
     </div>
+
+    <!-- object-list: repeatable sub-forms -->
+    <div v-else-if="field.kind === 'object-list'" class="entries">
+      <div v-for="(entry, i) in field.entries" :key="i" class="entry">
+        <div class="entry-head">
+          <span class="entry-no">#{{ i + 1 }}</span>
+          <button
+            v-if="editable"
+            class="entry-remove"
+            title="Remove"
+            @click="removeEntry(i)"
+          >
+            ×
+          </button>
+        </div>
+        <div class="sub-form">
+          <div v-for="child in entry" :key="child.key" class="sub-field">
+            <span class="sub-label">{{ child.label }}</span>
+            <MetaInput
+              :field="child"
+              :editable="editable"
+              compact
+              @change="onEntryChild(i, child.key, $event)"
+            />
+          </div>
+        </div>
+      </div>
+      <button v-if="editable" class="add-entry" @click="addEntry()">
+        + Add {{ field.label.toLowerCase().replace(/s$/, "") }}
+      </button>
+      <span v-else-if="field.entries.length === 0" class="none">—</span>
+    </div>
+
+    <!-- primitives -->
+    <MetaInput
+      v-else
+      :field="field"
+      :editable="editable"
+      @change="onPrimitive"
+    />
 
     <div v-if="field.error" class="error">{{ field.error }}</div>
   </div>
@@ -189,65 +224,90 @@ label {
   background: var(--c-warn-bg);
 }
 
-/* ── inputs ─────────────────────────────────────────────────────────── */
-input,
-select {
-  width: 100%;
-  height: 39px;
+/* ── object sub-forms ────────────────────────────────────────────────── */
+.sub-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px 14px;
+  padding: 12px 14px;
   border: 1.5px solid var(--c-border);
-  background: var(--c-surface-input);
   border-radius: var(--r-md);
-  padding: 0 12px;
-  font-size: 13.5px;
-  color: var(--c-text-strong);
+  background: var(--c-surface-input-alt);
 }
 
-input.invalid,
-select.invalid {
+.sub-form.invalid {
   border-color: #e79a90;
 }
 
-input.flagged,
-select.flagged {
-  border-color: #e6cf95;
+.sub-field {
+  min-width: 0;
 }
 
-input:disabled,
-select:disabled {
-  background: var(--c-surface-disabled);
-  color: var(--c-text-muted);
-  cursor: not-allowed;
+.sub-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-text-faint);
+  margin-bottom: 4px;
 }
 
-.chips {
+.entries {
   display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  align-items: center;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--c-primary-soft);
-  border: 1px solid #d7ddf7;
-  color: var(--c-primary);
-  padding: 4px 9px;
-  border-radius: var(--r-sm);
-  font-size: 12.5px;
+.entry {
+  border: 1.5px solid var(--c-border);
+  border-radius: var(--r-md);
+  overflow: hidden;
 }
 
-.chip-input {
-  min-width: 160px;
-  flex: 1;
-  height: 36px;
-  border: 1.5px dashed var(--c-border-dashed);
-  background: var(--c-surface-input);
+.entry .sub-form {
+  border: none;
+  border-radius: 0;
+}
+
+.entry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 12px;
+  background: var(--c-surface-input-alt);
+  border-bottom: 1px solid var(--c-border-row);
+}
+
+.entry-no {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--c-text-faint);
+  font-family: var(--font-mono);
+}
+
+.entry-remove {
+  color: var(--c-text-dim);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.entry-remove:hover {
+  color: var(--c-danger);
+}
+
+.add-entry {
+  align-self: flex-start;
+  height: 32px;
+  padding: 0 12px;
   border-radius: 8px;
-  padding: 0 11px;
+  border: 1.5px dashed var(--c-border-dashed);
+  color: var(--c-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.none {
   font-size: 13px;
-  width: auto;
+  color: var(--c-text-dim);
 }
 
 .error {

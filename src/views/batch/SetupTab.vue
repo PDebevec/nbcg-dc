@@ -12,7 +12,12 @@ const {
   cobissSet,
   setCobissId,
   parents,
-  addParent,
+  parentQuery,
+  setParentQuery,
+  parentResults,
+  parentSearching,
+  parentSearchError,
+  linkParent,
   removeParent,
   togglePassesData,
   publish,
@@ -21,23 +26,24 @@ const {
   setVisibility,
   editable,
   itemCount,
+  applying,
   applyAndContinue,
 } = useBatchSetup(() => props.batchId);
 
 const publishOptions = [
-  { value: "draft", label: "Draft" },
-  { value: "record", label: "Record" },
+  { value: "DRAFT", label: "Draft" },
+  { value: "RECORD", label: "Record" },
 ];
 
 const visibilityOptions = [
-  { value: "public", label: "Public" },
-  { value: "private", label: "Private" },
-  { value: "hidden", label: "Hidden" },
+  { value: "PUBLIC", label: "Public" },
+  { value: "PRIVATE", label: "Private" },
+  { value: "HIDDEN", label: "Hidden" },
 ];
 
-function onContinue(): void {
-  applyAndContinue();
-  emit("continue");
+async function onContinue(): Promise<void> {
+  const ok = await applyAndContinue();
+  if (ok) emit("continue");
 }
 </script>
 
@@ -75,8 +81,13 @@ function onContinue(): void {
     <ParentRecordsCard
       :parents="parents"
       :editable="editable"
+      :query="parentQuery"
+      :results="parentResults"
+      :searching="parentSearching"
+      :search-error="parentSearchError"
       description="Link one or more parents. Only one passes data at a time — its shared fields copy down to the items. Click can pass data on another to switch the source."
-      @add="addParent()"
+      @update-query="setParentQuery($event)"
+      @link="linkParent($event)"
       @remove="removeParent($event)"
       @toggle-pass="togglePassesData($event)"
     />
@@ -89,7 +100,7 @@ function onContinue(): void {
           :options="publishOptions"
           :model-value="publish"
           :disabled="!editable"
-          @update:model-value="setPublish($event as 'draft' | 'record')"
+          @update:model-value="setPublish($event as 'DRAFT' | 'RECORD')"
         />
       </div>
       <div class="card slim">
@@ -99,14 +110,17 @@ function onContinue(): void {
           :model-value="visibility"
           :disabled="!editable"
           @update:model-value="
-            setVisibility($event as 'public' | 'private' | 'hidden')
+            setVisibility($event as 'PUBLIC' | 'PRIVATE' | 'HIDDEN')
           "
         />
       </div>
     </div>
 
     <div v-if="editable" class="actions">
-      <button class="btn-primary" @click="onContinue()">Next: Metadata →</button>
+      <button class="btn-primary" :disabled="applying" @click="onContinue()">
+        <span v-if="applying" class="spinner" />
+        {{ applying ? "Applying defaults…" : "Next: Metadata →" }}
+      </button>
     </div>
   </div>
 </template>
@@ -233,5 +247,23 @@ function onContinue(): void {
   color: #fff;
   font-weight: 600;
   font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-primary:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+.spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  display: inline-block;
+  animation: spin 0.7s linear infinite;
 }
 </style>

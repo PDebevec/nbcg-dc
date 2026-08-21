@@ -121,6 +121,9 @@ export function useOverview() {
     ),
   );
 
+  /** Stage column headers, in pipeline order (single source: domain/item). */
+  const stageColumns: readonly string[] = STAGE_NAMES.map((s) => STAGE_LABELS[s]);
+
   const filters = computed<FilterView[]>(() =>
     OVERVIEW_FILTERS.map((f) => ({
       key: f.key,
@@ -173,6 +176,18 @@ export function useOverview() {
     } catch {
       toasts.push("Couldn't open the folder in Explorer.", "error");
     }
+  }
+
+  /**
+   * Rebuild the local index from the folders (recovery path, and the way
+   * already-present derived files — `<name>.pdf`, `_thumb.png`, `.txt` — are
+   * picked up as completed stages). Batches survive: item ids are derived
+   * from folder names.
+   */
+  async function rebuildIndex(): Promise<void> {
+    await store.rebuild();
+    if (store.error) toasts.push(`Rebuild failed: ${store.error}`, "error");
+    else toasts.push(`Index rebuilt from folders — ${store.items.length} item${store.items.length === 1 ? "" : "s"}.`, "success");
   }
 
   // ── Epic 03 (Batches) seams ───────────────────────────────────────────────
@@ -247,6 +262,7 @@ export function useOverview() {
     error,
     rows,
     filters,
+    stageColumns,
     activeFilter,
     search,
     infoLine,
@@ -269,6 +285,7 @@ export function useOverview() {
     // data lifecycle / recovery
     refresh: store.refresh,
     rebuild: store.rebuild,
+    rebuildIndex,
     init,
     dispose,
   };

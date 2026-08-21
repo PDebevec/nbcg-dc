@@ -17,6 +17,9 @@ const {
   setToken,
   theme,
   setTheme,
+  dataPassingTypes,
+  setDataPassingTypes,
+  commitDataPassingTypes,
   testing,
   testMessage,
   testOk,
@@ -126,6 +129,26 @@ const themeOptions = [
           >
             {{ testOk ? "✓" : "✗" }} {{ testMessage }}
           </span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Parent data passing</div>
+        <div class="card-desc">
+          Which <span class="mono">collectionType</span> numbers mark a parent
+          record (a serial, a collection) that may pass its shared fields down
+          to the items linked under it. Leave empty if unsure — parents can
+          still be linked, they just won't prefill.
+        </div>
+        <div class="field">
+          <label>Data-passing collection types</label>
+          <input
+            class="mono-input"
+            :value="dataPassingTypes"
+            placeholder="e.g. 2, 5"
+            @input="setDataPassingTypes(($event.target as HTMLInputElement).value)"
+            @blur="commitDataPassingTypes()"
+          />
         </div>
       </div>
 

@@ -4,10 +4,12 @@ import { useBatch } from "@composables/useBatch";
 import SetupTab from "./batch/SetupTab.vue";
 import MetadataTab from "./batch/MetadataTab.vue";
 import ProcessingTab from "./batch/ProcessingTab.vue";
+import StepIndicator from "../components/batch/StepIndicator.vue";
+import ProgressBar from "../components/batch/ProgressBar.vue";
 
 const props = defineProps<{ batchId: string }>();
 
-const { header, tabs, activeTab, setTab, unlock, back } = useBatch(
+const { header, tabs, steps, activeTab, setTab, unlock, back } = useBatch(
   () => props.batchId,
 );
 
@@ -58,6 +60,18 @@ const pillClass = computed(() => {
         </div>
         <div v-if="header" class="saved">
           <span class="saved-dot" />{{ header.savedLabel }}
+        </div>
+      </div>
+
+      <div v-if="header" class="head-meta">
+        <div class="steps-slot">
+          <StepIndicator :steps="steps" />
+        </div>
+        <div class="progress-slot">
+          <ProgressBar :ratio="header.progress.ratio" :height="6" />
+          <span class="progress-label"
+            >{{ header.progress.done }}/{{ header.progress.total }} processed</span
+          >
         </div>
       </div>
 
@@ -238,6 +252,33 @@ const pillClass = computed(() => {
   height: 7px;
   border-radius: 50%;
   background: var(--c-success-strong);
+}
+
+.head-meta {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  margin-top: 12px;
+}
+
+.steps-slot {
+  width: 340px;
+  flex: none;
+}
+
+.progress-slot {
+  flex: 1;
+  max-width: 420px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.progress-label {
+  font-size: 11.5px;
+  color: var(--c-text-faint);
+  font-family: var(--font-mono);
+  white-space: nowrap;
 }
 
 .tab-bar {

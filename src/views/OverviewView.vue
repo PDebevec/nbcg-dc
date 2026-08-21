@@ -9,6 +9,7 @@ const {
   error,
   rows,
   filters,
+  stageColumns,
   search,
   infoLine,
   selectable,
@@ -24,9 +25,24 @@ const {
   openInExplorer,
   openAsBatch,
   createBatch,
+  rebuildIndex,
 } = useOverview();
 
-const stageColumns = ["PDF", "Thumbnail", "OCR", "Metadata", "Uploaded"];
+const rebuilding = ref(false);
+
+async function onRebuild(): Promise<void> {
+  if (rebuilding.value) return;
+  const ok = window.confirm(
+    "Rebuild the local index from the folders?\n\nThis re-reads every item folder and picks up derived files already present (web PDF, thumbnail, OCR text) as completed stages. Batches are kept.",
+  );
+  if (!ok) return;
+  rebuilding.value = true;
+  try {
+    await rebuildIndex();
+  } finally {
+    rebuilding.value = false;
+  }
+}
 
 /** Which row's ⋯ menu is open (null = none). */
 const openMenuId = ref<string | null>(null);
@@ -68,14 +84,24 @@ function rowClick(id: string): void {
           <span class="seg-count">{{ f.count }}</span>
         </button>
       </div>
-      <button
-        v-if="selectable && rows.length > 0"
-        class="select-all"
-        @click="allVisibleSelected ? clearSelection() : selectAllVisible()"
-      >
-        <span class="check-glyph">{{ allVisibleSelected ? "✓" : "" }}</span>
-        {{ allVisibleSelected ? "Clear selection" : `Select all ${rows.length}` }}
-      </button>
+      <div class="toolbar-right">
+        <button
+          class="rebuild-btn"
+          :disabled="rebuilding || loading"
+          title="Re-read every item folder and rebuild the local index"
+          @click="onRebuild()"
+        >
+          {{ rebuilding ? "Rebuilding…" : "↻ Rebuild index" }}
+        </button>
+        <button
+          v-if="selectable && rows.length > 0"
+          class="select-all"
+          @click="allVisibleSelected ? clearSelection() : selectAllVisible()"
+        >
+          <span class="check-glyph">{{ allVisibleSelected ? "✓" : "" }}</span>
+          {{ allVisibleSelected ? "Clear selection" : `Select all ${rows.length}` }}
+        </button>
+      </div>
     </div>
 
     <!-- info line for non-selectable filters -->
@@ -314,8 +340,30 @@ function rowClick(id: string): void {
   background: #e7ebfb;
 }
 
-.select-all {
+.toolbar-right {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rebuild-btn {
+  height: 34px;
+  padding: 0 13px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  color: var(--c-text-muted);
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.rebuild-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.select-all {
   display: flex;
   align-items: center;
   gap: 8px;

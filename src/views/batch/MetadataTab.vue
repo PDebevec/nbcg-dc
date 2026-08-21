@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { useMetadataForm } from "@composables/useMetadataForm";
 import ProgressBar from "../../components/batch/ProgressBar.vue";
 import ParentRecordsCard from "../../components/batch/ParentRecordsCard.vue";
+import SegmentedControl from "../../components/common/SegmentedControl.vue";
 import FilesStrip from "../../components/metadata/FilesStrip.vue";
 import MetaField from "../../components/metadata/MetaField.vue";
 
@@ -14,8 +15,10 @@ const {
   nav,
   files,
   fields,
-  parents,
   editable,
+  loading,
+  schemaError,
+  saving,
   validationBanner,
   nextLabel,
   canNext,
@@ -23,7 +26,6 @@ const {
   prev,
   next,
   setField,
-  addChip,
   setFieldSource,
   setFieldManual,
   cobissId,
@@ -31,11 +33,28 @@ const {
   getCobiss,
   cobissLoading,
   cobissDone,
+  cobissNote,
   overwritePrompt,
   applyCobiss,
-  addParent,
+  parents,
+  parentQuery,
+  setParentQuery,
+  parentResults,
+  parentSearching,
+  parentSearchError,
+  linkParent,
   removeParent,
   togglePassesData,
+  publish,
+  visibility,
+  publishOverridden,
+  visibilityOverridden,
+  batchPublish,
+  batchVisibility,
+  setPublish,
+  setVisibility,
+  resetPublishToBatch,
+  resetVisibilityToBatch,
 } = useMetadataForm(() => props.batchId);
 
 const pickerOpen = ref(false);
@@ -60,6 +79,25 @@ const statusLabels: Record<string, string> = {
   incomplete: "Incomplete",
   untouched: "Untouched",
 };
+
+const publishOptions = [
+  { value: "DRAFT", label: "Draft" },
+  { value: "RECORD", label: "Record" },
+];
+
+const visibilityOptions = [
+  { value: "PUBLIC", label: "Public" },
+  { value: "PRIVATE", label: "Private" },
+  { value: "HIDDEN", label: "Hidden" },
+];
+
+const enumLabel: Record<string, string> = {
+  DRAFT: "Draft",
+  RECORD: "Record",
+  PUBLIC: "Public",
+  PRIVATE: "Private",
+  HIDDEN: "Hidden",
+};
 </script>
 
 <template>
@@ -69,12 +107,11 @@ const statusLabels: Record<string, string> = {
       <div class="nav-head">
         <div class="nav-titles">
           <div class="nav-count">
-            Item {{ nav.index + 1 }} of {{ nav.total }} · {{ nav.readyCount }}/{{
-              nav.total
-            }}
-            ready
+            Item {{ nav.total ? nav.index + 1 : 0 }} of {{ nav.total }} ·
+            {{ nav.readyCount }}/{{ nav.total }} ready
+            <span v-if="saving" class="saving">· saving…</span>
           </div>
-          <div class="nav-title">{{ nav.title }}</div>
+          <div class="nav-title">{{ nav.title || "—" }}</div>
         </div>
         <span class="level-pill" :class="nav.level">{{ nav.levelLabel }}</span>
       </div>
@@ -94,7 +131,7 @@ const statusLabels: Record<string, string> = {
           <div v-if="pickerOpen" class="picker-menu">
             <button
               v-for="(item, i) in nav.items"
-              :key="item.folderName"
+              :key="item.id"
               class="picker-item"
               :class="{ active: item.active }"
               @click="pick(i)"
@@ -127,92 +164,161 @@ const statusLabels: Record<string, string> = {
       </div>
     </div>
 
+    <div v-if="schemaError" class="validation-banner">
+      ✗ {{ schemaError }} — the form needs the backend schema (Settings → Refresh
+      schema once the backend is reachable).
+    </div>
     <div v-if="validationBanner" class="validation-banner">
       ✗ {{ validationBanner }}
     </div>
 
-    <FilesStrip :files="files" />
+    <div v-if="nav.total === 0" class="card empty-card">
+      This batch has no items the index knows about. Rescan the folders on the
+      Overview and reopen the batch.
+    </div>
 
-    <!-- COBISS per item -->
-    <div v-if="editable" class="card">
-      <div class="heading">Prefill from COBISS</div>
-      <div class="cobiss-row">
-        <div class="cobiss-box">
-          <span class="cobiss-label">COBISS.CG-ID</span>
-          <input
-            :value="cobissId"
-            placeholder="e.g. 24512006"
-            @input="setCobissId(($event.target as HTMLInputElement).value)"
-          />
+    <template v-else>
+      <FilesStrip :files="files" />
+
+      <!-- COBISS per item -->
+      <div v-if="editable" class="card">
+        <div class="heading">Prefill from COBISS</div>
+        <div class="cobiss-row">
+          <div class="cobiss-box">
+            <span class="cobiss-label">COBISS.CG-ID</span>
+            <input
+              :value="cobissId"
+              placeholder="e.g. 24512006"
+              @input="setCobissId(($event.target as HTMLInputElement).value)"
+              @keydown.enter.prevent="getCobiss()"
+            />
+          </div>
+          <button class="btn-primary" :disabled="cobissLoading" @click="getCobiss()">
+            <span v-if="cobissLoading" class="spinner" />
+            {{ cobissLoading ? "Fetching…" : "Get data" }}
+          </button>
+          <span v-if="cobissDone" class="cobiss-done">✓ Filled from COBISS</span>
+          <span v-if="cobissNote" class="cobiss-note">{{ cobissNote }}</span>
         </div>
-        <button class="btn-primary" @click="getCobiss()">
-          <span v-if="cobissLoading" class="spinner" />
-          {{ cobissLoading ? "Fetching…" : "Get data" }}
-        </button>
-        <span v-if="cobissDone" class="cobiss-done">✓ Filled from COBISS</span>
       </div>
-    </div>
 
-    <!-- overwrite prompt -->
-    <div v-if="overwritePrompt" class="overwrite">
-      <div class="ow-title">Overwrite existing values?</div>
-      <div class="ow-sub">
-        {{ overwritePrompt }} already has a value you entered. Apply COBISS data
-        over it, or keep yours and only fill empty fields.
-      </div>
-      <div class="ow-actions">
-        <button class="ow-apply" @click="applyCobiss(true)">Overwrite all</button>
-        <button class="ow-keep" @click="applyCobiss(false)">
-          Keep mine, fill empties
-        </button>
-      </div>
-    </div>
-
-    <ParentRecordsCard
-      :parents="parents"
-      :editable="editable"
-      @add="addParent()"
-      @remove="removeParent($event)"
-      @toggle-pass="togglePassesData($event)"
-    />
-
-    <!-- fields -->
-    <div class="card fields-card">
-      <div class="fields-grid">
-        <MetaField
-          v-for="field in fields"
-          :key="field.key"
-          :field="field"
-          :editable="editable"
-          @change="setField"
-          @add-chip="addChip"
-          @pick-source="setFieldSource"
-          @manual="setFieldManual"
-        />
-      </div>
-      <div class="footer-nav">
-        <button
-          class="prev-btn"
-          :disabled="nav.index === 0"
-          @click="prev()"
-        >
-          ‹ Previous
-        </button>
-        <span class="pos">{{ nav.index + 1 }} / {{ nav.total }}</span>
-        <div class="next-slot">
-          <span v-if="!canNext" class="next-helper"
-            >Complete required fields to continue</span
-          >
-          <button
-            class="next-btn"
-            :class="{ ready: canNext, last: canNext && nextLabel.startsWith('Go') }"
-            @click="onNext()"
-          >
-            {{ nextLabel }}
+      <!-- overwrite prompt -->
+      <div v-if="overwritePrompt" class="overwrite">
+        <div class="ow-title">Overwrite existing values?</div>
+        <div class="ow-sub">
+          {{ overwritePrompt }} already {{ overwritePrompt.includes(" and ") ? "have values" : "has a value" }} you entered. Apply COBISS data
+          over {{ overwritePrompt.includes(" and ") ? "them" : "it" }}, or keep yours — empty fields were already filled.
+        </div>
+        <div class="ow-actions">
+          <button class="ow-apply" @click="applyCobiss(true)">Overwrite all</button>
+          <button class="ow-keep" @click="applyCobiss(false)">
+            Keep mine
           </button>
         </div>
       </div>
-    </div>
+
+      <ParentRecordsCard
+        :parents="parents"
+        :editable="editable"
+        :query="parentQuery"
+        :results="parentResults"
+        :searching="parentSearching"
+        :search-error="parentSearchError"
+        description="Linked parents apply to the whole batch. The data-passing parent fills this item's empty shared fields."
+        @update-query="setParentQuery($event)"
+        @link="linkParent($event)"
+        @remove="removeParent($event)"
+        @toggle-pass="togglePassesData($event)"
+      />
+
+      <!-- per-item publish + visibility -->
+      <div class="two-col">
+        <div class="card slim">
+          <div class="heading-row">
+            <span class="heading">Publish this item as</span>
+            <button
+              v-if="publishOverridden && editable"
+              class="reset-link"
+              @click="resetPublishToBatch()"
+            >
+              reset to batch ({{ enumLabel[batchPublish] }})
+            </button>
+            <span v-else class="default-note">batch default</span>
+          </div>
+          <SegmentedControl
+            :options="publishOptions"
+            :model-value="publish"
+            :disabled="!editable"
+            @update:model-value="setPublish($event as 'DRAFT' | 'RECORD')"
+          />
+        </div>
+        <div class="card slim">
+          <div class="heading-row">
+            <span class="heading">Visibility</span>
+            <button
+              v-if="visibilityOverridden && editable"
+              class="reset-link"
+              @click="resetVisibilityToBatch()"
+            >
+              reset to batch ({{ enumLabel[batchVisibility] }})
+            </button>
+            <span v-else class="default-note">batch default</span>
+          </div>
+          <SegmentedControl
+            :options="visibilityOptions"
+            :model-value="visibility"
+            :disabled="!editable"
+            @update:model-value="
+              setVisibility($event as 'PUBLIC' | 'PRIVATE' | 'HIDDEN')
+            "
+          />
+        </div>
+      </div>
+
+      <!-- fields -->
+      <div class="card fields-card">
+        <div v-if="loading" class="loading">Loading schema and metadata…</div>
+        <div v-else-if="fields.length === 0" class="loading">
+          No schema fields available.
+        </div>
+        <div v-else class="fields-grid">
+          <template v-for="field in fields" :key="field.key">
+            <div v-if="field.groupStart" class="group-head">
+              {{ field.groupLabel }}
+            </div>
+            <MetaField
+              :field="field"
+              :editable="editable"
+              @change="setField"
+              @pick-source="setFieldSource"
+              @manual="setFieldManual"
+            />
+          </template>
+        </div>
+        <div class="footer-nav">
+          <button
+            class="prev-btn"
+            :disabled="nav.index === 0"
+            @click="prev()"
+          >
+            ‹ Previous
+          </button>
+          <span class="pos">{{ nav.index + 1 }} / {{ nav.total }}</span>
+          <div class="next-slot">
+            <span v-if="!canNext" class="next-helper"
+              >Complete required fields to continue</span
+            >
+            <button
+              class="next-btn"
+              :class="{ ready: canNext, last: canNext && nextLabel.startsWith('Go') }"
+              @click="onNext()"
+            >
+              {{ nextLabel }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </template>
   </div>
 </template>
 
@@ -230,6 +336,11 @@ const statusLabels: Record<string, string> = {
   margin-bottom: 14px;
 }
 
+.empty-card {
+  font-size: 13px;
+  color: var(--c-text-muted);
+}
+
 .heading {
   font-size: 12px;
   font-weight: 600;
@@ -237,6 +348,46 @@ const statusLabels: Record<string, string> = {
   margin-bottom: 9px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.heading-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.heading-row .heading {
+  margin-bottom: 0;
+}
+
+.reset-link {
+  font-size: 11.5px;
+  color: var(--c-primary);
+  font-weight: 600;
+  margin-left: auto;
+}
+
+.default-note {
+  font-size: 11px;
+  color: var(--c-text-dim);
+  margin-left: auto;
+}
+
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.slim {
+  padding: 14px 18px;
+}
+
+.loading {
+  font-size: 13px;
+  color: var(--c-text-faint);
+  padding: 12px 0;
 }
 
 /* ── navigator ──────────────────────────────────────────────────────── */
@@ -262,6 +413,12 @@ const statusLabels: Record<string, string> = {
   color: var(--c-text-faint);
   font-weight: 600;
   white-space: nowrap;
+}
+
+.saving {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
 }
 
 .nav-title {
@@ -494,6 +651,7 @@ const statusLabels: Record<string, string> = {
   display: flex;
   gap: 10px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .cobiss-box {
@@ -537,6 +695,11 @@ const statusLabels: Record<string, string> = {
   gap: 8px;
 }
 
+.btn-primary:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
 .spinner {
   width: 13px;
   height: 13px;
@@ -556,6 +719,12 @@ const statusLabels: Record<string, string> = {
   color: var(--c-success);
 }
 
+.cobiss-note {
+  font-size: 12.5px;
+  color: var(--c-warn-deep);
+  font-weight: 500;
+}
+
 /* ── fields ─────────────────────────────────────────────────────────── */
 .fields-card {
   padding: 18px 20px;
@@ -565,6 +734,22 @@ const statusLabels: Record<string, string> = {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px 22px;
+}
+
+.group-head {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--c-text-faint);
+  padding-top: 6px;
+  border-bottom: 1px solid var(--c-border-row);
+  padding-bottom: 6px;
+}
+
+.group-head:first-child {
+  padding-top: 0;
 }
 
 .footer-nav {

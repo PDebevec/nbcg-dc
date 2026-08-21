@@ -7,3 +7,5 @@ export * from "./useBatches";
 export * from "./useBatchWork";
 export * from "./useProcessing";
 export * from "./useSync";
+export * from "./useMetadata";
+export * from "./useUpload";

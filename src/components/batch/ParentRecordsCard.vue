@@ -1,18 +1,39 @@
 <script setup lang="ts">
-import type { ParentRowView } from "@composables/useBatchSetup";
+import { computed } from "vue";
+import type { ParentRowView, ParentSearchRow } from "@composables/useParentLinks";
 
-defineProps<{
+const props = defineProps<{
   parents: ParentRowView[];
   editable: boolean;
   /** Card description under the heading. */
   description?: string;
+  /** Parent search box state (owned by the composable). */
+  query: string;
+  results: ParentSearchRow[];
+  searching: boolean;
+  searchError: string | null;
 }>();
 
-defineEmits<{
-  add: [];
+const emit = defineEmits<{
+  updateQuery: [value: string];
+  link: [id: string];
   remove: [id: string];
   togglePass: [id: string];
 }>();
+
+const trimmedQuery = computed(() => props.query.trim());
+const showResults = computed(() => trimmedQuery.value.length > 0);
+const noMatches = computed(
+  () =>
+    showResults.value &&
+    !props.searching &&
+    !props.searchError &&
+    props.results.length === 0,
+);
+
+function onInput(event: Event): void {
+  emit("updateQuery", (event.target as HTMLInputElement).value);
+}
 </script>
 
 <template>
@@ -40,6 +61,7 @@ defineEmits<{
         >
           {{ p.passesData ? "↧ passes data" : "○ can pass data" }}
         </button>
+        <span v-else-if="p.passesData" class="pass-btn passing static">↧ passes data</span>
         <button
           v-if="editable"
           class="remove-btn"
@@ -60,13 +82,51 @@ defineEmits<{
         </button>
       </div>
     </div>
+    <div v-else-if="!editable" class="empty">No parent records linked.</div>
 
-    <div v-if="editable" class="add-row">
-      <div class="search-box">
-        <span class="search-glyph">⌕</span>
-        <input placeholder="Search serials & collections to link…" />
+    <div v-if="editable" class="add-slot">
+      <div class="add-row">
+        <div class="search-box">
+          <span class="search-glyph">⌕</span>
+          <input
+            :value="query"
+            placeholder="Search serials & collections to link… (title or id)"
+            @input="onInput"
+          />
+          <span v-if="searching" class="spinner" />
+          <button
+            v-else-if="query"
+            class="clear-btn"
+            title="Clear"
+            @click="emit('updateQuery', '')"
+          >
+            ×
+          </button>
+        </div>
       </div>
-      <button class="add-btn" @click="$emit('add')">+ Link parent</button>
+
+      <div v-if="showResults" class="results">
+        <div v-if="searchError" class="results-note error">✗ {{ searchError }}</div>
+        <button
+          v-for="r in results"
+          :key="r.id"
+          class="result-row"
+          :disabled="r.linked"
+          @click="emit('link', r.id)"
+        >
+          <span class="result-text">
+            <span class="result-title">{{ r.title }}</span>
+            <span class="result-meta">{{ r.meta }} · {{ r.id }}</span>
+          </span>
+          <span class="result-action">{{ r.linked ? "Linked" : "+ Link" }}</span>
+        </button>
+        <div v-if="noMatches" class="results-note">
+          No matches.
+          <button class="link-id" @click="emit('link', trimmedQuery)">
+            Link “{{ trimmedQuery }}” as a record id
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -93,6 +153,11 @@ defineEmits<{
   font-size: 12.5px;
   color: var(--c-text-faint);
   margin-bottom: 11px;
+}
+
+.empty {
+  font-size: 12.5px;
+  color: var(--c-text-faint);
 }
 
 .list {
@@ -167,6 +232,10 @@ defineEmits<{
   border-color: var(--c-success-border);
 }
 
+.pass-btn.static {
+  cursor: default;
+}
+
 .remove-btn {
   width: 26px;
   height: 26px;
@@ -181,6 +250,10 @@ defineEmits<{
 .remove-btn:hover {
   background: var(--c-idle-bg);
   color: var(--c-text-muted);
+}
+
+.add-slot {
+  position: relative;
 }
 
 .add-row {
@@ -198,7 +271,7 @@ defineEmits<{
   padding: 0 11px;
   height: 38px;
   flex: 1;
-  max-width: 340px;
+  max-width: 440px;
 }
 
 .search-glyph {
@@ -213,14 +286,100 @@ defineEmits<{
   width: 100%;
 }
 
-.add-btn {
-  height: 38px;
-  padding: 0 14px;
+.spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--c-border);
+  border-top-color: var(--c-primary);
+  border-radius: 50%;
+  display: inline-block;
+  animation: spin 0.7s linear infinite;
+  flex: none;
+}
+
+.clear-btn {
+  color: var(--c-text-dim);
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.results {
+  margin-top: 8px;
+  border: 1px solid var(--c-border);
   border-radius: var(--r-md);
-  border: 1px solid var(--c-parent-btn-border);
-  background: var(--c-parent-btn-bg);
-  color: var(--c-parent-btn);
-  font-weight: 600;
+  background: var(--c-surface);
+  max-width: 440px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 4px;
+}
+
+.result-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.result-row:hover:not(:disabled) {
+  background: var(--c-parent-card);
+}
+
+.result-row:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.result-text {
+  min-width: 0;
+  flex: 1;
+}
+
+.result-title {
+  display: block;
   font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text-mid);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.result-meta {
+  display: block;
+  font-size: 10.5px;
+  color: var(--c-text-faint);
+  font-family: var(--font-mono);
+}
+
+.result-action {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-parent-btn);
+  white-space: nowrap;
+}
+
+.results-note {
+  font-size: 12.5px;
+  color: var(--c-text-faint);
+  padding: 8px 10px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.results-note.error {
+  color: var(--c-danger-text);
+}
+
+.link-id {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--c-parent-btn);
 }
 </style>
