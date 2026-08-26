@@ -531,6 +531,136 @@ pub struct BatchCreateDto {
     pub overrides: HashMap<String, BatchItemOverride>,
 }
 
+// ─── job run DTOs (Epic 06) ──────────────────────────────────────────────────
+//
+// Mirrors `ItemRunRequest`/`BatchRunRequest` in `bindings.ts`. The adaptive
+// branching (which shape a folder is, which stages it needs) is decided in
+// `.ts` via `domain/pipeline` and handed over as this fully-decided request —
+// the runner is not meant to re-derive any of it, only execute it.
+
+/// Why a run was started. `Reprocess` force-rebuilds and marks an
+/// already-uploaded item Needs re-upload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JobRunMode {
+    Run,
+    Rerun,
+    Reprocess,
+}
+
+/// What a folder holds, which selects the pipeline branch (docs/tasks/06
+/// §Source inputs). Decided in `.ts`; the runner must not re-derive it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InputShape {
+    Tiffs,
+    SuppliedPdf,
+    MultiplePdfs,
+    PageImages,
+    ImagesOnly,
+    Empty,
+}
+
+/// The pipeline stages a local script actually produces output for
+/// (`metadata`/`upload` are not script-run, so they are not here).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunnableStage {
+    Pdf,
+    Thumbnail,
+    Ocr,
+}
+
+/// One item's work in a run. `stages` is already reduced by skip-if-done, so
+/// the runner executes exactly these.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemRunRequest {
+    pub item_id: String,
+    pub folder_path: String,
+    pub folder_name: String,
+    pub input_shape: InputShape,
+    pub stages: Vec<RunnableStage>,
+    pub primary_thumbnail: Option<String>,
+    pub thumbnail_needs_choice: bool,
+    pub web_pdf_bases: Vec<String>,
+    /// `page-images` only: page filenames in page order, natural-sorted by
+    /// the `.ts` lane already — the runner must not re-sort.
+    pub page_images: Vec<String>,
+    pub split_spreads: bool,
+}
+
+/// A whole run: the batch, why, and the per-item work. `Reprocess` may carry
+/// a single item that is not part of any active batch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchRunRequest {
+    pub batch_id: String,
+    pub mode: JobRunMode,
+    pub items: Vec<ItemRunRequest>,
+}
+
+// ─── job events (Epic 06) ─────────────────────────────────────────────────────
+//
+// Mirrors `JobProgressEvent`/`JobStageChangedEvent`/`JobDoneEvent` in
+// `src/ipc/events.ts` field-for-field. Outbound only (native → TS over
+// `app.emit`), so `Serialize` alone — nothing here is ever deserialized.
+
+/// High-frequency progress for a running stage. Ephemeral — carries no
+/// authoritative status, that's `JobStageChangedEvent`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobProgressEvent {
+    pub batch_id: String,
+    pub item_id: String,
+    pub stage: RunnableStage,
+    pub progress: Option<f64>,
+    /// `events.ts` types this an *optional key* (`message?: string`), not a
+    /// nullable one — omit it rather than emit `null` when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// A single pipeline stage transitioned. The authoritative per-stage signal —
+/// always emitted after the matching `set_stage` DB write, never before.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobStageChangedEvent {
+    pub batch_id: String,
+    pub item_id: String,
+    pub stage: StageName,
+    pub status: StageStatus,
+    /// `events.ts` types `error`/`at` as *nullable* fields (`string | null`),
+    /// not optional keys — unlike `JobProgressEvent.message` above, these
+    /// must always be present on the wire, `null` when absent. No
+    /// `skip_serializing_if` here; that distinction is deliberate.
+    pub error: Option<String>,
+    pub at: Option<String>,
+}
+
+/// Why a run (or one item's run) ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JobOutcome {
+    Done,
+    Failed,
+    Cancelled,
+}
+
+/// An item finished its run, or the batch run completed. `batchComplete` is
+/// only `true` on the terminal event of a run; `itemId` is `None` for a
+/// cancel with no single item to report (`events.ts`'s own doc comment
+/// documents this case explicitly).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobDoneEvent {
+    pub batch_id: String,
+    pub item_id: Option<String>,
+    pub outcome: JobOutcome,
+    pub error: Option<String>,
+    pub batch_complete: bool,
+}
+
 // ─── filesystem DTOs (Epic 02 / 07) ──────────────────────────────────────────
 
 /// The per-folder `metadata.json` mirror. `metadata` is the backend record's

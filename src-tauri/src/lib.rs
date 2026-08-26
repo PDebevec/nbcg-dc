@@ -6,8 +6,9 @@
 //! TypeScript lane (`services/api/`, docs/04 seam 3), so the Keycloak token and
 //! every wire concern stay in one place.
 //!
-//! The command surface mirrors `src/ipc/bindings.ts`; the job runner
-//! (`jobs_*`, Epic 06) is not implemented yet.
+//! The command surface mirrors `src/ipc/bindings.ts`. The job runner
+//! (`jobs_*`, Epic 06) spawns `py/web.py`/`py/ocr.py` for real, sequentially
+//! (no queue/concurrency cap yet) — see `core::jobs` and `core::python`.
 
 pub mod commands;
 pub mod core;
@@ -71,6 +72,7 @@ pub fn run() {
                 db,
                 config_dir,
                 watcher: FsWatcher::new(),
+                job_run: std::sync::Mutex::new(Default::default()),
             };
 
             // Start watching whatever is already configured. A first run has no
@@ -111,6 +113,9 @@ pub fn run() {
             commands::batch::batch_archive,
             commands::sync::sync_log_append,
             commands::sync::sync_log_list,
+            commands::jobs::jobs_start,
+            commands::jobs::jobs_cancel,
+            commands::jobs::jobs_reprocess,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

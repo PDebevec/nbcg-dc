@@ -483,3 +483,24 @@ fn get_on_an_unknown_item_is_not_found() {
         Err(nbcg_dc_lib::error::AppError::NotFound(_)),
     ));
 }
+
+#[test]
+fn mark_needs_reupload_sets_the_flag() {
+    let f = folder("BOOK", ScanRoot::Unprocessed);
+    let db = db_with(std::slice::from_ref(&f));
+
+    assert!(!db.with(items::list).unwrap()[0].reupload);
+
+    db.with(|c| items::mark_needs_reupload(c, &f.id)).unwrap();
+
+    assert!(db.with(items::list).unwrap()[0].reupload);
+}
+
+#[test]
+fn mark_needs_reupload_on_an_unknown_item_is_not_found() {
+    let db = Db::open_in_memory().unwrap();
+    assert!(matches!(
+        db.with(|c| items::mark_needs_reupload(c, "missing")),
+        Err(nbcg_dc_lib::error::AppError::NotFound(_)),
+    ));
+}

@@ -151,6 +151,21 @@ pub fn set_stage(
     Ok(())
 }
 
+/// Flag an item **Needs re-upload** (Epic 06 job runner, `Reprocess` mode
+/// only). The only writer of `reupload = 1` — `reconcile` never touches it
+/// and `record_upload` only ever clears it back to `0` on a successful write.
+pub fn mark_needs_reupload(conn: &Connection, item_id: &str) -> Result<()> {
+    if !exists(conn, item_id)? {
+        return Err(AppError::NotFound(format!("item {item_id}")));
+    }
+
+    conn.execute(
+        "UPDATE items SET reupload = 1, updated_at = ?2 WHERE id = ?1",
+        params![item_id, now_iso()],
+    )?;
+    Ok(())
+}
+
 fn replace_assets(conn: &Connection, item_id: &str, assets: &[IndexedAssetDto]) -> Result<()> {
     conn.execute(
         "DELETE FROM item_assets WHERE item_id = ?1",

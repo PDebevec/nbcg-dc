@@ -34,6 +34,7 @@ import {
   type ItemStages,
   type StageName,
 } from "@domain/item";
+import { markNonApplicableSkipped, planPipeline } from "@domain/pipeline";
 import type { LocalMetadataFile } from "@domain/metadata";
 import { logger } from "@lib/logger";
 
@@ -61,16 +62,25 @@ function toAssets(dto: IndexedItemDto): DiscoveredAsset[] {
   );
 }
 
-/** Map one native index row to a domain {@link Item}. */
+/** Map one native index row to a domain {@link Item}.
+ *
+ * Stages the index never recorded default to `pending` (see {@link toStages}),
+ * which is indistinguishable from "applicable but not yet run" — so a stage
+ * genuinely N/A for this item's shape (e.g. `pdf` on an `images-only` item)
+ * would otherwise read as an outstanding blocker forever. `markNonApplicableSkipped`
+ * re-derives the shape via `planPipeline` and downgrades those to `skipped`.
+ */
 export function toItem(dto: IndexedItemDto): Item {
+  const assets = toAssets(dto);
+  const plan = planPipeline(assets, dto.folderName);
   return {
     id: dto.id,
     folderName: dto.folderName,
     folderPath: dto.folderPath,
     root: dto.root,
     level: dto.level ?? "main",
-    assets: toAssets(dto),
-    stages: toStages(dto.stages),
+    assets,
+    stages: markNonApplicableSkipped(toStages(dto.stages), plan),
     flags: { uploaded: dto.uploaded, reupload: dto.reupload },
     backendId: dto.backendId,
     batchId: dto.batchId,

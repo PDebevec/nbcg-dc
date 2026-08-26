@@ -229,6 +229,49 @@ fn reading_an_absent_mirror_is_none() {
     assert!(fs::read_metadata(&dir).unwrap().is_none());
 }
 
+// ─── finalizing job-runner outputs (Epic 06) ────────────────────────────────
+
+#[test]
+fn finalize_staged_output_moves_the_file_into_place() {
+    let root = TempDir::new().unwrap();
+    let dir = make_item_dir(root.path(), "BOOK", &[]);
+    let staged = dir.join(".nbcg-tmp-1").join("BOOK.pdf");
+    std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
+    std::fs::write(&staged, b"pdf bytes").unwrap();
+
+    let target = dir.join("BOOK.pdf");
+    fs::finalize_staged_output(&staged, &target).unwrap();
+
+    assert!(
+        !staged.exists(),
+        "the staged file must be consumed by the rename"
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), b"pdf bytes");
+}
+
+#[test]
+fn finalize_staged_output_replaces_an_existing_target() {
+    let root = TempDir::new().unwrap();
+    let dir = make_item_dir(root.path(), "BOOK", &[("BOOK.pdf", "stale")]);
+    let staged = dir.join(".nbcg-tmp-1").join("BOOK.pdf");
+    std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
+    std::fs::write(&staged, b"fresh").unwrap();
+
+    fs::finalize_staged_output(&staged, &dir.join("BOOK.pdf")).unwrap();
+
+    assert_eq!(std::fs::read(dir.join("BOOK.pdf")).unwrap(), b"fresh");
+}
+
+#[test]
+fn finalize_staged_output_on_a_missing_staged_file_errors_without_touching_target() {
+    let root = TempDir::new().unwrap();
+    let dir = make_item_dir(root.path(), "BOOK", &[("BOOK.pdf", "original")]);
+    let staged = dir.join(".nbcg-tmp-1").join("BOOK.pdf");
+
+    assert!(fs::finalize_staged_output(&staged, &dir.join("BOOK.pdf")).is_err());
+    assert_eq!(std::fs::read(dir.join("BOOK.pdf")).unwrap(), b"original");
+}
+
 // ─── moving across roots ─────────────────────────────────────────────────────
 
 #[test]

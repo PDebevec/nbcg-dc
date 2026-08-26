@@ -1,0 +1,28 @@
+# py/ pipeline scripts - dependencies.
+#
+# Verified working: Python 3.14, Pillow 12.x (a cp314 wheel is published, no
+# build step needed). Pillow is all that split_spreads.py and web.py need.
+
+Pillow>=12.3.0
+
+# --- PDF sources only (pdf_derive.py) ---
+# Google's PDFium, for rasterising a supplied PDF's pages. Chosen over the
+# alternatives on licensing and packaging: BSD/Apache with self-contained
+# wheels, so no system dependency to install (unlike pdf2image's poppler,
+# below) and no AGPL obligation on the app that links it (unlike PyMuPDF).
+pypdfium2>=5.13.0
+
+# --- OCR only (ocr.py) ---
+# Not yet version-verified on Windows - pin exact versions once ocr.py has
+# actually been run end-to-end here.
+paddleocr
+paddlepaddle
+pdf2image
+numpy
+opencv-python
+
+# pdf2image also needs poppler on PATH - this is a system dependency pip
+# cannot install:
+#   Windows: download poppler binaries and add the extracted `bin/` folder
+#            to PATH (see https://github.com/oschwartz10612/poppler-windows).
+#   Linux:   apt-get install poppler-utils

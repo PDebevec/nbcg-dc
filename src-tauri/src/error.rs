@@ -32,8 +32,21 @@ pub enum AppError {
     #[error("invalid input: {0}")]
     Invalid(String),
 
+    /// A running script was killed because the operator cancelled the batch.
+    /// Kept distinct from `Other` so the job runner can tell "the operator
+    /// cancelled this" from "the script crashed" and settle the stage as
+    /// `Pending` rather than `Failed`.
+    #[error("cancelled")]
+    Cancelled,
+
     #[error("{0}")]
     Other(String),
+}
+
+impl AppError {
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, AppError::Cancelled)
+    }
 }
 
 impl From<keyring::Error> for AppError {

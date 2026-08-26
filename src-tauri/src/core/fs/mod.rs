@@ -269,6 +269,32 @@ pub fn write_metadata(folder: &Path, metadata: &LocalMetadataFile) -> Result<()>
     }
 }
 
+/// Finalize one file a subprocess already wrote to a staging location,
+/// atomically, over `target` (Epic 06 job runner).
+///
+/// Same temp→sync→rename discipline as [`write_metadata`] above, but for a
+/// file that already exists on disk (written by `py/web.py`/`py/ocr.py`)
+/// rather than an in-memory buffer — so this is a sibling, not a
+/// generalization: there is no bytes-in-hand to share the write step with.
+/// `staged` is consumed (renamed away) on success; left in place on failure
+/// so the caller's staging-dir cleanup still finds it.
+pub fn finalize_staged_output(staged: &Path, target: &Path) -> Result<()> {
+    {
+        // `File::open` is read-only, and `sync_all` (`FlushFileBuffers` on
+        // Windows) needs a writable handle even when nothing is written
+        // through it — a read-only handle fails the flush with
+        // `ERROR_ACCESS_DENIED`. Unix's `fsync` has no such restriction, but
+        // opening for write costs nothing there either.
+        let file = std::fs::OpenOptions::new().write(true).open(staged)?;
+        file.sync_all()?;
+    }
+
+    // std::fs::rename replaces an existing destination on Windows (MoveFileEx
+    // with MOVEFILE_REPLACE_EXISTING) as well as on unix.
+    std::fs::rename(staged, target)?;
+    Ok(())
+}
+
 /// Move an item's folder from `/unprocessed` to `/processed`.
 ///
 /// Returns the new folder path. Refuses to clobber an existing destination —

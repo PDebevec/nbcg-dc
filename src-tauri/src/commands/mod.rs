@@ -8,12 +8,15 @@ pub mod batch;
 pub mod config;
 pub mod fs;
 pub mod index;
+pub mod jobs;
 pub mod sync;
 
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use crate::core::db::Db;
 use crate::core::fs::watcher::FsWatcher;
+use crate::core::jobs::JobRunLock;
 use crate::error::Result;
 
 /// Everything the commands need, held as Tauri managed state.
@@ -23,6 +26,9 @@ pub struct AppState {
     /// dir in tests).
     pub config_dir: PathBuf,
     pub watcher: FsWatcher,
+    /// The native single-run lock (Epic 06) — one batch processing at a time,
+    /// per workstation. See `core::jobs::try_acquire`.
+    pub job_run: Mutex<JobRunLock>,
 }
 
 impl AppState {
