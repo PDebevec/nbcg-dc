@@ -167,10 +167,31 @@ scan), so the operator cleans the folder.
 
 ## Still open
 
-1. **Is `Писма из Лиона_(310).pdf` a source or an output?** Decides whether a
-   folder holding both pages *and* a PDF should rebuild from the pages or reuse
-   the PDF. Currently the PDF wins **and the plan warns**; that warning is the
-   placeholder for this decision, not an answer to it.
+1. ~~**Is `Писма из Лиона_(310).pdf` a source or an output?**~~ **Answered
+   2026-08-21 (Peter): a source.** A `supplied-pdf` item derives
+   `<folderName>.pdf` from it, and the original is **filed under
+   `<folder>/source/`** — kept forever, never modified, and travelling with the
+   folder into `/processed`.
+
+   Filing it is not tidiness. `classifyAsset` calls every non-`_archive` PDF a
+   `web-pdf` and `classifyInput` branches on how many the folder holds, so a
+   derived PDF left beside its original makes the item read as `multiple-pdfs`
+   on the very next scan: the shape changes silently and the full-size original
+   uploads as a web asset. `core::fs::describe_folder` lists files without
+   recursing, so one subfolder is enough to keep the count at one. Implemented
+   in `core::jobs::resolve_supplied_source`; pinned by
+   `core_jobs::supplied_pdf_derives_the_web_pdf_and_files_the_original_under_source`,
+   whose real assertion is that the folder root holds exactly one PDF
+   afterwards.
+
+   Re-runs derive from the filed original rather than from the previous output —
+   otherwise each one downscales a downscale and the web PDF rots a little more
+   every time.
+
+   Unchanged: which *wins* when a folder holds both page images and a PDF. The
+   PDF still does, and `planPipeline` still warns, naming the ignored pages.
+   That part of the question is a separate call about the 52 JPGs in
+   `Pisma iz Liona`, and it stays open.
 2. **Does the folder name survive as the naming base?** `sa vodenim zigom`
    ("with a watermark") is a description, not an identifier, and yields
    `sa vodenim zigom.pdf`. Related: whether Cyrillic and spaces in derived
@@ -190,6 +211,17 @@ scan), so the operator cleans the folder.
    the cover is arguably the **best thumbnail** for the item, which the current
    "thumbnail = first page" rule would miss.
 5. **`web.py` does not match reality** (see below).
+6. **A fuller real slice (`arh/`, 2026-08-26) surfaced a shape the four
+   folders above never had: a collection folder wrapping two or more
+   distinct books** (`Cèrnagora/` holds `CERNAGORA/` (392 files) and
+   `CERNAGORA... 1851/` (132 files) as siblings, plus loose files of its
+   own). `core::fs::scan_root` only scans one level deep, so these are
+   invisible unless the root is pointed at the wrapper folder by hand — and
+   no structural heuristic reliably tells "a wrapper to descend into" apart
+   from "a record with an unrelated subfolder to ignore" (`Budua und
+   Cetinje/` has the identical loose-file-plus-subfolder shape and the
+   opposite correct answer). Decision and task:
+   [nested-record-folders-and-manual-selection](tasks/nested-record-folders-and-manual-selection.md).
 
 ## Two mismatches in `py/` for the Arch lane
 

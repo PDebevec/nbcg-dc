@@ -171,13 +171,12 @@ Epics 04/06 deferred their composables/stores):
 
 **Owed by Arch (`.rs` / `.py`):**
 
-- Implement `fs_read_file` — return raw bytes via `tauri::ipc::Response` (binary,
-  not a JSON number array); needs the folder-read capability.
-- Implement `index_record_upload` — write `backendId`/`version`/`targetState`/
-  `visibilityStatus`, set `uploaded=true`, `reupload=false`, `upload` stage
-  `done`; return the updated `IndexedItemDto`.
-- Implement `fs_move_to_processed` (already in the contract) — relocate the folder
-  `/unprocessed` → `/processed`, update `root`, return the row.
+> **Done, 2026-08-12** (verified against the code 2026-08-21 — this list said
+> they were owed long after they had shipped): `fs_read_file`,
+> `index_record_upload` and `fs_move_to_processed` are all implemented and
+> registered in `src-tauri/src/lib.rs`'s `invoke_handler!`. `fs_read_file`
+> returns raw bytes via `tauri::ipc::Response`, as specified.
+
 - **Re-upload granularity** (enables the text-only optimisation): record a
   **per-file** "what changed" signal on re-process (PDF changed vs only OCR
   text). Today the logic lane uses the item-level `flags.reupload`: a re-upload

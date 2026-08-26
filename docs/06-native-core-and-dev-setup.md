@@ -1,7 +1,7 @@
 # NBCG-DC — Native core & developer setup
 
-> Status: **config + fs + db implemented**; jobs/Python not started
-> Last updated: 2026-08-12 · Rust suite **73 green**, TS suite **618 green**
+> Status: **config + fs + db + jobs (first slice + real cancel) implemented**
+> Last updated: 2026-08-24 · Rust suite **100 green**, TS suite **618 green**
 
 What the Rust lane (`src-tauri/`) currently does, how it is laid out, and what a
 developer needs installed to build or run it. This is the companion to
@@ -19,14 +19,117 @@ layout; this file records what actually exists.
 | `index_*` | 5 | ✅ implemented |
 | `batch_*` | 4 | ✅ implemented |
 | `sync_*` | 2 | ✅ implemented |
-| `jobs_*` | 3 | ❌ **not started** (Epic 06) |
+| `jobs_*` | 3 | ✅ **implemented — first slice** (Epic 06) |
 
-Events: `fs://changed` ✅ emitted. The three `job://*` channels are not, since
-the runner does not exist yet.
+Events: `fs://changed` and all three `job://*` channels ✅ emitted for real.
 
-**23 of 26 commands are live.** The remaining three are the pipeline runner,
-which is blocked behind the Python fixes in
-[`py-real-data-mismatches`](tasks/py-real-data-mismatches.md) anyway.
+**26 of 26 commands do real work.** `jobs_start`/`jobs_reprocess` spawn
+`py/web.py`/`py/ocr.py`/`py/split_spreads.py`/`py/pdf_derive.py` (system
+`python`/`py` on `PATH` — no sidecar bundling yet, deferred to Epic 11 while
+the app is dev-only) via `core::python`, sequentially — one item, one stage at
+a time, no concurrency/queue. `core::jobs`
+does the orchestration: real SQLite stage writes (`set_stage`, pre-existing —
+its own doc comment anticipated this use), real `job://*` events, a native
+single-run lock (`AppState.job_run`), and atomic output writes (script writes
+into a `.nbcg-tmp-*` staging dir, Rust renames into place on success via the
+new `core::fs::finalize_staged_output`).
+
+**All six `InputShape`s are handled:**
+
+| Shape | What runs |
+|---|---|
+| `PageImages` / `Tiffs` | `web.py` assembles the folder's images (`--mode flat`/`paired`) |
+| `ImagesOnly` | thumbnail only (`web.py --thumbnail-only`) — a standalone graphical work has no PDF, so no OCR either |
+| `SuppliedPdf` | `pdf_derive.py` downscales the operator's PDF into `<folderName>.pdf`; the original is filed under `source/` |
+| `MultiplePdfs` | the discovered PDFs already *are* the web PDFs — the `pdf` stage verifies rather than builds, one `<base>_thumb.png` candidate is rendered per PDF, and OCR writes one `<base>.txt` each |
+| `Empty` | nothing to run |
+
+**Filing a supplied PDF under `source/` is required, not tidiness.**
+`domain/files.classifyAsset` calls every non-`_archive` PDF a `web-pdf` and
+`classifyInput` branches on how many the folder holds, so leaving the original
+beside the derived `<folderName>.pdf` would make the item read as
+`MultiplePdfs` on the next scan — a silent shape change, with the full-size
+original then uploading as a web asset. `describe_folder` lists files without
+recursing (§below), so one subfolder keeps the count at one. Re-runs derive
+from the filed original rather than the previous output, or each run would
+downscale a downscale. See
+[docs/05 open question #1](05-real-scan-data.md), answered 2026-08-21.
+
+Deliberately **not** in this slice, flagged as follow-ups: true OCR-aware
+concurrency (still no queue — sequential only), and an *interactive*
+multi-candidate thumbnail picker (there is no GUI for one yet).
+
+**Mid-process cancellation is real, 2026-08-24** — and fixing it surfaced a
+worse bug underneath. `jobs_start`/`jobs_reprocess` were plain synchronous
+`#[tauri::command]`s, which Tauri v2 runs inline on the **main thread**
+(`ExecutionContext::Blocking`) rather than dispatching to a worker. A whole
+batch ran inside that one IPC call — freezing the window for the run's
+duration — and `jobs_cancel`, also an invoke, could not even be *delivered*
+until the run it was meant to cancel had already finished on its own. The
+runner's own cooperative between-items cancel check was correct but
+unreachable in practice — not because no UI existed (**correction,
+2026-08-25:** `src/views/batch/ProcessingTab.vue`/`src/composables/useProcessing.ts`
+already called the real IPC commands, committed in `15511db "Frontend v2, my
+TODO"`, predating this fix — this section previously and wrongly said "no UI
+calls `jobs_start` yet"), but because nobody had actually clicked through a
+real run yet to observe the freeze. Fixed by marking both `#[tauri::command(async)]`, so
+the body dispatches onto a tokio worker instead
+(`tauri::async_runtime::spawn`) and the main thread stays free to handle
+`jobs_cancel` promptly.
+
+That alone would only stop the *next* stage, so `core::python::spawn_python`
+was rewritten from a single blocking `Command::output()` call into a
+spawn-then-poll loop (`core::cancel::CancelToken`, shared via
+`JobRunGuard::cancel_token()`): the child's stdout/stderr are piped and
+drained on their own threads (skipping this deadlocks the moment a chatty
+script like `ocr.py` — one log line per page — fills an undrained pipe
+buffer), and every 100 ms the loop checks both `try_wait()` and the cancel
+token, killing the child immediately on a match. A cancelled script now
+returns `AppError::Cancelled` — a distinct error kind from a real failure —
+so `core::jobs`'s stage-settle points can tell "the operator cancelled this"
+from "the script crashed" and write `Pending`, never `Failed`: a cancel is not
+a failure, so `stagesToRun` just picks the stage back up on the next Start
+with no red the operator didn't cause. A new `reset_unfinished_stages` also
+closes a related bug found alongside it — `run_batch` queues every stage of
+every item up front and previously never reset that on cancel, so an
+un-started item's stages sat `Queued` in SQLite forever after a cancel; they
+now read back from the index and reset to `Pending` too.
+
+Every field of `ItemRunRequest` the `.ts` lane decides is now honoured, and
+none is re-derived native-side — three of them only after being caught in
+review the same day (see [Epic 06](tasks/06-processing-pipeline-and-jobs.md)'s
+progress section). The flags added to the scripts for it, all additive and
+backward-compatible with the existing `py/tests/` suite:
+
+| Flag | Carries |
+|---|---|
+| `web.py --mode {flat,paired}` | `inputShape` — instead of `web.py` re-sniffing the folder for jpg/tif subfolders |
+| `web.py --pages FILE …` | `pageImages`, the authoritative page order — instead of a re-scan and re-sort |
+| `web.py --name BASE` | `folderName`, the naming base — instead of the processed folder's own name |
+| `web.py --thumbnail-source FILE` | `primaryThumbnail` (absolute when it must escape the assembly folder) |
+| `web.py --thumbnail-only` | the `images-only` shape: no PDF at all |
+| `split_spreads.py --pages FILE …` | the same page order, so the split doesn't re-derive it either |
+| `web_pdf_bases` | one OCR text per web PDF (`<base>.txt`), the multi-PDF invariant |
+| every script's output dir | staging, for the atomic-write rename |
+
+`splitSpreads` runs `split_spreads.py` into the staging folder before `web.py`
+and assembles from the page order it reports — an invisible sub-step of `pdf`,
+not a visible stage. `page-images` only: on `tiffs` the runner refuses (the
+archival master must come from the TIFFs at full fidelity) rather than
+ignoring the flag, and on `images-only` it is inapplicable since no PDF is
+built. A chosen `primaryThumbnail` is passed as an absolute path so it is
+built from the whole original, never half a spread.
+
+Tested at `core::jobs`/`core::python` directly (`src-tauri/tests/core_jobs.rs`,
+21 tests) — Pillow and pypdfium2 are installed here, so the
+PDF/thumbnail/split/derive paths all run for real, on disk; `ocr.py` needs
+paddleocr/paddlepaddle/pdf2image/poppler, none
+installed here, so only its wiring (the precondition-failure path) is pinned —
+a live OCR pass is a residual gap. Tauri's own mock-IPC test harness
+(`tauri::test`) was tried and abandoned: it fails at process startup with
+`STATUS_ENTRYPOINT_NOT_FOUND` in this environment, reproducible on a trivial
+no-arg command and unrelated to this code, so `core::jobs` is tested directly
+instead — consistent with `core/` being Tauri-free by design.
 
 This closes the Arch-lane obligations recorded in Epics
 [02](tasks/02-overview-and-index.md), [03](tasks/03-batches-and-lifecycle.md),
@@ -43,19 +146,27 @@ unit-tested without a webview.
 
 ```
 src-tauri/src/
-  lib.rs                builder: plugins, managed state, the 23 commands, watcher wiring
+  lib.rs                builder: plugins, managed state, the 26 commands, watcher wiring
   main.rs               entry point
   error.rs              AppError — serialized to the TS side as a plain string
   dto.rs                serde mirrors of every type in src/ipc/bindings.ts
   commands/             thin #[tauri::command] wrappers — no logic worth testing
-    config.rs  fs.rs  index.rs  batch.rs  sync.rs
+    config.rs  fs.rs  index.rs  batch.rs  sync.rs  jobs.rs
   core/                 plain Rust; the whole test surface
     config/mod.rs       store file + OS credential store
     db/                 mod.rs (schema/migrations) · items.rs · batches.rs · sync_runs.rs
     fs/                 mod.rs (scan, mirror, move) · watcher.rs
+    jobs/mod.rs          the job runner: single-run lock, stage-to-script mapping, events
+    python/mod.rs        spawning the py/ scripts, parsing their JSON summaries
 tests/                  integration tests over core/
   common/mod.rs  config_store.rs  db_items.rs  db_batches.rs
-  db_sync_runs.rs  fs_core.rs  workflow.rs
+  db_sync_runs.rs  fs_core.rs  workflow.rs  core_jobs.rs
+  fixtures/tiny.jpg      a real minimal JPEG — core_jobs.rs exercises web.py for real
+  fixtures/tiny2.jpg      a second, distinctly-colored JPEG — proves *which*
+                           source image a test's output actually came from
+  fixtures/spread.jpg     a red-left/blue-right landscape 2-up with a dark
+                           gutter — one pixel says whether an output came
+                           from half a spread or the whole one
 ```
 
 ### Dependencies added
@@ -207,7 +318,7 @@ npm run tauri dev      # the real app, with the native core
 npm run build          # vue-tsc typecheck + vite build
 
 cd src-tauri
-cargo test             # 73 tests
+cargo test             # 101 tests
 cargo clippy --all-targets
 cargo fmt
 ```
@@ -220,19 +331,23 @@ no connection string, no manual migration step.
 
 ## 6. Test suite
 
-73 Rust tests, all against `core/` with real SQLite and real temp directories —
-no mocks, because the things worth testing here are exactly the ones a mock
-would paper over.
+101 Rust tests, all against `core/` with real SQLite, real temp directories,
+and — for `core_jobs.rs`/`core::python`'s own unit tests — real Python
+subprocesses (`web.py`/`split_spreads.py`/`pdf_derive.py`, and a bare `python
+-c` for the cancel/pipe-draining tests). No mocks, because the things worth
+testing here are exactly the ones a mock would paper over.
 
 | File | Tests | Covers |
 |---|---|---|
-| `db_items.rs` | 18 | scan reconciliation, the three write paths, rebuild |
+| `db_items.rs` | 20 | scan reconciliation, the three write paths, rebuild, `mark_needs_reupload` |
 | `db_batches.rs` | 13 | numbering, atomic stamping, release-on-archive, rollback |
-| `fs_core.rs` | 22 | scanning, derived-file detection, atomic mirror, moves, **Cyrillic names** |
+| `fs_core.rs` | 25 | scanning, derived-file detection, atomic mirror, moves, **Cyrillic names**, `finalize_staged_output` |
+| `core_jobs.rs` | 21 | the job runner end to end across all six input shapes (real `web.py`/`split_spreads.py`/`pdf_derive.py`), the precondition-gated OCR path, the single-run lock, `primaryThumbnail`/`--mode`/`splitSpreads`/supplied-PDF-filing correctness, that a cancel — before a run starts, or mid-item — settles every affected stage `Pending`, never `Failed`, with exactly one terminal `Cancelled` event and no misleading per-item `Done`, and (new, 2026-08-26) that a cancel landing during `pdf`/`thumbnail` also settles the still-queued `ocr` stage `Pending`, not a stale precondition `Failed` |
 | `config_store.rs` | 8 | store round-trip, partial config, corrupt-file tolerance |
 | `db_sync_runs.rs` | 6 | ordering, limits, retention cap |
 | `workflow.rs` | 3 | full lifecycle; rebuild-from-folders; reopen |
 | `db/mod.rs` (unit) | 3 | migration idempotence, timestamp format |
+| `core::python` (unit, new 2026-08-24) | 2 | a cancelled child is killed within ~1s rather than waited out; a script that floods stderr (the `ocr.py` shape) still completes without deadlocking the undrained-pipe pathway |
 
 The unicode coverage is deliberate: `ОКТОИХ петогласник 2` — Cyrillic **with
 spaces** — comes from the real corpus and is a documented risk area
@@ -260,12 +375,28 @@ The `http:default` allow-list (backend + COBISS hosts) was already present.
 
 ## 8. What is still owed by this lane
 
-- **`jobs_start` / `jobs_cancel` / `jobs_reprocess`** and the three `job://*`
-  events — the queue, OCR-aware concurrency cap, single-run lock, and
-  `(inputShape, stage) → script` mapping. See
-  [Epic 06](tasks/06-processing-pipeline-and-jobs.md).
-- **The Python fixes** — `web.py` cannot process any real scan folder today.
-  See [py-real-data-mismatches](tasks/py-real-data-mismatches.md).
+- **Concurrency/queueing for `jobs_*`** — the first slice is sequential (one
+  item, one stage at a time); an OCR-aware concurrency cap is still open
+  question #3 in [Epic 06](tasks/06-processing-pipeline-and-jobs.md). Real
+  cancellation (below) is a prerequisite for this, not a substitute — it just
+  landed first because it was unblocked.
+- **`child.kill()` on Windows reaches the interpreter process only** — if a
+  script ever spawned its own children they would survive the kill; none of
+  the four scripts does today, so this is a stated limit, not an open bug. A
+  Job Object would be the real fix, same reasoning as `ocr.py`'s memory cap
+  already being a documented no-op on Windows.
+- **Automatic spread detection** — `splitSpreads` is honoured but stays an
+  operator toggle: telling a 2-up spread from a landscape map needs pixel
+  access (docs/05 open question #4). Related and also open: whether cover
+  shots should be excluded from splitting (#5).
+- **Sidecar Python bundling** — the runner shells out to system `python`/`py`
+  on `PATH`, fine for dev, not for a shipped installer. Epic 11.
 - **Per-file re-upload granularity** (Epic 07) — an optimisation, not a blocker.
 - **Packaging** — [Epic 11](tasks/11-packaging-and-distribution.md), entirely
   unstarted.
+
+~~The Python fixes~~ — done, 2026-08-20. ~~The real `jobs_*` runner~~ — first
+slice done, 2026-08-21 (see §1 above). ~~True mid-process cancellation~~ —
+done, 2026-08-24, along with the main-thread-blocking bug it depended on
+fixing first (see §1). `py/README.md` documents the Python side;
+`src-tauri/tests/core_jobs.rs` documents the Rust side's real coverage.

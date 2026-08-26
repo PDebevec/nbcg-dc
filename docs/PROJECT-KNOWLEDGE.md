@@ -548,10 +548,27 @@ src/
 - **GUI:** everything `.vue`/`.css` — the 5 views + batch-work tabs, the rail /
   footer / toasts, and each epic's screen (see the per-epic "Owed by GUI"
   sections). Presentation imports composables + domain types only.
-- **Arch:** the whole `commands/` surface declared in `src/ipc/bindings.ts` —
-  `config_*`, `fs_*`, `index_*`, `batch_*`, `jobs_*`, `sync_*` — plus registering
-  `tauri-plugin-http` with the backend host allow-listed (or client `fetch` is
-  denied at runtime), and wiring `tauri-specta`. Two capability items are easy to
+  **Flag, 2026-08-25:** this bullet and the composables list in §5/§7 read as
+  if none of this exists yet. They're stale — a pass (commit `15511db`
+  "Frontend v2, my TODO") already landed all 5 views, the three batch-work
+  tabs (`SetupTab`/`MetadataTab`/`ProcessingTab.vue`), and most of the
+  previously-"deferred" composables (`useProcessing`, `useMetadataForm`,
+  `useBatchSetup`, `useSettingsScreen`, `useSyncScreen`, `useParentLinks`,
+  `useConnection` all now exist under `src/composables/`). Verified for the
+  Processing tab specifically this pass; the rest is reported from a directory
+  listing, not individually audited — **treat this whole section as needing a
+  real doc-vs-code pass**, the same kind §9/§10 did for the backend contract,
+  before trusting its per-epic "Owed by GUI" detail.
+- **Arch:** see [06-native-core-and-dev-setup](06-native-core-and-dev-setup.md)
+  for the current, detailed state — this bullet is a stale high-level summary.
+  As of 2026-08-24: `config_*`/`fs_*`/`index_*`/`batch_*`/`sync_*` are done;
+  `jobs_*` runs for real across all six input shapes with genuine mid-process
+  cancellation (`jobs_start`/`jobs_reprocess` moved off the main thread,
+  `core::python` gained a real `Command::kill()` path); still owed there is the
+  queue/OCR-aware concurrency cap and Epic 11 packaging. Also still owed:
+  registering `tauri-plugin-http` with the backend host allow-listed (or client
+  `fetch` is denied at runtime), and wiring `tauri-specta`. Two capability
+  items are easy to
   miss because both fail *silently*: **`core:app:allow-version`** (or the Settings
   version line falls back to the compiled-in constant and drifts from the
   installed bundle) and the **`config_*_secret` commands** (or the Keycloak token
