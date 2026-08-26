@@ -4,43 +4,51 @@ OCR script for Montenegrin / Balkan-language documents (Latin or Cyrillic script
 Works on a single image or a PDF (all pages).
 
 Usage:
-    python3 run.py image.jpg
-    python3 run.py document.pdf
+    python3 ocr.py image.jpg
+    python3 ocr.py document.pdf
 
 Output:
     Saves a readable .txt file next to the input (same name, .txt extension),
     with one recognized line per line of text, and page separators for PDFs.
 
+Contract (seam 4 - Native <-> Python): arguments in -> the .txt output file +
+a JSON summary on stdout; human-readable logs go to stderr. Exit codes:
+
+    0  success
+    1  bad input path
+    2  input converted to zero OCR-able pages (e.g. an empty PDF)
+
 Requirements:
     pip install paddleocr paddlepaddle pdf2image
     System: poppler-utils (for pdf2image)
         Ubuntu/Debian: sudo apt-get install poppler-utils
+        Windows: see py/requirements.txt
 """
 import argparse
+import logging
 import time
-from datetime import datetime
+from dataclasses import dataclass, field
 
 import sys
-import os
 from pathlib import Path
 
 import numpy as np
 import cv2
 from paddleocr import PaddleOCR
 
-import resource
+from nbcg_pipeline import apply_memory_cap, force_utf8_streams, print_summary
 
-# Maximum virtual memory: 8 GB
+# Maximum virtual memory: 8 GB. Best-effort - see nbcg_pipeline.limits for
+# why this is a no-op on Windows (this app's target OS has no POSIX rlimits;
+# the job runner's own concurrency cap is the real memory control).
 MAX_MEMORY = 8 * 1024 * 1024 * 1024
 
-resource.setrlimit(
-    resource.RLIMIT_AS,
-    (MAX_MEMORY, MAX_MEMORY)
-)
+logger = logging.getLogger("ocr")
+
 
 def log(msg):
-    now = datetime.now().strftime("%H:%M:%S")
-    print(f"[{now}] {msg}")
+    logger.info(msg)
+
 
 # Lazy import - only needed for PDFs
 def _pdf_to_images(pdf_path, dpi=300):
@@ -73,7 +81,7 @@ def _get_engine(lang):
         if lang == "rs_cyrillic":
             _OCR_ENGINES[lang] = PaddleOCR(
                 lang="cyrillic",
-                
+
                 # FORCE small detector
                 text_detection_model_name="PP-OCRv5_mobile_det",
 
@@ -199,8 +207,11 @@ def limit_image_size(image, max_pixels=12000000):
     )
 
 def ocr_image(image, langs=("rs_latin", "rs_cyrillic"), page_label=None):
+    """OCR one image, trying each language and keeping the best-scoring
+    result. Returns (lines, confidence) - the confidence is surfaced in the
+    run's JSON summary."""
     best_lines = []
-    best_score = -1
+    best_score = -1.0
     best_lang = None
 
     for lang in langs:
@@ -216,44 +227,79 @@ def ocr_image(image, langs=("rs_latin", "rs_cyrillic"), page_label=None):
         f"(avg confidence {best_score:.3f})"
     )
 
-    return _sort_lines_reading_order(best_lines)
+    return _sort_lines_reading_order(best_lines), max(best_score, 0.0)
 
 
-def process_file(input_path, langs):
+def process_file(input_path, langs, *, out_dir: Path | None = None) -> tuple[Path, int, float]:
+    """OCR `input_path` and return (output_path, page_count, avg_confidence).
+
+    Writes `<input-stem>.txt` next to the input by default; `out_dir`, when
+    given, writes it there instead (the job runner uses this to stage into a
+    temp location it then renames into place itself, for atomic writes)."""
     input_path = Path(input_path)
     if not input_path.exists():
-        print(f"Error: file not found: {input_path}")
-        sys.exit(1)
+        raise FileNotFoundError(f"file not found: {input_path}")
 
     ext = input_path.suffix.lower()
-    output_path = input_path.with_suffix(".txt")
+    dest_dir = out_dir if out_dir is not None else input_path.parent
+    output_path = dest_dir / (input_path.stem + ".txt")
 
     all_text_blocks = []
+    scores: list[float] = []
 
     if ext == ".pdf":
-        print(f"Converting PDF pages to images: {input_path}")
+        log(f"Converting PDF pages to images: {input_path}")
         pages = _pdf_to_images(str(input_path))
-        print(f"Found {len(pages)} page(s).")
+        log(f"Found {len(pages)} page(s).")
         for i, page_image in enumerate(pages, start=1):
-            print(f"Processing page {i}/{len(pages)}...")
-            lines = ocr_image(
+            log(f"Processing page {i}/{len(pages)}...")
+            lines, score = ocr_image(
                 _pil_to_bgr(page_image),
                 langs=langs,
                 page_label=f"page {i}",
             )
+            scores.append(score)
             all_text_blocks.append(f"--- Page {i} ---\n" + "\n".join(lines))
+        page_count = len(pages)
     else:
-        print(f"Processing image: {input_path}")
-        lines = ocr_image(str(input_path), langs=langs)
+        log(f"Processing image: {input_path}")
+        lines, score = ocr_image(str(input_path), langs=langs)
+        scores.append(score)
         all_text_blocks.append("\n".join(lines))
+        page_count = 1
 
     final_text = "\n\n".join(all_text_blocks)
 
+    dest_dir.mkdir(parents=True, exist_ok=True)
     output_path.write_text(final_text, encoding="utf-8")
-    print(f"\nDone. Text saved to: {output_path}")
+    log(f"Done. Text saved to: {output_path}")
+
+    avg_confidence = sum(scores) / len(scores) if scores else 0.0
+    return output_path, page_count, avg_confidence
 
 
-def main():
+@dataclass
+class OcrSummary:
+    """The JSON payload written to stdout - additional to the .txt output
+    file, not a replacement for it."""
+    input: str = ""
+    output_text: str = ""
+    pages: int = 0
+    avg_confidence: float = 0.0
+    memory_cap_applied: bool = False
+    elapsed_seconds: float = 0.0
+    errors: list[str] = field(default_factory=list)
+
+
+def main() -> int:
+    force_utf8_streams()
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] %(message)s",
+        datefmt="%H:%M:%S",
+        stream=sys.stderr,
+    )
+
     parser = argparse.ArgumentParser()
 
     parser.add_argument("input")
@@ -264,21 +310,46 @@ def main():
         default=["rs_latin", "rs_cyrillic"],
         help="PaddleOCR language code(s), e.g. rs_latin rs_cyrillic",
     )
+    parser.add_argument(
+        "--out-dir",
+        type=str,
+        default=None,
+        help="Write the .txt output into this directory instead of next to "
+             "the input (the job runner uses this for atomic writes).",
+    )
 
     args = parser.parse_args()
 
     langs = tuple(args.lang)
+    out_dir = Path(args.out_dir) if args.out_dir else None
 
     start = time.perf_counter()
-
     log("Starting OCR")
 
-    process_file(args.input, langs)
+    memory_cap_applied = apply_memory_cap(MAX_MEMORY)
+    log(f"Memory cap applied: {memory_cap_applied}")
 
-    elapsed = time.perf_counter() - start
+    summary = OcrSummary(input=str(args.input), memory_cap_applied=memory_cap_applied)
 
-    log(f"Finished in {elapsed:.1f} seconds")
+    try:
+        output_path, page_count, avg_confidence = process_file(args.input, langs, out_dir=out_dir)
+    except FileNotFoundError as exc:
+        log(f"Error: {exc}")
+        summary.errors.append(str(exc))
+        summary.elapsed_seconds = time.perf_counter() - start
+        print_summary(summary)
+        return 1
+
+    summary.output_text = str(output_path)
+    summary.pages = page_count
+    summary.avg_confidence = avg_confidence
+    summary.elapsed_seconds = time.perf_counter() - start
+
+    log(f"Finished in {summary.elapsed_seconds:.1f} seconds")
+    print_summary(summary)
+
+    return 2 if page_count == 0 else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

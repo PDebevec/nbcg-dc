@@ -32,8 +32,14 @@ Originals are **never modified or deleted** — output goes to a separate folder
 ## Ordering
 
 Images are discovered in **natural (numeric-aware) order**, so `2.jpg` sorts
-before `10.jpg`. Plain lexicographic sorting — what `web.py` currently does —
-shuffles a book (`1, 10, 100, 2, …`), which is silent and ruinous.
+before `10.jpg`. Plain lexicographic sorting shuffles a book
+(`1, 10, 100, 2, …`), which is silent and ruinous — `web.py` used to do this
+before both scripts moved onto the shared `nbcg_pipeline.find_images`.
+
+`--pages` overrides discovery entirely with an exact ordered list. The job
+runner passes `ItemRunRequest.pageImages` — the order the `.ts` lane already
+computed — so that order is decided once and not re-derived here; `Summary.pages`
+then carries the resulting split-page order onward to `web.py --pages`.
 
 Each spread yields `<stem>_1` (left) and `<stem>_2` (right), reversed with
 `--rtl` for right-to-left scripts. Keeping the source stem makes every output
@@ -70,9 +76,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
-import re
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -80,11 +84,11 @@ from pathlib import Path
 
 from PIL import Image
 
+from nbcg_pipeline import find_images, force_utf8_streams, print_summary
+
 # ---------------------------------------------------------------------------
 # Config / defaults
 # ---------------------------------------------------------------------------
-
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 
 # Width/height at or above which a landscape image is treated as a spread. Two
 # portrait pages side by side land near 1.4–1.6; a single portrait page is < 1.0.
@@ -104,45 +108,7 @@ GUTTER_SCAN_WIDTH = 600
 
 DEFAULT_JPEG_QUALITY = 92
 
-# Files that are never pages: OS artifacts and derived preview variants such as
-# `SP_001 (Small).jpg`, which sits beside its full-size original.
-SKIP_NAMES = {"thumbs.db", "desktop.ini", ".ds_store"}
-VARIANT_STEM_PATTERN = re.compile(
-    r"\((?:small|medium|large|copy|preview|thumb)\)\s*$", re.IGNORECASE
-)
-
 log = logging.getLogger("split_spreads")
-
-
-# ---------------------------------------------------------------------------
-# Discovery
-# ---------------------------------------------------------------------------
-
-def natural_key(path: Path) -> list:
-    """Sort key that reads digit runs as numbers, so `2` precedes `10`."""
-    return [
-        int(part) if part.isdigit() else part.lower()
-        for part in re.split(r"(\d+)", path.name)
-    ]
-
-
-def is_skippable(path: Path) -> bool:
-    """OS artifacts and derived preview variants are not pages."""
-    if path.name.lower() in SKIP_NAMES:
-        return True
-    return bool(VARIANT_STEM_PATTERN.search(path.stem))
-
-
-def find_images(folder: Path) -> list[Path]:
-    """Page-candidate images in `folder`, in natural order."""
-    images = [
-        p
-        for p in folder.iterdir()
-        if p.is_file()
-        and p.suffix.lower() in IMAGE_EXTENSIONS
-        and not is_skippable(p)
-    ]
-    return sorted(images, key=natural_key)
 
 
 # ---------------------------------------------------------------------------
@@ -283,10 +249,30 @@ class Summary:
     pages: list[str] = field(default_factory=list)
 
 
+def resolve_pages(folder: Path, pages: list[str], summary: Summary) -> list[Path]:
+    """The caller's exact ordered page list, resolved against `folder`.
+
+    A named file that isn't there is reported and skipped rather than failing
+    the whole folder - same handling (and same message) as `web.py --pages`.
+    """
+    resolved: list[Path] = []
+    for name in pages:
+        candidate = folder / name
+        if not candidate.is_file():
+            summary.errors.append(f"--pages entry not found: {name}")
+            log.error("missing %s", name)
+            continue
+        resolved.append(candidate)
+    return resolved
+
+
 def process_folder(folder: Path, args: argparse.Namespace) -> Summary:
     summary = Summary(folder=str(folder), dry_run=args.dry_run)
 
-    images = find_images(folder)
+    if args.pages is not None:
+        images = resolve_pages(folder, args.pages, summary)
+    else:
+        images = find_images(folder)
     summary.images_found = len(images)
     if not images:
         log.warning("No images found in %s", folder)
@@ -368,6 +354,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output folder (default: <folder>/split). Originals are never touched.",
     )
     parser.add_argument(
+        "--pages",
+        nargs="+",
+        default=None,
+        metavar="FILE",
+        help="Exact ordered list of image filenames (relative to the folder) to "
+             "split, instead of discovering and natural-sorting the folder. Lets "
+             "a caller that already computed the authoritative page order (the "
+             "job runner, from ItemRunRequest.pageImages) hand it over directly "
+             "rather than this script re-deriving it - otherwise the order would "
+             "be decided in two places and could disagree. Files named here but "
+             "not present are reported in the summary and skipped.",
+    )
+    parser.add_argument(
         "--threshold",
         type=float,
         default=DEFAULT_SPREAD_THRESHOLD,
@@ -415,31 +414,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def force_utf8_streams() -> None:
-    """
-    Make stdout/stderr UTF-8 regardless of the console's code page.
-
-    Windows consoles default to a legacy ANSI code page (cp1250 here), which
-    **cannot encode Cyrillic** — so printing the JSON summary for
-    `ОКТОИХ петогласник 2` raised `UnicodeEncodeError` and killed the script
-    after all the work was done. Since the summary is the machine-readable half
-    of the seam-4 contract, and Montenegrin material is routinely Cyrillic, the
-    streams are pinned to UTF-8 rather than left to the environment.
-
-    stderr additionally uses `backslashreplace` so a log line can never take the
-    process down, even if the stream ends up somewhere stricter.
-    """
-    for stream, errors in ((sys.stdout, "strict"), (sys.stderr, "backslashreplace")):
-        reconfigure = getattr(stream, "reconfigure", None)
-        if reconfigure is not None:
-            try:
-                reconfigure(encoding="utf-8", errors=errors)
-            except (ValueError, OSError):
-                # A stream that refuses reconfiguration (already detached, or a
-                # non-text wrapper) is not worth failing the run over.
-                pass
-
-
 def main() -> int:
     force_utf8_streams()
     args = build_parser().parse_args()
@@ -457,12 +431,14 @@ def main() -> int:
         return 1
 
     summary = process_folder(folder, args)
-    # `ensure_ascii=False` keeps Cyrillic filenames readable in the summary.
-    print(json.dumps(summary.__dict__, indent=2, ensure_ascii=False))
+    print_summary(summary)
 
-    if summary.images_found == 0:
-        return 2
-    return 1 if summary.errors else 0
+    # Errors outrank "found nothing": a --pages list whose every entry is
+    # missing leaves images_found at 0, but that is a caller mistake (exit 1),
+    # not an empty folder (exit 2).
+    if summary.errors:
+        return 1
+    return 2 if summary.images_found == 0 else 0
 
 
 if __name__ == "__main__":
