@@ -32,6 +32,19 @@ a **separate axis** (backend reachability), never mixed into item state.
       set** (TIFFs / PDF(s) / image(s) / text), level (`main`/`child`), per-stage
       status, `backendId`, and flags. — logic ✓ (`ipc.index.scan` contract +
       `services/indexing.toItem`, assets classified by `domain/files`); ⤳ Arch fs scan.
+      **Bug, found + fixed 2026-08-26** (real-data smoke test — see
+      [05-real-scan-data](../05-real-scan-data.md)): `toItem` left a stage the
+      index never recorded at raw `pending` instead of downgrading a
+      genuinely non-applicable one (e.g. `pdf` on an `images-only` item) to
+      `skipped` — `domain/pipeline.markNonApplicableSkipped` existed and was
+      unit-tested but was never actually called from here. Real consequence:
+      a standalone graphical work could never clear its upload gate. Now
+      wired in; regression test in `services/indexing.test.ts`.
+      **Recursion, 2026-08-27**: "one folder = one item" now applies at
+      **any** depth under a root, not just the top level — see
+      [nested-record-folders-and-manual-selection](nested-record-folders-and-manual-selection.md)
+      for the full change (scan recursion, the relative-path id scheme, hide/
+      show-hidden, the folder-contents peek).
 - [x] **SQLite index** (see [architecture](../02-architecture.md)): schema +
       Rust-core helpers tracking, per item: path, per-stage state
       (`pdf`/`thumbnail`/`ocr`/`metadata`/`upload`), connected backend id, upload
@@ -70,9 +83,10 @@ a **separate axis** (backend reachability), never mixed into item state.
       control on selectable filters. — logic ✓ (`useOverview.onRowClick`,
       `selectAllVisible`, `allVisibleSelected`); ⤳ *open* navigates in Epic 03; GUI wires clicks.
 - [x] **⋯ row menu**: **Open as batch** (also the gesture that starts the
-      single-item short-circuit — see [batches](03-batches-and-lifecycle.md)) and
+      single-item short-circuit — see [batches](03-batches-and-lifecycle.md)),
       **Open in Explorer** (opens the item's local folder in the OS file manager
-      via Tauri). — logic ✓ Open in Explorer (`useOverview.openInExplorer` →
+      via Tauri), **Hide/Unhide**, and **View contents** (2026-08-27, see below).
+      — logic ✓ Open in Explorer (`useOverview.openInExplorer` →
       `fs_reveal_path`); ⤳ Open as batch is an Epic 03 seam; Arch implements `fs_reveal_path`.
 - [x] **Create batch** bar appears when items are selected → creates a batch and
       moves the selection to **In progress** (hands off to
@@ -114,10 +128,10 @@ leak on fast mount/unmount)._
 | Asset classification (naming convention) | `src/domain/files.ts` (`classifyAsset`, `thumbnailCandidates`, `ocrApplicable`, `uploadRoleFor`) + `files.test.ts` |
 | Filters / selection scoping / search / counts | `src/domain/overview.ts` (`OVERVIEW_FILTERS`, `filterState`, `SELECTABLE_FILTERS`, `matchesSearch`, `countByFilter`) + `overview.test.ts` |
 | `metadata.json` envelope | `src/domain/metadata.ts` (`LocalMetadataFile`) |
-| Native contract (Seam 2) | `src/ipc/bindings.ts` (`index_scan/list/rebuild`, `fs_read/write_metadata`, `fs_reveal_path`, `fs_move_to_processed`, `IndexedItemDto`) |
-| Index service | `src/services/indexing.ts` (DTO→`Item` map, scan/list/rebuild, metadata I/O, reveal, move, `watchIndexChanges`) |
-| Reactive state | `src/stores/useItems.ts` (items, filter, search, state-scoped selection, live counts, debounced fs-watch) |
-| View-model (Seam 1) | `src/composables/useOverview.ts` (`rows`, `filters`, `search`, `infoLine`, selection signals, row actions) |
+| Native contract (Seam 2) | `src/ipc/bindings.ts` (`index_scan/list/rebuild`, `fs_read/write_metadata`, `fs_reveal_path`, `fs_move_to_processed`, `IndexedItemDto`, + 2026-08-27: `index_set_hidden`, `fs_peek_folder`, `FolderPeekDto`, `IndexedItemDto.relativePath/hidden`) |
+| Index service | `src/services/indexing.ts` (DTO→`Item` map, scan/list/rebuild, metadata I/O, reveal, move, `watchIndexChanges`, + 2026-08-27: `setItemHidden`, `peekFolder`) |
+| Reactive state | `src/stores/useItems.ts` (items, filter, search, state-scoped selection, live counts, debounced fs-watch, + 2026-08-27: `showHidden`, `setHidden`, `peek`/`peekResult`) |
+| View-model (Seam 1) | `src/composables/useOverview.ts` (`rows`, `filters`, `search`, `infoLine`, selection signals, row actions, + 2026-08-27: `toggleShowHidden`, `hideRow`/`unhideRow`, `viewContents`) |
 
 ### GUI dev (`.vue` / `.css`) — bind `useOverview()` only
 
@@ -125,9 +139,10 @@ Import **only** `composables/useOverview` (+ `domain` types); never `services`/
 `ipc`/`stores`. Everything below is already reactive off that one composable:
 
 - **Arrivals table** (`views/OverviewView.vue`, `components/table/*`): render
-  `rows` — each row has `folderName`, `title`, `catalogueId`, `level`, `state` +
+  `rows` — each row has `folderName`, `relativePath`, `depth` (2026-08-27, for
+  indentation — see below), `title`, `catalogueId`, `level`, `state` +
   `stateLabel`, `pips` (5 × `{stage,label,status}`), `errorMessage`, `selected`,
-  `selectable`, `locked`.
+  `selectable`, `locked`, `hidden`.
 - **Stage pips** (`StagePips.vue`): map each `pip.status`
   (`pending`=ring · `queued`/`running`=spinner · `done`/`failed`/`re-upload`/`skipped`=coloured dot).
 - **State pill** (`StatePill.vue`): colour by `row.state`; show `errorMessage` on Stopped rows.
@@ -138,7 +153,12 @@ Import **only** `composables/useOverview` (+ `domain` types); never `services`/
   `selectAllVisible()` / `allVisibleSelected`.
 - **Search box**: `v-model` → `search` / `setSearch(q)`.
 - **⋯ menu**: **Open in Explorer** → `openInExplorer(id)`; **Open as batch** →
-  `openAsBatch(id)` (stub toast until Epic 03).
+  `openAsBatch(id)` (stub toast until Epic 03); **Hide**/**Unhide** →
+  `hideRow(id)`/`unhideRow(id)` (2026-08-27, disable when `row.locked`); **View
+  contents** → `viewContents(id)`, rendering `peekResult`/`peekLoading` (a
+  dismissible panel; `closePeek()` to dismiss).
+- **Toolbar**: a **Show hidden** toggle → `toggleShowHidden()` / `showHidden`
+  (2026-08-27) — a hidden row is otherwise excluded from `rows` entirely.
 - **Create-batch bar**: show when `canCreateBatch`; button → `createBatch()`
   (stub toast until Epic 03); `selectionCount` for the label.
 - Call `init()` on mount / `dispose()` on unmount **only if** you don't rely on
@@ -152,17 +172,25 @@ backed by `core/fs` + `core/db`, and keep `dto.rs` in serde-sync with
 `IndexedItemDto`/`IndexedAssetDto`/`IndexedStageDto` (field names camelCase over IPC).
 
 - `index_scan` / `index_list` / `index_rebuild` → `IndexedItemDto[]`. Scan
-  `/unprocessed` + `/processed` (one folder = one item), reconcile the **SQLite
-  index** (path, per-stage status, `uploaded`/`reupload`, `backendId`, `batchId`,
-  timestamps), and for each folder return the raw file list (`assets`: filename +
-  path + optional size — **do not** classify; the `.ts` lane does that) plus
+  `/unprocessed` + `/processed` **recursively, to any depth** (2026-08-27 — one
+  folder = one item at whatever depth it sits, not just the top level),
+  reconcile the **SQLite index** (path, `relativePath`, per-stage status,
+  `uploaded`/`reupload`, `backendId`, `batchId`, `hidden`, timestamps), and for
+  each folder return the raw file list (`assets`: filename + path + optional
+  size — **do not** classify; the `.ts` lane does that) plus
   `level`/`title`/`cobissId` read from `metadata.json` when present. `rebuild`
-  reconstructs the DB purely from folders (`metadata.json` + derived-file presence).
+  reconstructs the DB purely from folders (`metadata.json` + derived-file
+  presence), preserving each surviving id's `hidden` flag.
 - `fs_read_metadata(path)` → `LocalMetadataFile | null`; `fs_write_metadata(path, metadata)`
   (**atomic** write). `fs_reveal_path(path)` → reveal in the OS file manager
   (the bundled `@tauri-apps/plugin-opener` `revealItemInDir` is fine).
   `fs_move_to_processed(itemId)` → move the folder `/unprocessed`→`/processed`,
+  **preserving its relative path** (so a nested item's id survives the move),
   update the index, return the updated `IndexedItemDto`.
+- `index_set_hidden(itemId, hidden)` → `IndexedItemDto` (2026-08-27). `fs_peek_folder(path)`
+  → `FolderPeekDto` (a thin wrapper reusing `describe_folder`; not necessarily
+  a tracked item). Both detailed in
+  [nested-record-folders-and-manual-selection](nested-record-folders-and-manual-selection.md).
 - Emit **`fs://changed`** (`{root, kind, path}`, see `src/ipc/events.ts`) from a
   native watcher on both roots so new/changed folders refresh without a restart.
 - Register `tauri-plugin-http` + `@tauri-apps/plugin-opener` and their

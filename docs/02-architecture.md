@@ -76,7 +76,10 @@ authoritative catalog data.
 ### Per-item folder (self-contained)
 
 Each record/item lives in its **own folder** (one folder = one record — see
-[decisions](03-open-questions.md)) under **`/unprocessed`** while it needs work,
+[decisions](03-open-questions.md); since 2026-08-27 this holds at **any**
+depth under the root, not just the top level — see
+[nested-record-folders-and-manual-selection](tasks/nested-record-folders-and-manual-selection.md))
+under **`/unprocessed`** while it needs work,
 then **moved to `/processed`** once processed + described + uploaded. Contents:
 
 - `*.tif` — the source scans.

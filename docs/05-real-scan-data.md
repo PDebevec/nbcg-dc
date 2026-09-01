@@ -223,6 +223,33 @@ scan), so the operator cleans the folder.
    opposite correct answer). Decision and task:
    [nested-record-folders-and-manual-selection](tasks/nested-record-folders-and-manual-selection.md).
 
+## Bugs found smoke-testing against `arh/` (2026-08-26)
+
+Driving the real app against a fuller real slice of the corpus (`arh/`, see
+`Still open` #6 above) surfaced two real bugs, both fixed same-day:
+
+- **An `images-only` item's upload gate never cleared.** `domain/pipeline.markNonApplicableSkipped`
+  existed and was unit-tested, but was never actually called from production
+  code — `services/indexing.toItem` (the sole DTO→`Item` mapping every read
+  path funnels through) left a stage the index never recorded at its raw
+  default, `pending`, rather than downgrading a genuinely-N/A one (e.g. `pdf`
+  on a standalone map image) to `skipped`. `domain/upload.uploadBlockers`
+  only accepts `done`/`skipped` as satisfied, so every real `images-only`
+  item (`Budua und Cetinje`, `Успомена са Цетиња`) showed a permanent, false
+  "Not fully processed yet (pdf)" blocker — a graphical work could never
+  upload. Fixed by wiring `markNonApplicableSkipped` into `toItem` (`services/indexing.ts`);
+  regression test in the new `services/indexing.test.ts`.
+- **An early cancel could leave OCR permanently `Failed` instead of settling
+  `Pending`** — see the "second cancel bug, found smoke-testing... 2026-08-26"
+  addendum in [06-processing-pipeline-and-jobs](tasks/06-processing-pipeline-and-jobs.md)'s
+  cancellation section for the full root cause and fix
+  (`core::jobs::run_ocr_stage`).
+
+Both were invisible to every existing test — including the extensive unit
+suites written earlier the same session — because they only manifest against
+a real, multi-stage item under real subprocess timing: the exact reason this
+whole real-data pass exists.
+
 ## Two mismatches in `py/` for the Arch lane
 
 Found while reading `py/web.py` against the real corpus. Neither is my lane, both

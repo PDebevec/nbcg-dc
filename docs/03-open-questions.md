@@ -105,7 +105,13 @@
   `<name>_archive.pdf`, `<name>_thumb.png`, `<name>.txt`, `<name>.json`) — **for
   now**; multi-page items append an unpadded page number (`…_1.pdf`, `…_2.pdf`,
   …). We build on the assumption that **folder names are correct/unique at scan
-  time**. When a folder holds **several PDFs/images**, those discovered files
+  time**. *(2026-08-27: "unique" is now enforced per-relative-path, not just per
+  bare name — `core::fs::item_id_for` hashes the path relative to the scan root,
+  so two folders at different depths sharing a leaf name, e.g. `arh/BookA/1` and
+  `arh/BookB/1`, no longer collide onto the same item id now that folders can
+  nest to any depth; see
+  [nested-record-folders-and-manual-selection](tasks/nested-record-folders-and-manual-selection.md).)*
+  When a folder holds **several PDFs/images**, those discovered files
   keep their own filenames (used to match a PDF's text by base name). There is
   **no prefix/base-identifier picker** (the prototype's
   COBISS/Signature/Accession/Title picker is dropped) and **no backend naming

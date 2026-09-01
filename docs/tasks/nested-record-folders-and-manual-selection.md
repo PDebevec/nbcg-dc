@@ -1,6 +1,7 @@
 # Nested record folders: let the operator pick, don't guess
 
-> Lane: **Arch (`.rs`)** + **GUI (`.vue`)**, decision made · Found: 2026-08-26
+> Lane: **Arch (`.rs`)** + **GUI (`.vue`)**, **decided, built and shipped
+> 2026-08-27** · Found: 2026-08-26
 > Data: [05-real-scan-data](../05-real-scan-data.md) (a fuller slice, `arh/`,
 > supplied by Peter 2026-08-26) · Relates to: Epic 02
 
@@ -59,33 +60,63 @@ operator action; it does not need to change how an already-flat archive
 works today (a root full of plain item folders should still just show up,
 zero extra clicks).
 
-## Open mechanics (not yet decided — this is a task doc, not a spec)
+## What actually shipped (2026-08-27) — supersedes "Open mechanics" below
 
-- **New Rust IPC surface** to browse: something like
-  `fs_list_subfolders(path) -> [{name, path, hasDirectFiles, subfolderCount}]`
-  so the GUI can walk one level at a time without a full recursive scan up
-  front. Reuse `describe_folder`'s per-folder inspection rather than
-  duplicating it.
-- **Registering a manually-picked folder as an item.** Today every `items`
-  row comes from `scan_root`'s implicit one-level walk. Need either a new
-  command (`index_add_item(path)`) or a generalization of the existing
-  scan/reconcile path to accept explicit paths at arbitrary depth under the
-  root, alongside the automatic top-level ones.
-- **Avoiding a double-listing.** Once `Cèrnagora/CERNAGORA` is manually
-  claimed, should `Cèrnagora` itself stop appearing as its own (wrong,
-  wrapper) top-level item from the automatic scan? Almost certainly yes —
-  needs a rule, e.g. "a folder with a manually-claimed descendant is excluded
-  from the automatic listing," mirroring `web.py`'s own "a folder already
-  claimed as an item should not have its own subfolders reprocessed," just
-  running in the other direction.
-- **GUI**: Overview needs a way to enter "browse instead of accept the
-  automatic listing" for a given row — a tree/drill-down view, not just the
-  current flat table. Exact interaction (a folder icon that expands in
-  place? a separate picker dialog? multi-select at a chosen depth, like
-  selecting `CERNAGORA` and `CERNAGORA... 1851` in one pass?) is undecided.
-- **DB/schema**: confirm `items.folder_path` and whatever currently assumes
-  "one level under the root" (if anything does, beyond `scan_root` itself)
-  tolerates an arbitrary-depth path cleanly.
+The mechanics sketched below (browse-one-level-at-a-time,
+`fs_list_subfolders`, a manual "claim this folder" command, a
+double-listing-exclusion rule) turned out to be more machinery than the
+problem needed. What shipped instead, per a later, more concrete instruction
+from Peter ("depth doesn't matter, every folder is a potential record, the
+operator hides the noise, just like file explorer"):
+
+- **`core::fs::scan_root` now recurses to arbitrary depth** (capped at 32
+  levels, a pure safety valve) — **every** folder under a configured root is
+  a candidate item, full stop, no browse/claim step. `Cèrnagora`,
+  `Cèrnagora/CERNAGORA`, and `Cèrnagora/CERNAGORA... 1851` all show up as
+  three separate Overview rows automatically, indented to show the nesting
+  (rows sort parent-before-descendants for free — a relative-path string
+  sort already does this, no tree structure needed).
+- **Item identity changed from name-only to root-relative-path hashing**
+  (`core::fs::item_id_for`) — required, not a nicety: two folders at
+  different depths sharing a leaf name (`arh/BookA/1`, `arh/BookB/1`) would
+  otherwise collide onto the same id and silently overwrite each other in the
+  index. For every folder that existed before recursion (all depth-1), the
+  relative path *is* the bare name, so this is a no-op for all existing data
+  — confirmed by a dedicated regression test.
+- **No double-listing rule was needed.** Instead: a per-row **Hide** action
+  (Overview ⋯ menu) plus a **Show hidden** toolbar toggle. The operator hides
+  `Cèrnagora` (the wrapper — noise) and keeps its two children visible, or
+  hides `sa vodenim zigom` (the duplicate child under `Budua und Cetinje`)
+  directly. **Deliberately no cascade** — hiding a folder affects only that
+  row, never its descendants or ancestors. This was checked against both
+  motivating examples before deciding: cascading the `Cèrnagora` hide would
+  have taken its two real-book children down with it, which is exactly
+  backwards. Hidden state persists in the SQLite index (`items.hidden_at`,
+  nullable timestamp) and survives both a rescan and an index rebuild.
+- **Two new commands** rather than the sketched `fs_list_subfolders`/
+  `index_add_item`: `index_set_hidden(itemId, hidden)` (the Hide/Unhide
+  action) and `fs_peek_folder(path)` (the "View contents" row action — a
+  thin wrapper directly reusing `describe_folder`, exactly the reuse this
+  doc originally asked for, just attached to a simpler surface). "Open in
+  Explorer" needed no changes at all — `fs_reveal_path` already took an
+  arbitrary path.
+- **`move_to_processed` now preserves an item's full relative path** across
+  the `/unprocessed` → `/processed` move (previously flattened to the leaf
+  name) — required so a nested item's id survives the move under the new
+  relative-path-derived id scheme.
+
+## Open mechanics (historical — the original sketch, not what shipped)
+
+- ~~New Rust IPC surface to browse one level at a time
+  (`fs_list_subfolders`)~~ — not needed; full recursion + Hide replaced it.
+- ~~A manual "claim this folder as an item" command (`index_add_item`)~~ —
+  not needed; every folder is already a candidate.
+- ~~A rule to avoid double-listing a wrapper once a descendant is claimed~~ —
+  not needed; per-row Hide (no cascade) does this job better, since it also
+  covers the reverse case (hiding a noisy *child*, keeping the parent).
+- ~~A tree/drill-down GUI, exact interaction undecided~~ — a flat,
+  depth-indented table was sufficient; no expand/collapse control was built
+  (see Deferred below).
 
 ## Acceptance
 
@@ -95,7 +126,33 @@ zero extra clicks).
   keep `Budua und Cetinje`, `Успомена са Цетиња`, `Pisma iz Liona`, and
   `Plakat …` as the four top-level items they already are today — all eight,
   from one root, without renaming or restructuring anything on disk, and
-  without ever editing `config.json` by hand.
+  without ever editing `config.json` by hand. ✅ — verified live against
+  the real `arh/` data.
 - A folder structurally identical to another (loose file + one subfolder)
   but semantically different (`Budua und Cetinje` vs `Cèrnagora`) is never
-  silently misclassified either way — the operator decides both.
+  silently misclassified either way — the operator decides both, via Hide.
+  ✅
+
+## Deferred (fast-follows, not built in this pass)
+
+Real, deliberately-scoped-out polish — build only if it turns out to matter:
+
+- A real collapsible/expandable tree control in place of the flat
+  indented-and-sorted list.
+- A bulk "hide this folder's entire subtree in one click" action (per-row
+  hide is functionally complete without it, just more clicks on a very deep
+  wrapper).
+- Table virtualization/pagination if real candidate counts prove large
+  enough to matter (unknown yet — `arh/` today is dozens of folders, not
+  thousands).
+- Lazy/on-demand asset loading during the recursive scan if eager
+  `describe_folder`-per-folder proves slow on a much larger real archive.
+- Richer "view contents" previews (thumbnails/image preview) beyond
+  filename+size chips.
+- A "possible wrapper" hint badge (subfolder count) on rows that have
+  children.
+- Parent/child metadata auto-linking between sibling records discovered
+  under a common wrapper (`domain/parent.ts` territory — Epic 04/05, a
+  materially different and bigger design question).
+- Bulk hidden-state management (e.g. "un-hide everything") beyond the single
+  global show/hide toggle.

@@ -318,7 +318,7 @@ npm run tauri dev      # the real app, with the native core
 npm run build          # vue-tsc typecheck + vite build
 
 cd src-tauri
-cargo test             # 101 tests
+cargo test             # 119 tests
 cargo clippy --all-targets
 cargo fmt
 ```
@@ -331,7 +331,7 @@ no connection string, no manual migration step.
 
 ## 6. Test suite
 
-101 Rust tests, all against `core/` with real SQLite, real temp directories,
+119 Rust tests, all against `core/` with real SQLite, real temp directories,
 and — for `core_jobs.rs`/`core::python`'s own unit tests — real Python
 subprocesses (`web.py`/`split_spreads.py`/`pdf_derive.py`, and a bare `python
 -c` for the cancel/pipe-draining tests). No mocks, because the things worth
@@ -339,15 +339,16 @@ testing here are exactly the ones a mock would paper over.
 
 | File | Tests | Covers |
 |---|---|---|
-| `db_items.rs` | 20 | scan reconciliation, the three write paths, rebuild, `mark_needs_reupload` |
+| `db_items.rs` | 24 | scan reconciliation, the three write paths, rebuild, `mark_needs_reupload`, and (new, 2026-08-27) `set_hidden`, `hidden_at` surviving `reconcile`/`rebuild` |
 | `db_batches.rs` | 13 | numbering, atomic stamping, release-on-archive, rollback |
-| `fs_core.rs` | 25 | scanning, derived-file detection, atomic mirror, moves, **Cyrillic names**, `finalize_staged_output` |
+| `fs_core.rs` | 33 | scanning, derived-file detection, atomic mirror, moves, **Cyrillic names**, `finalize_staged_output`, and (new, 2026-08-27) recursion to arbitrary depth, the relative-path id scheme (including the leaf-name-collision case it exists to prevent), the dotfolder/junk-folder skip-list, the depth safety cap, a symlinked directory not being followed, and `move_to_processed` preserving a nested item's relative path + id |
 | `core_jobs.rs` | 21 | the job runner end to end across all six input shapes (real `web.py`/`split_spreads.py`/`pdf_derive.py`), the precondition-gated OCR path, the single-run lock, `primaryThumbnail`/`--mode`/`splitSpreads`/supplied-PDF-filing correctness, that a cancel — before a run starts, or mid-item — settles every affected stage `Pending`, never `Failed`, with exactly one terminal `Cancelled` event and no misleading per-item `Done`, and (new, 2026-08-26) that a cancel landing during `pdf`/`thumbnail` also settles the still-queued `ocr` stage `Pending`, not a stale precondition `Failed` |
 | `config_store.rs` | 8 | store round-trip, partial config, corrupt-file tolerance |
 | `db_sync_runs.rs` | 6 | ordering, limits, retention cap |
 | `workflow.rs` | 3 | full lifecycle; rebuild-from-folders; reopen |
 | `db/mod.rs` (unit) | 3 | migration idempotence, timestamp format |
 | `core::python` (unit, new 2026-08-24) | 2 | a cancelled child is killed within ~1s rather than waited out; a script that floods stderr (the `ocr.py` shape) still completes without deadlocking the undrained-pipe pathway |
+| `core::fs::watcher` (unit, new 2026-08-27) | 6 | `item_folder_for` at depth 1 (unchanged) and nested (a changed file maps to its immediate containing folder, not the top-level wrapper; a changed folder maps to itself), loose-file-at-root and outside-the-root edge cases |
 
 The unicode coverage is deliberate: `ОКТОИХ петогласник 2` — Cyrillic **with
 spaces** — comes from the real corpus and is a documented risk area
