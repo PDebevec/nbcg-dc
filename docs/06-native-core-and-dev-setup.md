@@ -1,7 +1,7 @@
 # NBCG-DC — Native core & developer setup
 
-> Status: **config + fs + db + jobs (first slice + real cancel) implemented**
-> Last updated: 2026-08-24 · Rust suite **100 green**, TS suite **618 green**
+> Status: **config + fs + db + jobs (queue + OCR-aware concurrency cap) implemented**
+> Last updated: 2026-09-01 · Rust suite **135 green**, TS suite **689 green**
 
 What the Rust lane (`src-tauri/`) currently does, how it is laid out, and what a
 developer needs installed to build or run it. This is the companion to
@@ -19,20 +19,28 @@ layout; this file records what actually exists.
 | `index_*` | 5 | ✅ implemented |
 | `batch_*` | 4 | ✅ implemented |
 | `sync_*` | 2 | ✅ implemented |
-| `jobs_*` | 3 | ✅ **implemented — first slice** (Epic 06) |
+| `jobs_*` | 3 | ✅ **implemented — queue + OCR-aware concurrency cap** (Epic 06) |
 
 Events: `fs://changed` and all three `job://*` channels ✅ emitted for real.
 
 **26 of 26 commands do real work.** `jobs_start`/`jobs_reprocess` spawn
 `py/web.py`/`py/ocr.py`/`py/split_spreads.py`/`py/pdf_derive.py` (system
 `python`/`py` on `PATH` — no sidecar bundling yet, deferred to Epic 11 while
-the app is dev-only) via `core::python`, sequentially — one item, one stage at
-a time, no concurrency/queue. `core::jobs`
-does the orchestration: real SQLite stage writes (`set_stage`, pre-existing —
-its own doc comment anticipated this use), real `job://*` events, a native
-single-run lock (`AppState.job_run`), and atomic output writes (script writes
-into a `.nbcg-tmp-*` staging dir, Rust renames into place on success via the
-new `core::fs::finalize_staged_output`).
+the app is dev-only) via `core::python`. `core::jobs` does the orchestration:
+a bounded worker pool runs up to `JobLimits.max_concurrent_items` items at
+once (`std::thread::scope`), each through its own `pdf` → `thumbnail` → `ocr`
+stages in strict order; OCR is additionally capped batch-wide at
+`JobLimits.max_concurrent_ocr` (a small hand-rolled `Semaphore`) since it's
+the heavy stage — both default to a conservative, unmeasured guess (3 / 1,
+open question #3 is still open on the real number) and are a `config.json`-only
+knob (`PersistedConfig.maxConcurrentItems`/`maxConcurrentOcr`, hand-edited —
+never a Settings control, and never clobbered by one: `config_save` restores
+whichever is already on disk before writing, since the `.ts` settings type
+doesn't carry them). Real SQLite stage writes
+(`set_stage`, pre-existing — its own doc comment anticipated this use), real
+`job://*` events, a native single-run lock (`AppState.job_run`), and atomic
+output writes (script writes into a `.nbcg-tmp-*` staging dir, Rust renames
+into place on success via the new `core::fs::finalize_staged_output`).
 
 **All six `InputShape`s are handled:**
 
@@ -55,9 +63,11 @@ from the filed original rather than the previous output, or each run would
 downscale a downscale. See
 [docs/05 open question #1](05-real-scan-data.md), answered 2026-08-21.
 
-Deliberately **not** in this slice, flagged as follow-ups: true OCR-aware
-concurrency (still no queue — sequential only), and an *interactive*
-multi-candidate thumbnail picker (there is no GUI for one yet).
+Deliberately **not** in this slice, flagged as a follow-up: an *interactive*
+multi-candidate thumbnail picker (there is no GUI for one yet). The queue +
+OCR-aware concurrency cap, previously listed here as not-yet-built, landed
+2026-09-01 — see [Epic 06](tasks/06-processing-pipeline-and-jobs.md)'s own
+progress section for the mechanism.
 
 **Mid-process cancellation is real, 2026-08-24** — and fixing it surfaced a
 worse bug underneath. `jobs_start`/`jobs_reprocess` were plain synchronous
@@ -181,11 +191,11 @@ tests/                  integration tests over core/
 
 Created automatically at `%APPDATA%\local.nbcg-dc\index.db` on first launch,
 in WAL mode, with `foreign_keys` ON. Migrations run on startup, versioned via
-`PRAGMA user_version` (currently `1`).
+`PRAGMA user_version` (currently `3`).
 
 | Table | Holds |
 |---|---|
-| `items` | path, root, level, `backend_id`, `version`, `uploaded`/`reupload`, `batch_id`, `miss_streak`, title, timestamps |
+| `items` | path, root, level, `backend_id`, `version`, `uploaded`/`reupload`/`reupload_text_only`, `batch_id`, `miss_streak`, title, timestamps |
 | `item_stages` | `(item_id, stage)` → status + error, for the five pipeline stages |
 | `item_assets` | discovered files per item |
 | `batches` | one row per batch; `parents`/`overrides`/`proc` as JSON columns |
@@ -318,7 +328,7 @@ npm run tauri dev      # the real app, with the native core
 npm run build          # vue-tsc typecheck + vite build
 
 cd src-tauri
-cargo test             # 119 tests
+cargo test             # 135 tests
 cargo clippy --all-targets
 cargo fmt
 ```
@@ -331,7 +341,7 @@ no connection string, no manual migration step.
 
 ## 6. Test suite
 
-119 Rust tests, all against `core/` with real SQLite, real temp directories,
+135 Rust tests, all against `core/` with real SQLite, real temp directories,
 and — for `core_jobs.rs`/`core::python`'s own unit tests — real Python
 subprocesses (`web.py`/`split_spreads.py`/`pdf_derive.py`, and a bare `python
 -c` for the cancel/pipe-draining tests). No mocks, because the things worth
@@ -339,16 +349,17 @@ testing here are exactly the ones a mock would paper over.
 
 | File | Tests | Covers |
 |---|---|---|
-| `db_items.rs` | 24 | scan reconciliation, the three write paths, rebuild, `mark_needs_reupload`, and (new, 2026-08-27) `set_hidden`, `hidden_at` surviving `reconcile`/`rebuild` |
+| `db_items.rs` | 28 | scan reconciliation, the three write paths, rebuild, `mark_needs_reupload`, `set_hidden`, `hidden_at` surviving `reconcile`/`rebuild`, and (new, 2026-09-01) `ReuploadKind::Full`/`TextOnly` each setting the right column pair, `Full` never downgraded by a later `TextOnly`, `TextOnly` upgrading to `Full` on a later content change, and `record_upload` clearing both flags |
 | `db_batches.rs` | 13 | numbering, atomic stamping, release-on-archive, rollback |
 | `fs_core.rs` | 33 | scanning, derived-file detection, atomic mirror, moves, **Cyrillic names**, `finalize_staged_output`, and (new, 2026-08-27) recursion to arbitrary depth, the relative-path id scheme (including the leaf-name-collision case it exists to prevent), the dotfolder/junk-folder skip-list, the depth safety cap, a symlinked directory not being followed, and `move_to_processed` preserving a nested item's relative path + id |
-| `core_jobs.rs` | 21 | the job runner end to end across all six input shapes (real `web.py`/`split_spreads.py`/`pdf_derive.py`), the precondition-gated OCR path, the single-run lock, `primaryThumbnail`/`--mode`/`splitSpreads`/supplied-PDF-filing correctness, that a cancel — before a run starts, or mid-item — settles every affected stage `Pending`, never `Failed`, with exactly one terminal `Cancelled` event and no misleading per-item `Done`, and (new, 2026-08-26) that a cancel landing during `pdf`/`thumbnail` also settles the still-queued `ocr` stage `Pending`, not a stale precondition `Failed` |
-| `config_store.rs` | 8 | store round-trip, partial config, corrupt-file tolerance |
+| `core_jobs.rs` | 24 | the job runner end to end across all six input shapes (real `web.py`/`split_spreads.py`/`pdf_derive.py`), the precondition-gated OCR path, the single-run lock, `primaryThumbnail`/`--mode`/`splitSpreads`/supplied-PDF-filing correctness, that a cancel — before a run starts, or mid-item — settles every affected stage `Pending`, never `Failed`, with exactly one terminal `Cancelled` event and no misleading per-item `Done`, that a cancel landing during `pdf`/`thumbnail` also settles the still-queued `ocr` stage `Pending`, not a stale precondition `Failed`, that three items under the real default concurrency caps all still reach `Done` with exactly one terminal event arriving last, and (new, 2026-09-01) that a real `pdf`/`thumbnail` reprocess on an already-uploaded item marks a `Full` reupload while a `multiple-pdfs` item's pure `Pdf`-verify reprocess marks none at all |
+| `config_store.rs` | 10 | store round-trip, partial config, corrupt-file tolerance, and (new, 2026-09-01) `save_preserving_job_limits` keeping a hand-edited concurrency cap through a GUI-shaped save that omits it |
 | `db_sync_runs.rs` | 6 | ordering, limits, retention cap |
 | `workflow.rs` | 3 | full lifecycle; rebuild-from-folders; reopen |
-| `db/mod.rs` (unit) | 3 | migration idempotence, timestamp format |
+| `db/mod.rs` (unit) | 4 | migration idempotence, timestamp format, and recovering from a half-applied migration step |
 | `core::python` (unit, new 2026-08-24) | 2 | a cancelled child is killed within ~1s rather than waited out; a script that floods stderr (the `ocr.py` shape) still completes without deadlocking the undrained-pipe pathway |
 | `core::fs::watcher` (unit, new 2026-08-27) | 6 | `item_folder_for` at depth 1 (unchanged) and nested (a changed file maps to its immediate containing folder, not the top-level wrapper; a changed folder maps to itself), loose-file-at-root and outside-the-root edge cases |
+| `core::jobs` (unit, new 2026-09-01) | 6 | the `Semaphore` never exceeds its permit count under real (synthetic, timing-controlled) contention, and a released permit is genuinely reusable; `JobLimits::from_config` defaults on `None` and clamps a zero or implausibly large hand-edited value; `reupload_kind_for` prefers `Full` over `TextOnly` when both changed, is `TextOnly` when only text changed, and is `None` when nothing did — pinned directly since a real `text_changed = true` settle needs a live OCR pass this environment can't run |
 
 The unicode coverage is deliberate: `ОКТОИХ петогласник 2` — Cyrillic **with
 spaces** — comes from the real corpus and is a documented risk area
@@ -376,11 +387,6 @@ The `http:default` allow-list (backend + COBISS hosts) was already present.
 
 ## 8. What is still owed by this lane
 
-- **Concurrency/queueing for `jobs_*`** — the first slice is sequential (one
-  item, one stage at a time); an OCR-aware concurrency cap is still open
-  question #3 in [Epic 06](tasks/06-processing-pipeline-and-jobs.md). Real
-  cancellation (below) is a prerequisite for this, not a substitute — it just
-  landed first because it was unblocked.
 - **`child.kill()` on Windows reaches the interpreter process only** — if a
   script ever spawned its own children they would survive the kill; none of
   the four scripts does today, so this is a stated limit, not an open bug. A
@@ -392,12 +398,17 @@ The `http:default` allow-list (backend + COBISS hosts) was already present.
   shots should be excluded from splitting (#5).
 - **Sidecar Python bundling** — the runner shells out to system `python`/`py`
   on `PATH`, fine for dev, not for a shipped installer. Epic 11.
-- **Per-file re-upload granularity** (Epic 07) — an optimisation, not a blocker.
 - **Packaging** — [Epic 11](tasks/11-packaging-and-distribution.md), entirely
   unstarted.
 
 ~~The Python fixes~~ — done, 2026-08-20. ~~The real `jobs_*` runner~~ — first
 slice done, 2026-08-21 (see §1 above). ~~True mid-process cancellation~~ —
 done, 2026-08-24, along with the main-thread-blocking bug it depended on
-fixing first (see §1). `py/README.md` documents the Python side;
-`src-tauri/tests/core_jobs.rs` documents the Rust side's real coverage.
+fixing first (see §1). ~~Concurrency/queueing for `jobs_*`~~ — done,
+2026-09-01: a bounded worker pool + OCR-aware `Semaphore` cap (see §1 above).
+~~Per-file re-upload granularity~~ (Epic 07) — done, 2026-09-01, at
+item-level/per-stage granularity rather than true per-file — see
+`docs/tasks/07-upload-and-publish.md`'s own entry for why, and
+`core::jobs::reupload_kind_for`/`db::items::ReuploadKind`.
+`py/README.md` documents the Python side; `src-tauri/tests/core_jobs.rs`
+documents the Rust side's real coverage.

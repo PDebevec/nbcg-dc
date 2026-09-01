@@ -177,14 +177,26 @@ Epics 04/06 deferred their composables/stores):
 > registered in `src-tauri/src/lib.rs`'s `invoke_handler!`. `fs_read_file`
 > returns raw bytes via `tauri::ipc::Response`, as specified.
 
-- **Re-upload granularity** (enables the text-only optimisation): record a
-  **per-file** "what changed" signal on re-process (PDF changed vs only OCR
-  text). Today the logic lane uses the item-level `flags.reupload`: a re-upload
-  re-pushes a blob only when a derived file changed, a metadata-only re-upload
-  PATCHes and uploads only files the backend is missing (never re-PUTs unchanged
-  blobs), and a first upload's failed assets are recovered on retry. With a
-  per-file signal `services/upload` could further switch a text-only change to
-  `PUT /files/:fileId/text` (no blob) — the `setFileText` path is already wired.
+- ~~**Re-upload granularity**~~ — **done, 2026-09-01.** Deliberately
+  **item-level/per-stage**, not true per-file: `core::jobs::ItemOutcome`
+  splits into `content_changed` (a `pdf`/`thumbnail` stage produced new
+  bytes) and `text_changed` (only `ocr` did), and `reupload_kind_for` maps
+  that to `db::items::ReuploadKind::Full`/`TextOnly` — content always wins as
+  `Full`, even alongside a text change in the same pass. Persisted as a new
+  `items.reupload_text_only` column (`mark_needs_reupload`'s SQL never
+  downgrades an already-pending `Full` back to `TextOnly`), surfaced as
+  `IndexedItemDto.reuploadTextOnly`. `services/upload.pushReplaceAssets`
+  consumes it: `kind === "text-only"` pushes just the paired OCR text via
+  `setFileText` (no blob PUT) instead of `replaceFile`. True per-file
+  granularity (independent per-base tracking within a `multiple-pdfs` item)
+  was considered and deliberately deferred — it would require
+  `item_assets`'s scan-time delete-and-reinsert (`reconcile`) to start
+  preserving a per-row flag across an ordinary rescan, a materially bigger
+  change for uncertain benefit at today's scale. Found and fixed along the
+  way: `run_multiple_pdfs`'s `Pdf` arm only ever *verifies* the operator's
+  PDFs for that shape (never writes anything), so it no longer counts as
+  "content changed" — a plain re-verify used to spuriously flag `reupload`
+  on a `multiple-pdfs` item even when nothing on disk changed.
 - Ensure the `@tauri-apps/plugin-http` capability allow-lists the backend host
   (from Epic 01) — the multipart upload uses it.
 

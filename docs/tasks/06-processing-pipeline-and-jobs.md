@@ -8,9 +8,18 @@
 > also list the Processing tab (`.vue`) as remaining work — it isn't.
 > `src/views/batch/ProcessingTab.vue` and `src/composables/useProcessing.ts`
 > already exist and call the real `jobs_*` IPC, committed in `15511db "Frontend
-> v2, my TODO"`; the docs simply hadn't caught up. What's actually still open
-> here is the queue/OCR-aware concurrency cap (open question #3) and the
-> thumbnail grid picker.
+> v2, my TODO"`; the docs simply hadn't caught up. **The queue/OCR-aware
+> concurrency cap landed 2026-09-01** — a bounded worker pool
+> (`std::thread::scope`) runs up to `maxConcurrentItems` items at once, each
+> through its own `pdf` → `thumbnail` → `ocr` stages in order, with OCR
+> additionally gated batch-wide by `maxConcurrentOcr` (a hand-rolled
+> `Semaphore`) since PaddleOCR is the heavy stage. Both caps default to a
+> conservative guess (3 / 1) and are tunable **only** by hand-editing
+> `config.json` (`PersistedConfig.maxConcurrentItems`/`maxConcurrentOcr`) —
+> open question #3's real volume data still doesn't exist, so this ships a
+> first-slice default rather than a measured one; see
+> `src-tauri/src/core/jobs/mod.rs`'s `JobLimits`. What's actually still open
+> here is the thumbnail grid picker.
 
 Goal: run the five-stage pipeline per batch (with live progress and robust error
 handling) and drive the **Processing** half of the Processing & Upload tab.
@@ -289,8 +298,11 @@ in the folder:
       `item.stages` as given, with no independent notion of "done" to
       re-derive from, so there was nothing to build here beyond trusting the
       request (per the same single-source-of-truth principle as page order).
-- [ ] Concurrency/memory limits informed by real volumes — open question #3.
-      — **`.rs` ◻ (Arch) + open question #3.**
+- [x] Concurrency/memory limits — a first-slice default, not measured on real
+      volumes (open question #3 is still open on the *number*, just no longer
+      blocking).
+      — **`.rs` ✅, 2026-09-01:** `core::jobs::JobLimits` (3 concurrent items /
+      1 concurrent OCR, hand-edit `config.json` to change — no GUI control).
 
 ## Progress — logic lane (`.ts`) pass, 2026-08-05
 
@@ -561,6 +573,61 @@ three stages and confirming `ocr` settles `Pending` with no stale error.
 Confirmed against real data too: re-ran the exact cancel-mid-`pdf` scenario
 against a real 522-image item post-fix — the item now reads "Not started,"
 not red.
+
+## Progress — Arch lane, the queue / OCR-aware concurrency cap, 2026-09-01
+
+The last item the two entries above marked "still open, unchanged." `run_batch`
+was a plain sequential loop; it now runs up to `JobLimits.max_concurrent_items`
+items at once, each on its own worker thread (`std::thread::scope`, so `db`/the
+cancel token are borrowed, not `Arc`-wrapped), still through its own `pdf` →
+`thumbnail` → `ocr` stages in strict per-item order. OCR is additionally gated
+**batch-wide** by `JobLimits.max_concurrent_ocr` — a small hand-rolled counting
+`Semaphore` (`Mutex<usize>` + `Condvar`, ~100ms poll so a wait can still notice
+a cancel) — since PaddleOCR is the heavy stage and PDF/thumbnail assembly
+(Pillow/pypdfium2) is comparatively light; it's acquired once per item's whole
+OCR stage (covering every PDF that item's OCR pass runs, not once per PDF).
+
+Both caps default to a conservative, unmeasured guess (3 concurrent items, 1
+concurrent OCR) — open question #3's real hardware/volume data still doesn't
+exist. Rather than block on that, they're a `config.json`-only knob
+(`PersistedConfig.maxConcurrentItems`/`maxConcurrentOcr`, hand-edited, no
+Settings UI): `commands::config::config_save` restores whichever of the two is
+already on disk before writing, so an ordinary Settings save from the GUI
+(whose `.ts` type doesn't carry these fields at all) can never silently reset
+a hand-tuned value back to default. See `core::jobs::JobLimits`.
+
+Two mechanical consequences worth recording, both verified safe rather than
+assumed:
+
+- **`emit` stays a plain `FnMut`, not `Fn + Send + Sync`.** Worker threads
+  report events over an `mpsc` channel instead of calling `emit` directly; a
+  single collector loop — on the calling thread, inside the same
+  `thread::scope`, draining live while workers are still running rather than
+  after they all finish — is the only thing that ever calls `emit`. This
+  meant every existing test's `|e| events.push(e)`-style collector needed no
+  changes at all beyond the new `JobLimits` argument.
+- **`batch_complete: true` is now always its own synthetic event**
+  (`item_id: None`), emitted exactly once after every worker has joined,
+  never piggy-backed on "the last item by index" (meaningless once items run
+  concurrently). Verified safe against `src/services/pipeline.ts`'s
+  `applyJobDone` before making the change, not after: it already treated
+  `itemId` and `batchComplete` as fully orthogonal, and the cancellation and
+  empty-batch paths already used exactly this separate-event shape — so this
+  is a new *use* of an existing, already-handled contract, not a new one,
+  and needed no `.ts` change.
+
+Tests: every pre-existing `core_jobs.rs` test now runs under a `SEQUENTIAL`
+(`{1,1}`) `JobLimits` constant, forcing the exact ordering those tests already
+asserted on, unchanged. New: two `core::jobs::tests` unit tests pin the
+`Semaphore` itself against a synthetic, timing-controlled workload (never
+exceeds its permit count under real contention; a released permit is really
+reusable) plus one for `JobLimits::from_config`'s zero/oversized/`None`
+clamping — deterministic, no subprocess involved. One new `core_jobs.rs`
+integration test runs three items under the real default caps (real `web.py`
+calls) and asserts *outcome* correctness — every item still reaches `Done`,
+exactly one terminal event fires, and nothing arrives after it — rather than
+timing, which would be flaky against real subprocess scheduling. Two new
+`config_store.rs` tests pin the preserve-on-save behavior directly.
 
 ## Acceptance
 

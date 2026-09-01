@@ -152,8 +152,16 @@
    already exist in the backend (`EDITABLE_BASE_METADATA_SHAPE`,
    `DOMAIN_RECORD_SHAPE`).
 
-3. **Expected volumes & file sizes.** Pages/issue, MB/TIFF, items/batch — to set
-   OCR/PDF concurrency and memory limits.
+3. **Expected volumes & file sizes.** Pages/issue, MB/TIFF, items/batch — to
+   size OCR/PDF concurrency and memory limits precisely. **No longer
+   blocking, 2026-09-01:** the job runner ships a real queue with a
+   concurrency cap (`core::jobs::JobLimits` — 3 concurrent items, 1
+   concurrent OCR process, since OCR/PaddleOCR is the heavy stage), but
+   those two numbers are still a conservative guess, not a measured one.
+   They're a `config.json`-only knob (hand-edit
+   `maxConcurrentItems`/`maxConcurrentOcr`, no Settings UI) specifically so
+   real volume data, once it exists, can retune them without another
+   development pass.
 
 4. **Python invocation strategy** (sidecar / system / native). Blocks Epic 06
    (⛔) and Epic 11 packaging; parked as "Decided later" in

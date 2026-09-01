@@ -561,11 +561,15 @@ src/
   before trusting its per-epic "Owed by GUI" detail.
 - **Arch:** see [06-native-core-and-dev-setup](06-native-core-and-dev-setup.md)
   for the current, detailed state — this bullet is a stale high-level summary.
-  As of 2026-08-24: `config_*`/`fs_*`/`index_*`/`batch_*`/`sync_*` are done;
+  As of 2026-09-01: `config_*`/`fs_*`/`index_*`/`batch_*`/`sync_*` are done;
   `jobs_*` runs for real across all six input shapes with genuine mid-process
   cancellation (`jobs_start`/`jobs_reprocess` moved off the main thread,
-  `core::python` gained a real `Command::kill()` path); still owed there is the
-  queue/OCR-aware concurrency cap and Epic 11 packaging. Also still owed:
+  `core::python` gained a real `Command::kill()` path) **and** a real queue
+  with an OCR-aware concurrency cap (`core::jobs::JobLimits` — a bounded
+  worker pool plus a `Semaphore` gating OCR specifically, both a
+  conservative-default, `config.json`-only knob pending real volume data,
+  docs/03 open question #3); still owed there is Epic 11 packaging. Also
+  still owed:
   registering `tauri-plugin-http` with the backend host allow-listed (or client
   `fetch` is denied at runtime), and wiring `tauri-specta`. Two capability
   items are easy to
