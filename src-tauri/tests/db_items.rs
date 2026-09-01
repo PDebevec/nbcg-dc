@@ -176,6 +176,79 @@ fn reconcile_follows_a_folder_across_roots() {
     assert_eq!(db.with(items::list).unwrap().len(), 1);
 }
 
+#[test]
+fn reconcile_writes_relative_path_and_never_touches_hidden_at() {
+    let mut f = folder("BOOK-A", ScanRoot::Unprocessed);
+    f.relative_path = "Wrapper/BOOK-A".into();
+    let db = db_with(std::slice::from_ref(&f));
+
+    assert_eq!(
+        db.with(items::list).unwrap()[0].relative_path,
+        "Wrapper/BOOK-A"
+    );
+
+    db.with(|c| items::set_hidden(c, &f.id, true)).unwrap();
+    assert!(db.with(items::list).unwrap()[0].hidden);
+
+    // A rescan of the same folder is a filesystem observation and must not
+    // clear the operator's hide.
+    db.with(|c| items::reconcile(c, std::slice::from_ref(&f)))
+        .unwrap();
+    assert!(
+        db.with(items::list).unwrap()[0].hidden,
+        "reconcile must never touch hidden_at"
+    );
+}
+
+// ─── hide / unhide (operator curation) ──────────────────────────────────────
+
+#[test]
+fn set_hidden_round_trips() {
+    let f = folder("BOOK", ScanRoot::Unprocessed);
+    let db = db_with(std::slice::from_ref(&f));
+
+    assert!(!db.with(|c| items::get(c, &f.id)).unwrap().hidden);
+
+    db.with(|c| items::set_hidden(c, &f.id, true)).unwrap();
+    assert!(db.with(|c| items::get(c, &f.id)).unwrap().hidden);
+
+    db.with(|c| items::set_hidden(c, &f.id, false)).unwrap();
+    assert!(!db.with(|c| items::get(c, &f.id)).unwrap().hidden);
+}
+
+#[test]
+fn set_hidden_on_an_unknown_item_is_not_found() {
+    let db = Db::open_in_memory().unwrap();
+    assert!(matches!(
+        db.with(|c| items::set_hidden(c, "missing", true)),
+        Err(nbcg_dc_lib::error::AppError::NotFound(_)),
+    ));
+}
+
+#[test]
+fn rebuild_preserves_hidden_at_for_ids_that_survive_and_drops_it_for_ids_that_dont() {
+    let db = Db::open_in_memory().unwrap();
+    let keep = folder("KEEP", ScanRoot::Unprocessed);
+    let gone = folder("GONE", ScanRoot::Unprocessed);
+    db.with(|c| items::reconcile(c, &[keep.clone(), gone.clone()]))
+        .unwrap();
+    db.with(|c| items::set_hidden(c, &keep.id, true)).unwrap();
+    db.with(|c| items::set_hidden(c, &gone.id, true)).unwrap();
+
+    // GONE's folder disappeared before the rebuild's fresh scan.
+    db.with(|c| items::rebuild(c, std::slice::from_ref(&keep)))
+        .unwrap();
+
+    assert!(
+        db.with(|c| items::get(c, &keep.id)).unwrap().hidden,
+        "a real hide must survive rebuilding the index"
+    );
+    assert!(
+        db.with(|c| items::get(c, &gone.id)).is_err(),
+        "a folder that no longer exists must not survive rebuild just because it was hidden"
+    );
+}
+
 // ─── record_upload ───────────────────────────────────────────────────────────
 
 #[test]

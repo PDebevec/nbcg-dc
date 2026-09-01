@@ -68,11 +68,13 @@ export const Commands = {
   fsReveal: "fs_reveal_path",
   fsMoveToProcessed: "fs_move_to_processed",
   fsReadFile: "fs_read_file",
+  fsPeekFolder: "fs_peek_folder",
   indexScan: "index_scan",
   indexList: "index_list",
   indexRebuild: "index_rebuild",
   indexRecordUpload: "index_record_upload",
   indexRecordSync: "index_record_sync",
+  indexSetHidden: "index_set_hidden",
   syncLogAppend: "sync_log_append",
   syncLogList: "sync_log_list",
   batchList: "batch_list",
@@ -103,6 +105,14 @@ export interface IndexedAssetDto {
   sizeBytes?: number | null;
 }
 
+/** An ad-hoc "view contents" look at a folder (Overview row action) — not
+ * necessarily a tracked item. Direct files only, same as the native scan
+ * itself never recurses into subfolders when observing one folder. */
+export interface FolderPeekDto {
+  folderName: string;
+  assets: IndexedAssetDto[];
+}
+
 /** One stage's recorded outcome in the SQLite index. */
 export interface IndexedStageDto {
   status: StageStatus;
@@ -116,6 +126,17 @@ export interface IndexedItemDto {
   id: string;
   folderName: string;
   folderPath: string;
+  /**
+   * This item's path relative to its scan root, forward-slash-joined (e.g.
+   * `"Cèrnagora/CERNAGORA"`) — equal to `folderName` at depth 1. `core::fs`
+   * now recurses to any depth (see `docs/tasks/nested-record-folders-and-manual-selection.md`),
+   * so a folder no longer has to sit directly under the configured root to be
+   * a candidate item; this drives the Overview list's indentation.
+   */
+  relativePath: string;
+  /** Operator-hidden from the default Overview list. Never set automatically —
+   * see `domain/overview`'s hidden-row filtering. */
+  hidden: boolean;
   root: ScanRoot;
   /** From the folder's `metadata.json`; null when undetermined (defaults to
    * `main`). */
@@ -392,6 +413,10 @@ export const ipc = {
      */
     readFile: (path: string) =>
       call<ArrayBuffer>(Commands.fsReadFile, { path }),
+    /** An ad-hoc "view contents" look at a folder (Overview row action) —
+     * works whether or not the folder is a tracked item. */
+    peekFolder: (path: string) =>
+      call<FolderPeekDto>(Commands.fsPeekFolder, { path }),
   },
 
   /**
@@ -421,6 +446,11 @@ export const ipc = {
      */
     recordSync: (itemId: string, sync: SyncRecordDto) =>
       call<IndexedItemDto>(Commands.indexRecordSync, { itemId, sync }),
+    /** Hide or unhide an item from the default Overview list — pure operator
+     * curation, never inferred (Overview ⋯ → Hide/Unhide). Returns the
+     * updated row. */
+    setHidden: (itemId: string, hidden: boolean) =>
+      call<IndexedItemDto>(Commands.indexSetHidden, { itemId, hidden }),
   },
 
   /**

@@ -6,7 +6,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::core::{db, fs as corefs};
-use crate::dto::{IndexedItemDto, LocalMetadataFile, ScanRoot};
+use crate::dto::{FolderPeekDto, IndexedItemDto, LocalMetadataFile, ScanRoot};
 use crate::error::{AppError, Result};
 
 use super::AppState;
@@ -64,12 +64,16 @@ pub fn fs_move_to_processed(state: State<'_, AppState>, item_id: String) -> Resu
     let processed = processed
         .ok_or_else(|| AppError::Invalid("the processed root is not configured".into()))?;
 
-    let folder_path = state.db.with(|conn| {
+    let (folder_path, relative_path) = state.db.with(|conn| {
         let item = db::items::get(conn, &item_id)?;
-        Ok(item.folder_path)
+        Ok((item.folder_path, item.relative_path))
     })?;
 
-    let destination = corefs::move_to_processed(Path::new(&folder_path), &processed)?;
+    let destination = corefs::move_to_processed(
+        Path::new(&folder_path),
+        Path::new(&relative_path),
+        &processed,
+    )?;
 
     state.db.with(|conn| {
         db::items::set_location(
@@ -78,6 +82,20 @@ pub fn fs_move_to_processed(state: State<'_, AppState>, item_id: String) -> Resu
             ScanRoot::Processed,
             &destination.to_string_lossy(),
         )
+    })
+}
+
+/// An ad-hoc "view contents" look at a folder — for the Overview row action,
+/// works whether or not the folder is a tracked item. Reuses
+/// `describe_folder` directly rather than a parallel implementation; `root`
+/// is not meaningful for a one-off peek, so `Unprocessed` is a harmless
+/// placeholder — its value never reaches the caller.
+#[tauri::command]
+pub fn fs_peek_folder(path: String) -> Result<FolderPeekDto> {
+    let described = corefs::describe_folder(Path::new(&path), ScanRoot::Unprocessed)?;
+    Ok(FolderPeekDto {
+        folder_name: described.folder_name,
+        assets: described.assets,
     })
 }
 

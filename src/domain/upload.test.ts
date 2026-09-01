@@ -36,10 +36,12 @@ function makeItem(overrides: Partial<Item> = {}): Item {
       discoverAsset("gorski.txt", "/p/gorski.txt"),
       discoverAsset("gorski_thumb.png", "/p/gorski_thumb.png"),
     ];
-  return {
+  const base: Item = {
     id: "item-1",
     folderName: "gorski",
     folderPath: "/p",
+    relativePath: "gorski",
+    hidden: false,
     root: "unprocessed",
     level: "main",
     assets,
@@ -56,8 +58,8 @@ function makeItem(overrides: Partial<Item> = {}): Item {
     createdAt: null,
     updatedAt: null,
     syncMissStreak: 0,
-    ...overrides,
   };
+  return { ...base, ...overrides };
 }
 
 const READY = { metadataReady: true, primaryThumbnail: null };

@@ -246,6 +246,16 @@ pub struct IndexedAssetDto {
     pub size_bytes: Option<i64>,
 }
 
+/// An ad-hoc "view contents" look at a folder — not necessarily a tracked
+/// item (`fs_peek_folder`). Direct files only, same as `describe_folder`
+/// itself never recurses into subfolders.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderPeekDto {
+    pub folder_name: String,
+    pub assets: Vec<IndexedAssetDto>,
+}
+
 /// One stage's recorded outcome in the index.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -265,6 +275,14 @@ pub struct IndexedItemDto {
     pub id: String,
     pub folder_name: String,
     pub folder_path: String,
+    /// This item's path relative to its scan root, forward-slash-joined
+    /// (e.g. `"Cèrnagora/CERNAGORA"`) — equal to `folder_name` at depth 1.
+    /// Drives the Overview list's hierarchy display; see
+    /// `core::fs::item_id_for`'s doc comment for why it's also load-bearing
+    /// for identity.
+    pub relative_path: String,
+    /// Operator-hidden from the default Overview list (never auto-set).
+    pub hidden: bool,
     pub root: ScanRoot,
     /// From the folder's `metadata.json`; null when undetermined (the logic
     /// lane defaults to `main`).

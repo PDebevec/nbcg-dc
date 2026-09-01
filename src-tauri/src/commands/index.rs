@@ -67,3 +67,17 @@ pub fn index_record_sync(
         .db
         .transaction(|tx| db::items::record_sync(tx, &item_id, &sync))
 }
+
+/// Hide or unhide an item from the default Overview list — pure operator
+/// curation, never inferred. See [`db::items::set_hidden`].
+#[tauri::command]
+pub fn index_set_hidden(
+    state: State<'_, AppState>,
+    item_id: String,
+    hidden: bool,
+) -> Result<IndexedItemDto> {
+    state.db.transaction(|tx| {
+        db::items::set_hidden(tx, &item_id, hidden)?;
+        db::items::get(tx, &item_id)
+    })
+}

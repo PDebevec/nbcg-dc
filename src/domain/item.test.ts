@@ -15,10 +15,12 @@ import {
 
 /** A fresh "To process" item; override any field per case. */
 function makeItem(overrides: Partial<Item> = {}): Item {
-  return {
+  const base: Item = {
     id: "i1",
     folderName: "gorski_vijenac",
     folderPath: "/unprocessed/gorski_vijenac",
+    relativePath: "gorski_vijenac",
+    hidden: false,
     root: "unprocessed",
     level: "main",
     assets: [],
@@ -31,8 +33,8 @@ function makeItem(overrides: Partial<Item> = {}): Item {
     createdAt: null,
     updatedAt: null,
     syncMissStreak: 0,
-    ...overrides,
   };
+  return { ...base, ...overrides };
 }
 
 function stagesWith(stage: StageName, status: StageStatus, error?: string): ItemStages {

@@ -126,12 +126,92 @@ pub fn root_for(
     }
 }
 
-/// The item folder a changed path belongs to — the immediate child of the root.
+/// The item folder a changed path belongs to.
 ///
-/// A watch is recursive, so an event usually names a file *inside* an item
-/// folder (`…/unprocessed/BOOK/page_003.jpg`); the consumer cares about `BOOK`.
+/// A watch is recursive and items can now nest at any depth, so a changed
+/// path is one of two things: a folder itself (created/removed — it *is* an
+/// item, at whatever depth), or a file inside one (the consumer cares about
+/// its immediate containing folder, not the whole ancestor chain — each
+/// folder is independently tracked, so the file's direct parent is the right
+/// item). `path.is_dir()` disambiguates for `Create`/`Modify`; for `Remove`
+/// the path is already gone and can't be stat'd, so this falls back to the
+/// immediate parent — a reasonable best effort, not a hard guarantee. This
+/// isn't relied on for exactness: the actual consumer
+/// (`useItems.startWatching`, TS side) does a full debounced rescan on any
+/// event regardless of which folder this names.
 pub fn item_folder_for(path: &Path, root_path: &Path) -> Option<PathBuf> {
     let relative = path.strip_prefix(root_path).ok()?;
-    let first = relative.components().next()?;
-    Some(root_path.join(first))
+    if relative.as_os_str().is_empty() {
+        return None; // the root itself, not an item
+    }
+    if path.is_dir() {
+        return Some(path.to_path_buf());
+    }
+    let parent = relative.parent()?;
+    if parent.as_os_str().is_empty() {
+        return None; // a loose file directly at the root - no owning item
+    }
+    Some(root_path.join(parent))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_depth_one_folder_created_maps_to_itself() {
+        let root = tempfile::TempDir::new().unwrap();
+        let book = root.path().join("BOOK");
+        std::fs::create_dir_all(&book).unwrap();
+
+        assert_eq!(item_folder_for(&book, root.path()), Some(book));
+    }
+
+    #[test]
+    fn a_file_inside_a_depth_one_folder_maps_to_its_containing_folder() {
+        let root = tempfile::TempDir::new().unwrap();
+        let book = root.path().join("BOOK");
+        std::fs::create_dir_all(&book).unwrap();
+        let page = book.join("page_003.jpg");
+        std::fs::write(&page, b"x").unwrap();
+
+        assert_eq!(item_folder_for(&page, root.path()), Some(book));
+    }
+
+    #[test]
+    fn a_file_nested_three_levels_deep_maps_to_its_immediate_parent_not_the_top_level_wrapper() {
+        let root = tempfile::TempDir::new().unwrap();
+        let nested = root.path().join("Wrapper").join("BOOK-A");
+        std::fs::create_dir_all(&nested).unwrap();
+        let page = nested.join("1.jpg");
+        std::fs::write(&page, b"x").unwrap();
+
+        assert_eq!(item_folder_for(&page, root.path()), Some(nested));
+    }
+
+    #[test]
+    fn a_nested_folder_created_maps_to_itself_not_its_wrapper() {
+        let root = tempfile::TempDir::new().unwrap();
+        let nested = root.path().join("Wrapper").join("BOOK-A");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        assert_eq!(item_folder_for(&nested, root.path()), Some(nested));
+    }
+
+    #[test]
+    fn a_loose_file_directly_at_the_root_has_no_owning_item() {
+        let root = tempfile::TempDir::new().unwrap();
+        let loose = root.path().join("notes.txt");
+        std::fs::write(&loose, b"x").unwrap();
+
+        assert_eq!(item_folder_for(&loose, root.path()), None);
+    }
+
+    #[test]
+    fn a_path_outside_the_root_has_no_owning_item() {
+        let root = tempfile::TempDir::new().unwrap();
+        let elsewhere = tempfile::TempDir::new().unwrap();
+
+        assert_eq!(item_folder_for(elsewhere.path(), root.path()), None);
+    }
 }

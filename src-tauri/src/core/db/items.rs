@@ -67,6 +67,8 @@ fn base_from_row(row: &Row) -> Result<IndexedItemDto> {
         id: row.get("id")?,
         folder_name: row.get("folder_name")?,
         folder_path: row.get("folder_path")?,
+        relative_path: row.get("relative_path")?,
+        hidden: row.get::<_, Option<String>>("hidden_at")?.is_some(),
         root: ScanRoot::parse(&root_raw)
             .ok_or_else(|| AppError::Other(format!("unknown scan root {root_raw:?}")))?,
         level: level_raw.as_deref().and_then(ItemLevel::parse),
@@ -166,6 +168,24 @@ pub fn mark_needs_reupload(conn: &Connection, item_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Set (or clear) an item's hidden flag — the operator saying "this folder is
+/// not a real record, stop showing it," never inferred automatically. The
+/// only writer of `hidden_at`. Deliberately per-row only, no cascade to
+/// descendants or ancestors: hiding a wrapper folder must not also hide the
+/// real records nested under it (see
+/// `docs/tasks/nested-record-folders-and-manual-selection.md`).
+pub fn set_hidden(conn: &Connection, item_id: &str, hidden: bool) -> Result<()> {
+    if !exists(conn, item_id)? {
+        return Err(AppError::NotFound(format!("item {item_id}")));
+    }
+    let hidden_at = if hidden { Some(now_iso()) } else { None };
+    conn.execute(
+        "UPDATE items SET hidden_at = ?2 WHERE id = ?1",
+        params![item_id, hidden_at],
+    )?;
+    Ok(())
+}
+
 fn replace_assets(conn: &Connection, item_id: &str, assets: &[IndexedAssetDto]) -> Result<()> {
     conn.execute(
         "DELETE FROM item_assets WHERE item_id = ?1",
@@ -186,8 +206,11 @@ fn replace_assets(conn: &Connection, item_id: &str, assets: &[IndexedAssetDto]) 
 /// Insert-or-update by folder identity, refresh the asset list, and drop items
 /// whose folders have disappeared. What it deliberately does **not** touch on
 /// an existing row: `uploaded`, `reupload`, every stage, `batch_id`,
-/// `miss_streak`, `version`. Those are owned by the upload/sync/batch paths;
-/// a rescan is a filesystem observation and must not move an item's state.
+/// `miss_streak`, `version`, `hidden_at`. Those are owned by the
+/// upload/sync/batch/hide paths; a rescan is a filesystem observation and must
+/// not move an item's state or discard operator intent. `relative_path` *is*
+/// always overwritten here — unlike `hidden_at` it's filesystem-observed, not
+/// operator intent (it changes if the folder itself moves).
 ///
 /// `backend_id` is adopted from `metadata.json` only when the row has none —
 /// so an index that lost a connection can recover it from the folder mirror,
@@ -207,17 +230,18 @@ pub fn reconcile(conn: &Connection, discovered: &[DiscoveredFolder]) -> Result<(
         if existing.is_some() {
             conn.execute(
                 "UPDATE items SET \
-                   folder_name = ?2, folder_path = ?3, root = ?4, \
-                   level      = COALESCE(?5, level), \
-                   title      = COALESCE(?6, title), \
-                   cobiss_id  = COALESCE(?7, cobiss_id), \
-                   backend_id = COALESCE(backend_id, ?8), \
-                   updated_at = ?9 \
+                   folder_name = ?2, folder_path = ?3, relative_path = ?4, root = ?5, \
+                   level      = COALESCE(?6, level), \
+                   title      = COALESCE(?7, title), \
+                   cobiss_id  = COALESCE(?8, cobiss_id), \
+                   backend_id = COALESCE(backend_id, ?9), \
+                   updated_at = ?10 \
                  WHERE id = ?1",
                 params![
                     folder.id,
                     folder.folder_name,
                     folder.folder_path,
+                    folder.relative_path,
                     folder.root.as_str(),
                     folder.level.map(|l| l.as_str()),
                     folder.title,
@@ -229,14 +253,15 @@ pub fn reconcile(conn: &Connection, discovered: &[DiscoveredFolder]) -> Result<(
         } else {
             conn.execute(
                 "INSERT INTO items \
-                   (id, folder_name, folder_path, root, level, uploaded, reupload, \
+                   (id, folder_name, folder_path, relative_path, root, level, uploaded, reupload, \
                     backend_id, version, target_state, visibility_status, batch_id, \
                     title, cobiss_id, miss_streak, synced_at, created_at, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, ?6, ?7, ?8, ?9, NULL, ?10, ?11, 0, ?12, ?13, ?13)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, 0, ?7, ?8, ?9, ?10, NULL, ?11, ?12, 0, ?13, ?14, ?14)",
                 params![
                     folder.id,
                     folder.folder_name,
                     folder.folder_path,
+                    folder.relative_path,
                     folder.root.as_str(),
                     folder.level.map(|l| l.as_str()),
                     folder.backend_id,
@@ -285,21 +310,40 @@ pub fn reconcile(conn: &Connection, discovered: &[DiscoveredFolder]) -> Result<(
 /// on-disk trace) and `miss_streak` (a counter, not a fact about the folder).
 /// Both reset, which is the conservative direction — a re-upload flag lost
 /// means an item reads as Uploaded until the next edit dirties it again.
+///
+/// `hidden_at` is the one operator-intent field that **does** survive —
+/// snapshotted before the delete and re-applied after reinsert for any id
+/// that still exists. Ids are reproducible across a rebuild (see
+/// `item_id_for`'s doc comment), so matching the snapshot back up by id is
+/// safe. Without this, hiding a folder would be undone by the next "Rebuild
+/// index" click, which is a real click an operator will actually make.
 pub fn rebuild(conn: &Connection, discovered: &[DiscoveredFolder]) -> Result<()> {
+    let mut hidden_snapshot: HashMap<String, String> = HashMap::new();
+    {
+        let mut stmt =
+            conn.prepare("SELECT id, hidden_at FROM items WHERE hidden_at IS NOT NULL")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for row in rows {
+            let (id, hidden_at) = row?;
+            hidden_snapshot.insert(id, hidden_at);
+        }
+    }
+
     conn.execute("DELETE FROM items", [])?;
 
     let now = now_iso();
     for folder in discovered {
         conn.execute(
             "INSERT INTO items \
-               (id, folder_name, folder_path, root, level, uploaded, reupload, \
+               (id, folder_name, folder_path, relative_path, root, level, uploaded, reupload, \
                 backend_id, version, target_state, visibility_status, batch_id, \
                 title, cobiss_id, miss_streak, synced_at, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10, NULL, ?11, ?12, 0, ?13, ?14, ?14)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10, ?11, NULL, ?12, ?13, 0, ?14, ?15, ?15)",
             params![
                 folder.id,
                 folder.folder_name,
                 folder.folder_path,
+                folder.relative_path,
                 folder.root.as_str(),
                 folder.level.map(|l| l.as_str()),
                 // An item with a connected backend id in its mirror has been
@@ -315,6 +359,13 @@ pub fn rebuild(conn: &Connection, discovered: &[DiscoveredFolder]) -> Result<()>
                 now,
             ],
         )?;
+
+        if let Some(hidden_at) = hidden_snapshot.get(&folder.id) {
+            conn.execute(
+                "UPDATE items SET hidden_at = ?2 WHERE id = ?1",
+                params![folder.id, hidden_at],
+            )?;
+        }
 
         replace_assets(conn, &folder.id, &folder.assets)?;
 

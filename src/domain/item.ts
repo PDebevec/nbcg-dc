@@ -86,12 +86,22 @@ export interface ItemFlags {
  * and upload flows.
  */
 export interface Item {
-  /** Stable local index id (folder-path derived native-side). */
+  /** Stable local index id (relative-path derived native-side — see
+   * `core::fs::item_id_for`). */
   id: string;
   /** Folder base name — the derived-output naming base (docs/01 §Naming). */
   folderName: string;
   /** Absolute path to the item's folder on disk. */
   folderPath: string;
+  /** Path relative to this item's scan root, forward-slash-joined (equal to
+   * `folderName` at depth 1 — a folder no longer has to sit directly under
+   * the root to be an item, see
+   * `docs/tasks/nested-record-folders-and-manual-selection.md`). Drives the
+   * Overview list's indentation via `domain/overview.depthOf`. */
+  relativePath: string;
+  /** Operator-hidden from the default Overview list (never set automatically —
+   * see `domain/overview`'s hidden-row filtering). */
+  hidden: boolean;
   root: ScanRoot;
   level: ItemLevel;
   /** Discovered files in the folder, classified by naming convention. */

@@ -23,7 +23,7 @@ use crate::error::Result;
 
 /// The schema version stored in `PRAGMA user_version`. Bump it and add a step
 /// to [`migrate`] when the schema changes.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// How many sync runs to retain. The Sync screen shows a recent-runs log, not
 /// an audit trail, so old rows are pruned on append.
@@ -98,11 +98,30 @@ impl Db {
 /// near-keywords, so the columns are `batch_no`, `item_type`, and
 /// `trigger_kind`. The DTO field names are unchanged — the mapping happens in
 /// the query layer.
+///
+/// Every step below, plus the final `user_version` bump, runs inside **one
+/// transaction**, and each `ALTER TABLE ADD COLUMN` is guarded by a
+/// [`column_exists`] check. Both are load-bearing, not defensive polish: a
+/// real launch got killed between the version-2 `ALTER TABLE`s committing and
+/// the (previously separate, non-transactional) `user_version` bump running,
+/// which left `hidden_at`/`relative_path` already on the table but
+/// `user_version` stuck at 1 — so every later launch re-ran the same `ALTER
+/// TABLE ADD COLUMN`, hit SQLite's "duplicate column name", and `Db::open`
+/// failed *permanently*, forever. Wrapping the steps in a transaction stops a
+/// future crash from landing in that half-applied state again; guarding each
+/// `ALTER` on the column not already existing makes a file that is *already*
+/// stuck there (like the one this fix was diagnosed against) self-heal on
+/// its very next open instead of needing a manual repair or a deleted db.
 fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    if version >= SCHEMA_VERSION {
+        return Ok(());
+    }
+
+    let tx = conn.unchecked_transaction()?;
 
     if version < 1 {
-        conn.execute_batch(
+        tx.execute_batch(
             r#"
             CREATE TABLE IF NOT EXISTS items (
                 id                TEXT PRIMARY KEY,
@@ -187,8 +206,38 @@ fn migrate(conn: &Connection) -> Result<()> {
         )?;
     }
 
-    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    if version < 2 {
+        if !column_exists(&tx, "items", "hidden_at")? {
+            tx.execute_batch("ALTER TABLE items ADD COLUMN hidden_at TEXT;")?;
+        }
+        if !column_exists(&tx, "items", "relative_path")? {
+            tx.execute_batch(
+                r#"
+                ALTER TABLE items ADD COLUMN relative_path TEXT NOT NULL DEFAULT '';
+                UPDATE items SET relative_path = folder_name WHERE relative_path = '';
+                "#,
+            )?;
+        }
+    }
+
+    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    tx.commit()?;
     Ok(())
+}
+
+/// Whether `table` already has a column named `column` — used to make an
+/// `ALTER TABLE ADD COLUMN` step safe to retry (see [`migrate`]'s doc
+/// comment for why that matters in practice, not just in theory).
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// `now` as an ISO-8601 UTC timestamp with a `Z` suffix.
@@ -222,6 +271,35 @@ mod tests {
         let db = Db::open_in_memory().expect("open");
         // Running it a second time on the same connection must not error.
         db.with(migrate).expect("second migrate");
+    }
+
+    /// Regression test for a real, reproduced failure: a launch got killed
+    /// between the version-2 `ALTER TABLE`s committing and the old
+    /// non-transactional `user_version` bump running, leaving a real db with
+    /// `hidden_at`/`relative_path` already added but `user_version` still 1.
+    /// Every later launch's `migrate()` re-ran the same `ALTER TABLE ADD
+    /// COLUMN` and failed with "duplicate column name", so `Db::open` never
+    /// succeeded again. Simulate that exact half-applied state by hand and
+    /// confirm `migrate()` now self-heals instead of erroring.
+    #[test]
+    fn migrate_recovers_from_a_half_applied_v2_step() {
+        let conn = Connection::open_in_memory().expect("open");
+        // Bring the connection to "v1 schema, columns added out of band,
+        // user_version never bumped" — the exact stuck state found in the
+        // wild, without going through `migrate()` to get there.
+        migrate(&conn).expect("seed v1 schema"); // lands at SCHEMA_VERSION
+        conn.pragma_update(None, "user_version", 1i64)
+            .expect("force version back to 1");
+        // hidden_at/relative_path already exist from the seed migrate() call
+        // above, so this connection now matches the broken file precisely:
+        // columns present, user_version claiming 1.
+
+        migrate(&conn).expect("migrate must self-heal, not error");
+
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .expect("version");
+        assert_eq!(version, SCHEMA_VERSION);
     }
 
     #[test]

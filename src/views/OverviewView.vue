@@ -16,6 +16,9 @@ const {
   selectionCount,
   canCreateBatch,
   allVisibleSelected,
+  showHidden,
+  peekResult,
+  peekLoading,
   setFilter,
   setSearch,
   onRowClick,
@@ -26,6 +29,11 @@ const {
   openAsBatch,
   createBatch,
   rebuildIndex,
+  toggleShowHidden,
+  hideRow,
+  unhideRow,
+  viewContents,
+  closePeek,
 } = useOverview();
 
 const rebuilding = ref(false);
@@ -61,6 +69,21 @@ function menuOpenInExplorer(id: string): void {
   void openInExplorer(id);
 }
 
+function menuHide(id: string): void {
+  openMenuId.value = null;
+  void hideRow(id);
+}
+
+function menuUnhide(id: string): void {
+  openMenuId.value = null;
+  void unhideRow(id);
+}
+
+function menuViewContents(id: string): void {
+  openMenuId.value = null;
+  void viewContents(id);
+}
+
 function rowClick(id: string): void {
   openMenuId.value = null;
   onRowClick(id);
@@ -85,6 +108,14 @@ function rowClick(id: string): void {
         </button>
       </div>
       <div class="toolbar-right">
+        <button
+          class="show-hidden-btn"
+          :class="{ active: showHidden }"
+          title="Folders you've hidden from this list stay hidden until you toggle this"
+          @click="toggleShowHidden()"
+        >
+          {{ showHidden ? "Hide hidden items" : "Show hidden items" }}
+        </button>
         <button
           class="rebuild-btn"
           :disabled="rebuilding || loading"
@@ -157,7 +188,11 @@ function rowClick(id: string): void {
           <tr
             v-for="row in rows"
             :key="row.id"
-            :class="{ stopped: row.state === 'stopped', 'in-batch': row.locked }"
+            :class="{
+              stopped: row.state === 'stopped',
+              'in-batch': row.locked,
+              'hidden-row': row.hidden,
+            }"
             @click.stop="rowClick(row.id)"
           >
             <td class="col-check" @click.stop>
@@ -182,16 +217,20 @@ function rowClick(id: string): void {
               </span>
             </td>
             <td class="col-item">
-              <div class="item-cell">
+              <div class="item-cell" :style="{ paddingLeft: `${row.depth * 18}px` }">
                 <span class="accent" :class="row.state" />
                 <div class="item-text">
-                  <div class="item-title">{{ row.title ?? row.folderName }}</div>
+                  <div class="item-title">
+                    {{ row.title ?? row.folderName }}
+                    <span v-if="row.hidden" class="hidden-tag">Hidden</span>
+                  </div>
                   <div class="item-meta">
                     <span>{{ row.folderName }}</span>
                     <span v-if="row.catalogueId" class="backend-id">{{
                       row.catalogueId
                     }}</span>
                   </div>
+                  <div v-if="row.depth > 0" class="item-path">{{ row.relativePath }}</div>
                   <div v-if="row.errorMessage" class="item-error">
                     <span class="err-dot" />{{ row.errorMessage }}
                   </div>
@@ -240,6 +279,58 @@ function rowClick(id: string): void {
                   </svg>
                   Open in Explorer
                 </button>
+                <button @click="menuViewContents(row.id)">
+                  <svg
+                    viewBox="0 0 20 20"
+                    width="15"
+                    height="15"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.6"
+                  >
+                    <circle cx="10" cy="10" r="3.2" />
+                    <path d="M2 10s2.8-5.5 8-5.5S18 10 18 10s-2.8 5.5-8 5.5S2 10 2 10Z" />
+                  </svg>
+                  View contents
+                </button>
+                <button
+                  v-if="row.hidden"
+                  @click="menuUnhide(row.id)"
+                >
+                  <svg
+                    viewBox="0 0 20 20"
+                    width="15"
+                    height="15"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.6"
+                  >
+                    <circle cx="10" cy="10" r="3.2" />
+                    <path d="M2 10s2.8-5.5 8-5.5S18 10 18 10s-2.8 5.5-8 5.5S2 10 2 10Z" />
+                  </svg>
+                  Unhide
+                </button>
+                <button
+                  v-else
+                  :disabled="row.locked"
+                  :title="row.locked ? 'Locked to an active batch — cannot hide' : ''"
+                  @click="!row.locked && menuHide(row.id)"
+                >
+                  <svg
+                    viewBox="0 0 20 20"
+                    width="15"
+                    height="15"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.6"
+                  >
+                    <path d="M3 3l14 14" />
+                    <path
+                      d="M8.3 4.9C8.9 4.8 9.4 4.7 10 4.7c5.2 0 8 5.3 8 5.3a13.6 13.6 0 0 1-2.9 3.7M5.8 6.2A13.7 13.7 0 0 0 2 10s2.8 5.3 8 5.3c1 0 1.9-.2 2.7-.5"
+                    />
+                  </svg>
+                  Hide
+                </button>
               </div>
             </td>
           </tr>
@@ -249,6 +340,32 @@ function rowClick(id: string): void {
         No items match this filter.
       </div>
       <div v-if="loading && rows.length === 0" class="empty">Loading items…</div>
+    </div>
+
+    <!-- ⋯ → View contents: a lightweight peek at a folder's own direct files -->
+    <div
+      v-if="peekResult || peekLoading"
+      class="peek-backdrop"
+      @click.self="closePeek()"
+    >
+      <div class="peek-panel">
+        <div class="peek-head">
+          <span>{{ peekResult ? peekResult.folderName : "Reading folder…" }}</span>
+          <button class="peek-close" title="Close" @click="closePeek()">✕</button>
+        </div>
+        <div v-if="peekLoading" class="peek-loading">Reading folder…</div>
+        <div v-else-if="peekResult" class="peek-strip">
+          <div v-if="peekResult.assets.length === 0" class="peek-empty">
+            No files directly in this folder.
+          </div>
+          <div v-for="a in peekResult.assets" :key="a.filename" class="peek-chip">
+            <div class="peek-name">{{ a.filename }}</div>
+            <div v-if="a.sizeBytes != null" class="peek-size">
+              {{ Math.max(1, Math.round(a.sizeBytes / 1024)) }} KB
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -361,6 +478,23 @@ function rowClick(id: string): void {
 .rebuild-btn:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+.show-hidden-btn {
+  height: 34px;
+  padding: 0 13px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  color: var(--c-text-muted);
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.show-hidden-btn.active {
+  border-color: var(--c-primary-soft-border);
+  background: var(--c-primary-faint);
+  color: var(--c-primary);
 }
 
 .select-all {
@@ -601,6 +735,20 @@ tbody tr.in-batch {
   background: #fbfcff;
 }
 
+tbody tr.hidden-row {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--c-surface),
+    var(--c-surface) 8px,
+    var(--c-surface-input-alt) 8px,
+    var(--c-surface-input-alt) 16px
+  );
+}
+
+tbody tr.hidden-row:hover {
+  background: var(--c-primary-faint);
+}
+
 input[type="checkbox"] {
   width: 15px;
   height: 15px;
@@ -646,6 +794,29 @@ input[type="checkbox"] {
 .item-title {
   font-weight: 600;
   color: var(--c-text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hidden-tag {
+  font-size: 9px;
+  font-weight: 700;
+  color: #7681b8;
+  background: var(--c-surface-input-alt);
+  border: 1px solid var(--c-border);
+  padding: 2px 6px;
+  border-radius: var(--r-xs);
+  letter-spacing: 0.4px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.item-path {
+  font-size: 10.5px;
+  color: var(--c-text-faint);
+  font-family: var(--font-mono);
+  margin-top: 2px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -738,5 +909,98 @@ input[type="checkbox"] {
   text-align: center;
   color: var(--c-text-faint);
   font-size: 14px;
+}
+
+/* ── view-contents peek panel ───────────────────────────────────────── */
+.peek-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 22, 34, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+  animation: fadein 0.12s;
+}
+
+.peek-panel {
+  width: 520px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 96px);
+  display: flex;
+  flex-direction: column;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-menu);
+  overflow: hidden;
+}
+
+.peek-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--c-border-row);
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--c-text-strong);
+}
+
+.peek-close {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+  color: #9aa1bb;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.peek-close:hover {
+  background: var(--c-idle-bg);
+  color: var(--c-text-muted);
+}
+
+.peek-loading,
+.peek-empty {
+  padding: 32px;
+  text-align: center;
+  color: var(--c-text-faint);
+  font-size: 13px;
+}
+
+.peek-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  padding: 14px 16px;
+  overflow-y: auto;
+}
+
+.peek-chip {
+  border: 1px solid var(--c-border-row);
+  border-radius: var(--r-md);
+  padding: 8px 11px;
+  background: var(--c-surface-input);
+  min-width: 160px;
+}
+
+.peek-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-text-mid);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.peek-size {
+  font-size: 10.5px;
+  color: var(--c-text-faint);
+  margin-top: 2px;
 }
 </style>

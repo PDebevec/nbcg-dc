@@ -1,9 +1,12 @@
 //! Filesystem layer: scanning the roots, the per-folder `metadata.json`
 //! mirror, and moving a finished item across roots.
 //!
-//! One folder = one item = one backend record (docs/03 decisions). Everything
-//! here reports *observations* — which folders exist and what files are in
-//! them. Deliberately absent: any judgement about what those files **mean**.
+//! One folder = one item = one backend record (docs/03 decisions) — at
+//! **any** depth under a scan root, not just the top level; the scanner does
+//! not judge which folder is "the real" record, the operator does (hide the
+//! rest). Everything here reports *observations* — which folders exist and
+//! what files are in them. Deliberately absent: any judgement about what
+//! those files **mean**.
 //! Classifying an asset as a source scan vs a web PDF vs a thumbnail is the
 //! logic lane's job (`domain/files`), and duplicating the naming convention
 //! here would give it two places to drift.
@@ -46,6 +49,13 @@ pub struct DiscoveredFolder {
     pub id: String,
     pub folder_name: String,
     pub folder_path: String,
+    /// This folder's path relative to its scan root, forward-slash-joined
+    /// (e.g. `"Cèrnagora/CERNAGORA"`). For a depth-1 folder this is just
+    /// `folder_name`. Feeds [`item_id_for`] and the Overview list's
+    /// hierarchy display — see that function's doc comment.
+    pub relative_path: String,
+    /// The immediate parent folder's absolute path, `None` at depth 1.
+    pub parent_path: Option<String>,
     pub root: ScanRoot,
     pub level: Option<ItemLevel>,
     pub title: Option<String>,
@@ -59,29 +69,41 @@ pub struct DiscoveredFolder {
     pub derived: DerivedFiles,
 }
 
-/// A stable id for an item folder, derived from its **name**.
+/// A stable id for an item folder, derived from its path **relative to its
+/// scan root** (forward-slash-joined, e.g. `"Cèrnagora/CERNAGORA"`).
 ///
 /// Deliberately deterministic rather than a random UUID, for one reason:
 /// `index_rebuild` wipes the item table and re-derives it from folders, and
 /// batches reference items by id. A random id would survive the rebuild only
 /// in the batch's membership list, silently emptying every batch. Hashing the
-/// folder name reproduces the same ids, so batches still resolve.
+/// relative path reproduces the same ids, so batches still resolve.
 ///
-/// It is keyed on the name and not the full path because an item's path
-/// changes when it moves `/unprocessed` → `/processed`, and that move must not
-/// change its identity. Renaming a folder *does* mint a new item, which is the
-/// honest reading — the folder name is the item's name and its derived files
-/// are named after it.
+/// For a depth-1 folder the relative path **is** the bare folder name — every
+/// id that existed before folders could nest deeper is unchanged. Nesting is
+/// what makes the path (not just the leaf name) load-bearing: two folders at
+/// different depths can share a leaf name (`arh/BookA/1` and `arh/BookB/1`),
+/// and hashing only the name would collide them onto the same id, silently
+/// overwriting one item's row with the other's on scan (`db::items::reconcile`
+/// has no collision guard). Hashing the full relative path disambiguates them.
+///
+/// It is keyed on the relative path and not the absolute path because an
+/// item's absolute path changes when it moves `/unprocessed` → `/processed`,
+/// and that move must not change its identity — `move_to_processed` preserves
+/// the relative path across the move for exactly this reason. Renaming *any*
+/// folder in the chain (including a wrapper ancestor) *does* mint a new id
+/// for it and everything nested under it, which is the honest reading: the
+/// folder's name (and its ancestors' names) are part of the item's identity,
+/// the same way a depth-1 folder's own name always was.
 ///
 /// FNV-1a, so the value is stable across platforms and runs (Rust's default
 /// hasher is randomly seeded per process and would produce a different id every
 /// launch).
-pub fn item_id_for(folder_name: &str) -> String {
+pub fn item_id_for(relative_path: &str) -> String {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
 
     let mut hash = OFFSET;
-    for byte in folder_name.as_bytes() {
+    for byte in relative_path.as_bytes() {
         hash ^= *byte as u64;
         hash = hash.wrapping_mul(PRIME);
     }
@@ -121,23 +143,92 @@ pub fn scan_roots(
     Ok(out)
 }
 
-/// Scan a single root: every immediate subdirectory is one item.
+/// Safety valve against pathological/cyclic directory structures — not a
+/// product decision. Any real archive is nowhere near this deep.
+const MAX_SCAN_DEPTH: u32 = 32;
+
+/// Directory names never worth listing as a candidate record, skipped
+/// unconditionally (not configurable) at every depth. Dotfolders (name
+/// starts with `.`) are skipped alongside these by [`walk`].
+const SKIP_DIR_NAMES: &[&str] = &["System Volume Information", "$RECYCLE.BIN"];
+
+/// Scan a single root: **every** folder at **any** depth is one item —
+/// depth doesn't decide what's a record, the operator does (see
+/// `docs/tasks/nested-record-folders-and-manual-selection.md`). Rows come
+/// back sorted by `relative_path`, which — because a prefix always sorts
+/// before any longer string it's a prefix of — places a folder immediately
+/// before all of its own descendants, correctly interleaved with unrelated
+/// siblings. No tree structure is built; the sort order plus each row's
+/// depth (count of `/` in `relative_path`) is enough for a flat list to read
+/// as hierarchical.
 pub fn scan_root(root_path: &Path, root: ScanRoot) -> Result<Vec<DiscoveredFolder>> {
     let mut out = Vec::new();
-
-    for entry in std::fs::read_dir(root_path)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        out.push(describe_folder(&entry.path(), root)?);
-    }
-
-    out.sort_by(|a, b| a.folder_name.cmp(&b.folder_name));
+    walk(root_path, root, "", None, 0, &mut out)?;
+    out.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
     Ok(out)
 }
 
-/// Observe one item folder.
+fn walk(
+    dir: &Path,
+    root: ScanRoot,
+    prefix: &str,
+    parent: Option<&str>,
+    depth: u32,
+    out: &mut Vec<DiscoveredFolder>,
+) -> Result<()> {
+    if depth >= MAX_SCAN_DEPTH {
+        return Ok(());
+    }
+
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        // `DirEntry::file_type()` does not follow symlinks (unlike
+        // `Path::metadata()`), so a symlinked directory reports as neither a
+        // plain dir nor a file here and is silently skipped — this is what
+        // keeps a symlink cycle from recursing forever. Do not swap this for
+        // `entry.path().metadata()` without re-adding an explicit guard.
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') || SKIP_DIR_NAMES.contains(&name.as_str()) {
+            continue;
+        }
+
+        let relative = if prefix.is_empty() {
+            name
+        } else {
+            format!("{prefix}/{name}")
+        };
+        let entry_path = entry.path();
+        let folder_path = entry_path.to_string_lossy().into_owned();
+
+        let mut described = describe_folder(&entry_path, root)?;
+        described.id = item_id_for(&relative);
+        described.relative_path = relative.clone();
+        described.parent_path = parent.map(str::to_string);
+        out.push(described);
+
+        walk(
+            &entry_path,
+            root,
+            &relative,
+            Some(&folder_path),
+            depth + 1,
+            out,
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Observe one item folder — its direct files only, never recursing into
+/// subfolders (a subfolder is a separate candidate, observed separately).
+/// Also used standalone by the `fs_peek_folder` command for an ad-hoc "view
+/// contents" look at a folder that may not be a tracked item at all, which is
+/// why `relative_path`/`parent_path` default to depth-1/standalone values
+/// here — [`walk`] overwrites them with the true recursive context when this
+/// is called as part of a scan.
 pub fn describe_folder(folder: &Path, root: ScanRoot) -> Result<DiscoveredFolder> {
     let folder_name = folder
         .file_name()
@@ -201,6 +292,8 @@ pub fn describe_folder(folder: &Path, root: ScanRoot) -> Result<DiscoveredFolder
 
     Ok(DiscoveredFolder {
         id: item_id_for(&folder_name),
+        relative_path: folder_name.clone(),
+        parent_path: None,
         folder_name,
         folder_path: folder.to_string_lossy().into_owned(),
         root,
@@ -295,24 +388,30 @@ pub fn finalize_staged_output(staged: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Move an item's folder from `/unprocessed` to `/processed`.
+/// Move an item's folder from `/unprocessed` to `/processed`, preserving its
+/// full relative path (not just its leaf name) so any wrapper folders it sits
+/// under are recreated on the processed side.
 ///
 /// Returns the new folder path. Refuses to clobber an existing destination —
-/// that would mean two items share a name, and silently merging them would
-/// destroy one operator's work.
-pub fn move_to_processed(folder: &Path, processed_root: &Path) -> Result<PathBuf> {
+/// that would mean two items share a relative path, and silently merging
+/// them would destroy one operator's work.
+///
+/// `relative` **must** be the same relative path `item_id_for` was hashed
+/// from — flattening to just the leaf name here (as this function used to)
+/// would change a nested item's relative path across the move and silently
+/// mint it a new id mid-move, orphaning its upload/batch history.
+pub fn move_to_processed(folder: &Path, relative: &Path, processed_root: &Path) -> Result<PathBuf> {
     if !folder.is_dir() {
         return Err(AppError::Invalid(format!(
             "{} is not a directory",
             folder.display()
         )));
     }
-    let name = folder
-        .file_name()
-        .ok_or_else(|| AppError::Invalid(format!("{} has no folder name", folder.display())))?;
 
-    std::fs::create_dir_all(processed_root)?;
-    let destination = processed_root.join(name);
+    let destination = processed_root.join(relative);
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
 
     if destination.exists() {
         return Err(AppError::Invalid(format!(

@@ -37,6 +37,7 @@ import {
 import {
   OVERVIEW_FILTERS,
   OverviewFilter,
+  depthOf,
   isSelectableFilter,
 } from "@domain/overview";
 import { logger } from "@lib/logger";
@@ -52,6 +53,12 @@ export interface StagePipView {
 export interface OverviewRow {
   id: string;
   folderName: string;
+  /** Path relative to this item's scan root — equal to `folderName` at
+   * depth 1. Shown as a muted sub-line for a nested row. */
+  relativePath: string;
+  /** How deeply nested this row is (`0` = depth 1, every row before
+   * recursive discovery existed). Drives table indentation. */
+  depth: number;
   title: string | null;
   catalogueId: string | null;
   level: ItemLevel;
@@ -65,6 +72,9 @@ export interface OverviewRow {
   selectable: boolean;
   /** In-progress rows are locked to their batch (show a lock icon). */
   locked: boolean;
+  /** Operator-hidden — only ever true when shown via the "Show hidden" toggle
+   * (a hidden row is otherwise excluded from `visibleItems` entirely). */
+  hidden: boolean;
 }
 
 /** One entry in the segmented filter bar. */
@@ -80,6 +90,8 @@ function toRow(item: Item, selected: boolean, selectable: boolean): OverviewRow 
   return {
     id: item.id,
     folderName: item.folderName,
+    relativePath: item.relativePath,
+    depth: depthOf(item.relativePath),
     title: item.title,
     catalogueId: item.catalogueId,
     level: item.level,
@@ -94,6 +106,7 @@ function toRow(item: Item, selected: boolean, selectable: boolean): OverviewRow 
     selected,
     selectable,
     locked: state === "in-progress",
+    hidden: item.hidden,
   };
 }
 
@@ -113,6 +126,10 @@ export function useOverview() {
     selectionCount,
     canCreateBatch,
     allVisibleSelected,
+    showHidden,
+    peekResult,
+    peekLoading,
+    peekError,
   } = storeToRefs(store);
 
   const rows = computed<OverviewRow[]>(() =>
@@ -176,6 +193,39 @@ export function useOverview() {
     } catch {
       toasts.push("Couldn't open the folder in Explorer.", "error");
     }
+  }
+
+  function toggleShowHidden(): void {
+    store.toggleShowHidden();
+  }
+
+  /** ⋯ → Hide/Unhide. Per-row only — never cascades (see `domain/overview`). */
+  async function hideRow(id: string): Promise<void> {
+    try {
+      await store.setHidden(id, true);
+    } catch {
+      toasts.push("Couldn't hide the item.", "error");
+    }
+  }
+
+  async function unhideRow(id: string): Promise<void> {
+    try {
+      await store.setHidden(id, false);
+    } catch {
+      toasts.push("Couldn't unhide the item.", "error");
+    }
+  }
+
+  /** ⋯ → View contents: a lightweight in-app peek at a folder's direct files. */
+  async function viewContents(id: string): Promise<void> {
+    const item = store.items.find((i) => i.id === id);
+    if (!item) return;
+    await store.peek(item.folderPath);
+    if (peekError.value) toasts.push("Couldn't read the folder's contents.", "error");
+  }
+
+  function closePeek(): void {
+    store.clearPeek();
   }
 
   /**
@@ -270,6 +320,10 @@ export function useOverview() {
     selectionCount,
     canCreateBatch,
     allVisibleSelected,
+    showHidden,
+    peekResult,
+    peekLoading,
+    peekError,
     // filter / search
     setFilter,
     setSearch,
@@ -282,6 +336,11 @@ export function useOverview() {
     openAsBatch,
     openItem,
     createBatch,
+    toggleShowHidden,
+    hideRow,
+    unhideRow,
+    viewContents,
+    closePeek,
     // data lifecycle / recovery
     refresh: store.refresh,
     rebuild: store.rebuild,

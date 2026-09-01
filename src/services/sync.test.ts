@@ -10,10 +10,12 @@ import type { SyncRecordDto, SyncRunCreateDto, SyncRunDto } from "@ipc/bindings"
 const T0 = "2026-08-07T12:00:00.000Z";
 
 function makeItem(overrides: Partial<Item> = {}): Item {
-  return {
+  const base: Item = {
     id: "i1",
     folderName: "gorski",
     folderPath: "/scans/processed/gorski",
+    relativePath: "gorski",
+    hidden: false,
     root: "processed",
     level: "main",
     assets: [],
@@ -26,8 +28,8 @@ function makeItem(overrides: Partial<Item> = {}): Item {
     createdAt: null,
     updatedAt: null,
     syncMissStreak: 0,
-    ...overrides,
   };
+  return { ...base, ...overrides };
 }
 
 function makeHit(over: Partial<SearchHit> = {}): SearchHit {

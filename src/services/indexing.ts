@@ -20,6 +20,7 @@
 import {
   ipc,
   isTauri,
+  type FolderPeekDto,
   type IndexedItemDto,
   type IndexedStageDto,
   type SyncRecordDto,
@@ -77,6 +78,8 @@ export function toItem(dto: IndexedItemDto): Item {
     id: dto.id,
     folderName: dto.folderName,
     folderPath: dto.folderPath,
+    relativePath: dto.relativePath,
+    hidden: dto.hidden,
     root: dto.root,
     level: dto.level ?? "main",
     assets,
@@ -149,6 +152,29 @@ export async function recordItemSync(
 /** Reveal an item's folder in the OS file manager. */
 export function revealItem(item: Item): Promise<void> {
   return ipc.fs.reveal(item.folderPath);
+}
+
+/**
+ * Hide or unhide an item from the default Overview list (Overview ⋯ →
+ * Hide/Unhide) and return the updated item. Per-row only, deliberately no
+ * cascade to descendants or ancestors — see
+ * `docs/tasks/nested-record-folders-and-manual-selection.md`.
+ */
+export async function setItemHidden(
+  itemId: string,
+  hidden: boolean,
+): Promise<Item> {
+  const dto = await ipc.index.setHidden(itemId, hidden);
+  return toItem(dto);
+}
+
+/**
+ * An ad-hoc "view contents" look at a folder (Overview row action) — works
+ * whether or not the folder is a tracked item, so it takes a raw path rather
+ * than an item id.
+ */
+export function peekFolder(path: string): Promise<FolderPeekDto> {
+  return ipc.fs.peekFolder(path);
 }
 
 /**

@@ -7,14 +7,17 @@ import {
   matchesSearch,
   filterItems,
   countByFilter,
+  depthOf,
 } from "./overview";
 import { ItemState, emptyStages, type Item } from "./item";
 
 function makeItem(overrides: Partial<Item> = {}): Item {
-  return {
-    id: overrides.id ?? "i",
+  const base: Item = {
+    id: "i",
     folderName: "folder",
     folderPath: "/unprocessed/folder",
+    relativePath: "folder",
+    hidden: false,
     root: "unprocessed",
     level: "main",
     assets: [],
@@ -27,8 +30,8 @@ function makeItem(overrides: Partial<Item> = {}): Item {
     createdAt: null,
     updatedAt: null,
     syncMissStreak: 0,
-    ...overrides,
   };
+  return { ...base, ...overrides };
 }
 
 describe("filter ↔ state mapping", () => {
@@ -134,5 +137,41 @@ describe("countByFilter + filterItems", () => {
 
     const searched = filterItems(items, OverviewFilter.All, "folder");
     expect(searched).toHaveLength(6); // every item's folderName contains "folder"
+  });
+});
+
+describe("depthOf", () => {
+  it("is 0 for a depth-1 folder (every item before recursive discovery existed)", () => {
+    expect(depthOf("BOOK")).toBe(0);
+  });
+
+  it("counts one level per path segment below the root", () => {
+    expect(depthOf("Wrapper/BOOK-A")).toBe(1);
+    expect(depthOf("Wrapper/Sub/BOOK-A")).toBe(2);
+  });
+});
+
+describe("hidden rows — filterItems and countByFilter", () => {
+  const items: Item[] = [
+    makeItem({ id: "visible" }),
+    makeItem({ id: "hidden", hidden: true }),
+  ];
+
+  it("filterItems drops a hidden item by default, per row only", () => {
+    const shown = filterItems(items, OverviewFilter.All, "");
+    expect(shown.map((i) => i.id)).toEqual(["visible"]);
+  });
+
+  it("filterItems includes hidden items when showHidden is true", () => {
+    const shown = filterItems(items, OverviewFilter.All, "", true);
+    expect(shown.map((i) => i.id).sort()).toEqual(["hidden", "visible"]);
+  });
+
+  it("countByFilter excludes hidden items from the counts by default", () => {
+    expect(countByFilter(items)[OverviewFilter.All]).toBe(1);
+  });
+
+  it("countByFilter includes hidden items when showHidden is true", () => {
+    expect(countByFilter(items, true)[OverviewFilter.All]).toBe(2);
   });
 });

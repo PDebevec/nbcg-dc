@@ -25,11 +25,14 @@ import {
   filterMatchesState,
   isSelectableFilter,
 } from "@domain/overview";
+import type { FolderPeekDto } from "@ipc/bindings";
 import {
   listIndex,
   scanIndex,
   rebuildIndex,
   revealItem,
+  setItemHidden,
+  peekFolder,
   watchIndexChanges,
 } from "@services/indexing";
 import { logger } from "@lib/logger";
@@ -46,6 +49,14 @@ export const useItemsStore = defineStore("items", () => {
   const activeFilter = ref<OverviewFilter>(OverviewFilter.All);
   const search = ref("");
   const selection = ref<Set<string>>(new Set());
+  /** Show operator-hidden rows too (Overview toolbar toggle). Off by default —
+   * hidden is meant to declutter, not just annotate. */
+  const showHidden = ref(false);
+  /** The current "view contents" peek result, if any (Overview row action) —
+   * ephemeral, not part of the tracked item list. */
+  const peekResult = ref<FolderPeekDto | null>(null);
+  const peekLoading = ref(false);
+  const peekError = ref<string | null>(null);
 
   // ── derived ───────────────────────────────────────────────────────────────
 
@@ -56,15 +67,19 @@ export const useItemsStore = defineStore("items", () => {
     return map;
   });
 
-  /** Live counts per filter (over the whole index; search does not affect them). */
-  const counts = computed(() => countByFilter(items.value));
+  /** Live counts per filter (over the whole index; search does not affect them).
+   * Excludes hidden items unless `showHidden`, matching the row list. */
+  const counts = computed(() => countByFilter(items.value, showHidden.value));
 
   /** Whether the active filter permits selection. */
   const selectable = computed(() => isSelectableFilter(activeFilter.value));
 
-  /** Items shown under the active filter + search, in index order. */
+  /** Items shown under the active filter + search, in index order. Rows
+   * arrive parent-before-descendants (`core::fs::scan_root`'s sort), so no
+   * re-sorting is needed here for the Overview table to read as hierarchical —
+   * see `domain/overview.depthOf` for the indentation. */
   const visibleItems = computed(() =>
-    filterItems(items.value, activeFilter.value, search.value),
+    filterItems(items.value, activeFilter.value, search.value, showHidden.value),
   );
 
   const selectionCount = computed(() => selection.value.size);
@@ -195,6 +210,43 @@ export const useItemsStore = defineStore("items", () => {
     }
   }
 
+  /** Toggle whether operator-hidden rows are shown in the list. */
+  function toggleShowHidden(): void {
+    showHidden.value = !showHidden.value;
+  }
+
+  /** Hide or unhide an item from the default Overview list. Per-row only —
+   * never cascades to descendants or ancestors (see `domain/overview.filterItems`). */
+  async function setHidden(id: string, hidden: boolean): Promise<void> {
+    try {
+      const updated = await setItemHidden(id, hidden);
+      replaceItem(updated);
+    } catch (err) {
+      logger.error("items", "Failed to update the hidden flag.", err);
+      throw err;
+    }
+  }
+
+  /** An ad-hoc "view contents" look at a folder (Overview row action) — takes
+   * a raw path since a candidate may not be a tracked item yet. */
+  async function peek(path: string): Promise<void> {
+    peekLoading.value = true;
+    peekError.value = null;
+    try {
+      peekResult.value = await peekFolder(path);
+    } catch (err) {
+      peekError.value = (err as Error)?.message ?? "Failed to read the folder.";
+      logger.error("items", "Failed to peek a folder's contents.", err);
+    } finally {
+      peekLoading.value = false;
+    }
+  }
+
+  function clearPeek(): void {
+    peekResult.value = null;
+    peekError.value = null;
+  }
+
   // ── filesystem watch ──────────────────────────────────────────────────────
 
   let unlisten: UnlistenFn | null = null;
@@ -248,6 +300,10 @@ export const useItemsStore = defineStore("items", () => {
     activeFilter,
     search,
     selection,
+    showHidden,
+    peekResult,
+    peekLoading,
+    peekError,
     // derived
     statesById,
     counts,
@@ -272,6 +328,10 @@ export const useItemsStore = defineStore("items", () => {
     refresh,
     rebuild,
     reveal,
+    toggleShowHidden,
+    setHidden,
+    peek,
+    clearPeek,
     // watch
     startWatching,
     stopWatching,

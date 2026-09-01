@@ -14,10 +14,12 @@ import { toItem } from "./indexing";
  */
 
 function imagesOnlyDto(overrides: Partial<IndexedItemDto> = {}): IndexedItemDto {
-  return {
+  const base: IndexedItemDto = {
     id: "map1",
     folderName: "A watermarked map",
     folderPath: "/unprocessed/A watermarked map",
+    relativePath: "A watermarked map",
+    hidden: false,
     root: "unprocessed",
     level: "main",
     assets: [{ filename: "map.jpg", path: "map.jpg", sizeBytes: 12345 }],
@@ -26,9 +28,19 @@ function imagesOnlyDto(overrides: Partial<IndexedItemDto> = {}): IndexedItemDto 
     reupload: false,
     backendId: null,
     batchId: null,
-    ...overrides,
   };
+  return { ...base, ...overrides };
 }
+
+describe("toItem — recursive folder discovery fields", () => {
+  it("maps relativePath and hidden straight through", () => {
+    const item = toItem(
+      imagesOnlyDto({ relativePath: "Wrapper/A watermarked map", hidden: true }),
+    );
+    expect(item.relativePath).toBe("Wrapper/A watermarked map");
+    expect(item.hidden).toBe(true);
+  });
+});
 
 describe("toItem — non-applicable stages", () => {
   it("reads pdf/ocr as skipped, not pending, for an images-only item with no DB row for them", () => {

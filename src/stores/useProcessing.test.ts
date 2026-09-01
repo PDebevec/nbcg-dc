@@ -28,6 +28,8 @@ function makeItem(over: Partial<Item> & { id: string; folderName: string }): Ite
     id: over.id,
     folderName: over.folderName,
     folderPath: over.folderPath ?? `/scans/${over.folderName}`,
+    relativePath: over.relativePath ?? over.folderName,
+    hidden: over.hidden ?? false,
     root: over.root ?? "unprocessed",
     level: over.level ?? "main",
     assets: over.assets ?? [],

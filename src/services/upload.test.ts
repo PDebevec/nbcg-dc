@@ -30,10 +30,12 @@ const ASSETS: DiscoveredAsset[] = [
 ];
 
 function makeItem(overrides: Partial<Item> = {}): Item {
-  return {
+  const base: Item = {
     id: "item-1",
     folderName: "gorski",
     folderPath: "/p",
+    relativePath: "gorski",
+    hidden: false,
     root: "unprocessed",
     level: "main",
     assets: ASSETS,
@@ -46,8 +48,8 @@ function makeItem(overrides: Partial<Item> = {}): Item {
     createdAt: null,
     updatedAt: null,
     syncMissStreak: 0,
-    ...overrides,
   };
+  return { ...base, ...overrides };
 }
 
 const SCHEMA: RecordSchema = {

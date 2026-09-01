@@ -14,6 +14,8 @@ pub fn folder(name: &str, root: ScanRoot) -> DiscoveredFolder {
         id: nbcg_dc_lib::core::fs::item_id_for(name),
         folder_name: name.to_string(),
         folder_path: format!("/roots/{}/{name}", root.as_str()),
+        relative_path: name.to_string(),
+        parent_path: None,
         root,
         level: None,
         title: None,

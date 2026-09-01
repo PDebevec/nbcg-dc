@@ -138,7 +138,12 @@ fn an_item_survives_the_whole_lifecycle() {
     .unwrap();
 
     // ── Reposition: the folder moves to /processed and the row follows.
-    let moved = fs::move_to_processed(&fx.unprocessed.join("NJEGOS"), &fx.processed).unwrap();
+    let moved = fs::move_to_processed(
+        &fx.unprocessed.join("NJEGOS"),
+        std::path::Path::new("NJEGOS"),
+        &fx.processed,
+    )
+    .unwrap();
     let relocated = db
         .with(|c| items::set_location(c, &njegos, ScanRoot::Processed, &moved.to_string_lossy()))
         .unwrap();

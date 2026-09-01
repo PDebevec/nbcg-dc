@@ -97,14 +97,33 @@ export function matchesSearch(item: Item, query: string): boolean {
   return haystacks.some((h) => h != null && h.toLowerCase().includes(q));
 }
 
-/** Apply the active filter + search to a list, deriving each item's state once. */
+/**
+ * How deeply nested an item's folder is under its scan root (`0` for a
+ * depth-1 folder, matching every item before recursive discovery existed).
+ * Drives the Overview row's indentation — rows already arrive sorted
+ * parent-before-descendants (`core::fs::scan_root`), so no re-sorting is
+ * needed here, only this for how far to indent.
+ */
+export function depthOf(relativePath: string): number {
+  return relativePath.split("/").length - 1;
+}
+
+/**
+ * Apply the active filter + search to a list, deriving each item's state
+ * once. A `hidden` item is dropped unless `showHidden` — deliberately
+ * per-row only, no cascade to a hidden folder's descendants or ancestors
+ * (see `docs/tasks/nested-record-folders-and-manual-selection.md`): hiding a
+ * wrapper folder must not also hide the real records nested under it.
+ */
 export function filterItems(
   items: Item[],
   filter: OverviewFilter,
   query: string,
+  showHidden = false,
 ): Item[] {
   return items.filter(
     (item) =>
+      (showHidden || !item.hidden) &&
       filterMatchesState(filter, deriveItemState(item)) &&
       matchesSearch(item, query),
   );
@@ -134,11 +153,17 @@ const STATE_TO_FILTER: Record<ItemState, OverviewFilter> = {
 /**
  * Live counts per filter. Derives each item's state once, incrementing its
  * single-state filter and `All`. Note: search does **not** affect the segmented
- * counts (they reflect the whole index, like the prototype).
+ * counts (they reflect the whole index, like the prototype) — but a hidden
+ * item is excluded unless `showHidden`, consistent with it being excluded
+ * from the row list itself by default.
  */
-export function countByFilter(items: Item[]): Record<OverviewFilter, number> {
+export function countByFilter(
+  items: Item[],
+  showHidden = false,
+): Record<OverviewFilter, number> {
   const counts = zeroCounts();
   for (const item of items) {
+    if (item.hidden && !showHidden) continue;
     counts[OverviewFilter.All] += 1;
     counts[STATE_TO_FILTER[deriveItemState(item)]] += 1;
   }
