@@ -38,7 +38,7 @@ function makeItem(over: Partial<Item> & { id: string; folderName: string }): Ite
     level: over.level ?? "main",
     assets: over.assets ?? [],
     stages: over.stages ?? emptyStages(),
-    flags: over.flags ?? { uploaded: false, reupload: false },
+    flags: over.flags ?? { uploaded: false, reupload: false, reuploadTextOnly: false },
     backendId: over.backendId ?? null,
     batchId: over.batchId ?? null,
     title: over.title ?? null,

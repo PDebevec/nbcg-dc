@@ -19,6 +19,7 @@
 
 use tauri::{AppHandle, Emitter, State};
 
+use crate::core::config;
 use crate::core::jobs::{self, JobEvent};
 use crate::dto::BatchRunRequest;
 use crate::error::Result;
@@ -46,7 +47,13 @@ fn start_or_reprocess(
     request: BatchRunRequest,
 ) -> Result<()> {
     let guard = jobs::try_acquire(&state.job_run, &request.batch_id)?;
-    let result = jobs::run_batch(&state.db, &request, &guard, |event| {
+    // Config-file knob, not a command argument - a hand-edited config.json
+    // takes effect on the next run with no new IPC surface. `Ok(None)`/`Err`
+    // (no file yet, or a corrupt one - `config::load` already tolerates
+    // that) both fall through to `JobLimits`'s own defaults.
+    let limits =
+        jobs::JobLimits::from_config(config::load(&state.config_dir).ok().flatten().as_ref());
+    let result = jobs::run_batch(&state.db, &request, &guard, limits, |event| {
         emit_job_event(&app, event)
     });
     drop(guard);

@@ -21,6 +21,7 @@ fn sample() -> PersistedConfig {
         api_prefix: Some("/api".into()),
         theme: Some(ThemePreference::Dark),
         data_passing_collection_types: Some(vec![1, 4]),
+        ..Default::default()
     }
 }
 
@@ -110,6 +111,53 @@ fn saving_twice_replaces_the_previous_config() {
         Some("https://api.nbcg.me")
     );
     assert_eq!(loaded.unprocessed_root, None);
+}
+
+/// The job-runner concurrency caps are a backend-only knob (hand-edited in
+/// config.json), never surfaced in Settings — so the `.ts` side never sends
+/// them on `config_save`. Prove `save_preserving_job_limits` does what its
+/// name says: a payload that omits them (exactly what a real GUI save looks
+/// like) does not erase a value already on disk.
+#[test]
+fn save_preserving_job_limits_keeps_a_hand_edited_cap() {
+    let dir = TempDir::new().unwrap();
+    config::save(
+        dir.path(),
+        &PersistedConfig {
+            max_concurrent_items: Some(5),
+            max_concurrent_ocr: Some(2),
+            ..sample()
+        },
+    )
+    .unwrap();
+
+    // A settings save from the GUI: same shape `sample()` has, i.e. no
+    // `maxConcurrentItems`/`maxConcurrentOcr` at all - a different field
+    // actually changes, which is the point (this isn't a no-op save).
+    let gui_save = PersistedConfig {
+        backend_base_url: Some("https://api.nbcg.me".into()),
+        ..sample()
+    };
+    config::save_preserving_job_limits(dir.path(), gui_save).unwrap();
+
+    let loaded = config::load(dir.path()).unwrap().unwrap();
+    assert_eq!(loaded.max_concurrent_items, Some(5));
+    assert_eq!(loaded.max_concurrent_ocr, Some(2));
+    assert_eq!(
+        loaded.backend_base_url.as_deref(),
+        Some("https://api.nbcg.me")
+    );
+}
+
+/// A fresh install has nothing on disk to preserve - the incoming payload's
+/// own values (typically both `None`, since the `.ts` side never sets them)
+/// win, with no error.
+#[test]
+fn save_preserving_job_limits_on_a_fresh_install_just_saves() {
+    let dir = TempDir::new().unwrap();
+    config::save_preserving_job_limits(dir.path(), sample()).unwrap();
+
+    assert_eq!(config::load(dir.path()).unwrap(), Some(sample()));
 }
 
 /// The token must never be written into the plain config file — that is the

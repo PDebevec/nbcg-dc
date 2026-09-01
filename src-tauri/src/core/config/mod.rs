@@ -63,6 +63,27 @@ pub fn save(config_dir: &Path, config: &PersistedConfig) -> Result<()> {
     }
 }
 
+/// Persist `incoming`, first restoring the job-runner concurrency caps
+/// (`maxConcurrentItems`/`maxConcurrentOcr`, `core::jobs::JobLimits`) from
+/// whatever is already on disk.
+///
+/// Those two fields are a backend-only knob — hand-edited in `config.json`
+/// directly, never surfaced in Settings — so the `.ts` settings type never
+/// carries them. A plain [`save`] of whatever the GUI's `config_save` call
+/// sent would therefore silently reset them to `None` on every unrelated
+/// settings change (a new API URL, a theme toggle, ...). This is what
+/// `commands::config::config_save` calls instead of `save` directly. A fresh
+/// install has nothing to restore — `Ok(None)`/a corrupt file both fall
+/// through to `incoming`'s own values, which is fine, since
+/// `JobLimits::from_config` already defaults a missing value.
+pub fn save_preserving_job_limits(config_dir: &Path, mut incoming: PersistedConfig) -> Result<()> {
+    if let Ok(Some(existing)) = load(config_dir) {
+        incoming.max_concurrent_items = existing.max_concurrent_items;
+        incoming.max_concurrent_ocr = existing.max_concurrent_ocr;
+    }
+    save(config_dir, &incoming)
+}
+
 /// Path to the config file (exposed for tests and diagnostics).
 pub fn config_path(config_dir: &Path) -> PathBuf {
     config_dir.join(CONFIG_FILENAME)

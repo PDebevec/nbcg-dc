@@ -145,6 +145,12 @@ export interface IndexedItemDto {
   stages: Partial<Record<StageName, IndexedStageDto>>;
   uploaded: boolean;
   reupload: boolean;
+  /** Only meaningful while `reupload` is true: whether the pending re-upload
+   * needs the blob replaced (`false`) or only its OCR text pushed (`true`) —
+   * see `core::db::items::ReuploadKind`. Lets `services/upload`'s
+   * `pushReplaceAssets` skip an unnecessary blob PUT when a reprocess only
+   * touched OCR text. */
+  reuploadTextOnly: boolean;
   backendId: string | null;
   batchId: string | null;
   title?: string | null;

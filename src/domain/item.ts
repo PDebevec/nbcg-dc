@@ -69,15 +69,20 @@ export interface StageOutcome {
 export type ItemStages = Record<StageName, StageOutcome>;
 
 /**
- * The two persisted boolean flags the state machine reads (everything else it
+ * The persisted boolean flags the state machine reads (everything else it
  * derives from stage statuses / batch membership).
  *  - `uploaded`  — the item has been published to the backend at least once.
  *  - `reupload`  — a published item changed since (new derived file) and must be
  *    pushed again.
+ *  - `reuploadTextOnly` — only meaningful while `reupload` is true: the
+ *    pending re-upload doesn't need the blob replaced, only its OCR text
+ *    pushed (`services/upload.pushReplaceAssets` reads this to skip an
+ *    unnecessary blob PUT).
  */
 export interface ItemFlags {
   uploaded: boolean;
   reupload: boolean;
+  reuploadTextOnly: boolean;
 }
 
 /**

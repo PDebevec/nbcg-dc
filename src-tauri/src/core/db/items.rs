@@ -76,6 +76,7 @@ fn base_from_row(row: &Row) -> Result<IndexedItemDto> {
         stages: HashMap::new(),
         uploaded: row.get::<_, i64>("uploaded")? != 0,
         reupload: row.get::<_, i64>("reupload")? != 0,
+        reupload_text_only: row.get::<_, i64>("reupload_text_only")? != 0,
         backend_id: row.get("backend_id")?,
         batch_id: row.get("batch_id")?,
         title: row.get("title")?,
@@ -153,17 +154,55 @@ pub fn set_stage(
     Ok(())
 }
 
+/// What a pending re-upload actually needs to push, per the `.rs`-side
+/// stage(s) that produced new bytes on the reprocess pass that triggered it
+/// (`core::jobs::ItemOutcome`). `Full` means a `pdf`/`thumbnail` stage ran —
+/// `services/upload.ts` must replace the blob (and therefore resend its
+/// paired text, or the backend wipes it — see `pushReplaceAssets`).
+/// `TextOnly` means only `ocr` ran — the blob itself is unchanged, so a
+/// cheap `PUT /files/:fileId/text` suffices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReuploadKind {
+    Full,
+    TextOnly,
+}
+
 /// Flag an item **Needs re-upload** (Epic 06 job runner, `Reprocess` mode
 /// only). The only writer of `reupload = 1` — `reconcile` never touches it
 /// and `record_upload` only ever clears it back to `0` on a successful write.
-pub fn mark_needs_reupload(conn: &Connection, item_id: &str) -> Result<()> {
+///
+/// `kind` is a per-*call* fact (what this reprocess pass changed), but
+/// `reupload_text_only` has to reflect the whole *pending* window since the
+/// last upload, not just this call — so it is never a plain assignment:
+///
+/// - `Full` always wins outright (`reupload_text_only = 0`), even over an
+///   already-pending `TextOnly` — a later content change must never be
+///   silently downgraded back to "text only," or the blob replace it needs
+///   would get skipped.
+/// - A second `TextOnly` call while one is already pending is a no-op on the
+///   column (`reupload = 1` already, so it keeps whatever kind is already
+///   stored) — it must not *un-set* a `Full` that a different, earlier call
+///   in the same pending window already established.
+/// - Only when `reupload` was `0` (nothing pending yet) does a `TextOnly`
+///   call actually set the column to `1` — the first call in a fresh
+///   pending window is the one that gets to decide its starting kind.
+pub fn mark_needs_reupload(conn: &Connection, item_id: &str, kind: ReuploadKind) -> Result<()> {
     if !exists(conn, item_id)? {
         return Err(AppError::NotFound(format!("item {item_id}")));
     }
 
+    let is_text_only = kind == ReuploadKind::TextOnly;
     conn.execute(
-        "UPDATE items SET reupload = 1, updated_at = ?2 WHERE id = ?1",
-        params![item_id, now_iso()],
+        "UPDATE items SET \
+           reupload = 1, \
+           reupload_text_only = CASE \
+             WHEN NOT ?2 THEN 0 \
+             WHEN reupload = 1 THEN reupload_text_only \
+             ELSE 1 \
+           END, \
+           updated_at = ?3 \
+         WHERE id = ?1",
+        params![item_id, is_text_only, now_iso()],
     )?;
     Ok(())
 }
@@ -391,8 +430,10 @@ pub fn rebuild(conn: &Connection, discovered: &[DiscoveredFolder]) -> Result<()>
 
 /// Write through a successful backend create/replace (Epic 07).
 ///
-/// Sets the connection, flips `uploaded` on, clears `reupload`, and marks the
-/// `upload` stage done.
+/// Sets the connection, flips `uploaded` on, clears `reupload` (both the flag
+/// and its `reupload_text_only` kind — a clean slate, not just the flag: the
+/// next reprocess pass must decide the kind fresh, not inherit a stale one),
+/// and marks the `upload` stage done.
 pub fn record_upload(
     conn: &Connection,
     item_id: &str,
@@ -405,7 +446,7 @@ pub fn record_upload(
     conn.execute(
         "UPDATE items SET \
            backend_id = ?2, version = ?3, target_state = ?4, visibility_status = ?5, \
-           uploaded = 1, reupload = 0, updated_at = ?6 \
+           uploaded = 1, reupload = 0, reupload_text_only = 0, updated_at = ?6 \
          WHERE id = ?1",
         params![
             item_id,

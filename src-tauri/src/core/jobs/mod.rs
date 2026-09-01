@@ -1,6 +1,12 @@
-//! The pipeline job runner (Epic 06, first slice).
+//! The pipeline job runner (Epic 06).
 //!
-//! Sequential — one item, one stage at a time, no queue/concurrency cap.
+//! Up to [`JobLimits::max_concurrent_items`] items run at once, each through
+//! its own `pdf` → `thumbnail` → `ocr` stages in strict order on one worker
+//! thread; OCR is additionally capped batch-wide at
+//! [`JobLimits::max_concurrent_ocr`] regardless of which worker reaches it,
+//! since it's the heavy stage. See [`run_batch`]'s own doc comment for the
+//! mechanism (a bounded worker pool plus a [`Semaphore`]) and [`JobLimits`]
+//! for where the caps come from — a config.json knob, not a command argument.
 //!
 //! Handles **all six** `InputShape`s:
 //!
@@ -21,9 +27,9 @@
 //! `Done`), `split_spreads` (`split_spreads.py` before assembly) and
 //! `web_pdf_bases` (one OCR text per web PDF).
 //!
-//! True concurrency, mid-process cancellation (`Command::kill`), and an
-//! *interactive* multi-candidate thumbnail picker (there is no GUI for one
-//! yet) are deliberately out of scope — see
+//! Mid-process cancellation (`Command::kill`, via `core::python`) is real.
+//! An *interactive* multi-candidate thumbnail picker (there is no GUI for one
+//! yet) is deliberately out of scope — see
 //! `docs/tasks/06-processing-pipeline-and-jobs.md`.
 //!
 //! Tauri-free by design, matching `core::fs::FsWatcher`'s shape: [`run_batch`]
@@ -32,7 +38,10 @@
 //! `commands::jobs` turns that closure into real `app.emit(...)` calls.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Condvar, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use crate::core::cancel::CancelToken;
 use crate::core::db::{items, Db};
@@ -40,7 +49,7 @@ use crate::core::fs::finalize_staged_output;
 use crate::core::python;
 use crate::dto::{
     BatchRunRequest, InputShape, ItemRunRequest, JobDoneEvent, JobOutcome, JobProgressEvent,
-    JobRunMode, JobStageChangedEvent, RunnableStage, StageName, StageStatus,
+    JobRunMode, JobStageChangedEvent, PersistedConfig, RunnableStage, StageName, StageStatus,
 };
 use crate::error::{AppError, Result};
 
@@ -124,6 +133,101 @@ pub enum JobEvent {
     Done(JobDoneEvent),
 }
 
+// ─── concurrency ──────────────────────────────────────────────────────────────
+
+/// A cheap, hand-rolled counting semaphore — no new dependency for something
+/// this small. `acquire` wakes every ~100ms (matching `core::python`'s own
+/// poll cadence) rather than blocking indefinitely on a permit, so a caller
+/// holding a [`SemaphoreGuard`] wait can still be interrupted by polling a
+/// [`CancelToken`] between wakes instead of being stuck behind whichever
+/// holder currently has the permit.
+struct Semaphore {
+    available: Mutex<usize>,
+    released: Condvar,
+}
+
+impl Semaphore {
+    fn new(permits: usize) -> Self {
+        Self {
+            available: Mutex::new(permits),
+            released: Condvar::new(),
+        }
+    }
+
+    /// Block until a permit is free, waking periodically so the caller can
+    /// re-check a cancel token between attempts.
+    fn acquire(&self) -> SemaphoreGuard<'_> {
+        let mut count = self.available.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if *count > 0 {
+                *count -= 1;
+                return SemaphoreGuard { sem: self };
+            }
+            let (guard, _timeout) = self
+                .released
+                .wait_timeout(count, Duration::from_millis(100))
+                .unwrap_or_else(|e| e.into_inner());
+            count = guard;
+        }
+    }
+}
+
+struct SemaphoreGuard<'a> {
+    sem: &'a Semaphore,
+}
+
+impl Drop for SemaphoreGuard<'_> {
+    fn drop(&mut self) {
+        let mut count = self.sem.available.lock().unwrap_or_else(|e| e.into_inner());
+        *count += 1;
+        self.sem.released.notify_one();
+    }
+}
+
+/// Concurrency caps for one run, read from `config.json` at the start of each
+/// run rather than passed as a command argument — see
+/// `commands::config::config_save`'s preserve-on-save handling. Both fields
+/// are backend-only knobs: hand-edit `config.json` to change them (the `.ts`
+/// settings type doesn't carry them, and never will unless a GUI control is
+/// built for open question #3 — see `docs/03-open-questions.md`).
+///
+/// Defaults are a first-slice guess, not measured on real volumes: OCR
+/// (PaddleOCR) is the heavy stage, PDF/thumbnail assembly (Pillow/pypdfium2)
+/// is comparatively light, hence the separate, tighter OCR cap.
+#[derive(Debug, Clone, Copy)]
+pub struct JobLimits {
+    pub max_concurrent_items: usize,
+    pub max_concurrent_ocr: usize,
+}
+
+impl JobLimits {
+    const DEFAULT_MAX_CONCURRENT_ITEMS: usize = 3;
+    const DEFAULT_MAX_CONCURRENT_OCR: usize = 1;
+    /// A fat-finger guard against a hand-edited config.json forking the
+    /// workstation into dozens of processes — not a product decision.
+    const HARD_CEILING: usize = 8;
+
+    pub fn from_config(config: Option<&PersistedConfig>) -> Self {
+        let pick = |value: Option<u32>, default: usize| -> usize {
+            value
+                .map(|n| n as usize)
+                .filter(|&n| n > 0)
+                .unwrap_or(default)
+                .min(Self::HARD_CEILING)
+        };
+        Self {
+            max_concurrent_items: pick(
+                config.and_then(|c| c.max_concurrent_items),
+                Self::DEFAULT_MAX_CONCURRENT_ITEMS,
+            ),
+            max_concurrent_ocr: pick(
+                config.and_then(|c| c.max_concurrent_ocr),
+                Self::DEFAULT_MAX_CONCURRENT_OCR,
+            ),
+        }
+    }
+}
+
 // ─── orchestration ────────────────────────────────────────────────────────────
 
 const CANONICAL_ORDER: [RunnableStage; 3] = [
@@ -174,11 +278,21 @@ fn staging_dir(folder: &Path) -> PathBuf {
     folder.join(format!(".nbcg-tmp-{}", uuid::Uuid::new_v4()))
 }
 
-/// One item's tally, used to decide its `JobDoneEvent` and whether it
-/// qualifies for `mark_needs_reupload` under `Reprocess`.
+/// One item's tally, used to decide its `JobDoneEvent` and, under
+/// `Reprocess`, whether/how it qualifies for `mark_needs_reupload`.
+///
+/// `content_changed`/`text_changed` are deliberately **not** one `any_done`
+/// bool anymore (Epic 07 re-upload granularity) — a `pdf`/`thumbnail` stage
+/// completing means new blob bytes exist on disk (`content_changed`); an
+/// `ocr` stage completing means only the paired text file did
+/// (`text_changed`). `run_one_item` reads both to pick a
+/// `db::items::ReuploadKind`: content changing always means `Full` (a stale
+/// `MultiplePdfs` precondition-verify success must *not* set either flag —
+/// see `run_multiple_pdfs`'s `Pdf` arm, which writes nothing for that shape).
 #[derive(Default)]
 struct ItemOutcome {
-    any_done: bool,
+    content_changed: bool,
+    text_changed: bool,
     any_failed: bool,
     first_error: Option<String>,
 }
@@ -438,6 +552,7 @@ fn ocr_bases(item: &ItemRunRequest) -> Vec<String> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_ocr_stage(
     db: &Db,
     request: &BatchRunRequest,
@@ -445,6 +560,7 @@ fn run_ocr_stage(
     outcome: &mut ItemOutcome,
     emit: &mut impl FnMut(JobEvent),
     cancel: &CancelToken,
+    ocr_gate: &Semaphore,
 ) -> Result<()> {
     if cancel.is_cancelled() {
         // A cancel that landed during this item's earlier stage(s) must not
@@ -475,6 +591,17 @@ fn run_ocr_stage(
                 emit,
             );
         }
+    }
+
+    // Held for this item's whole OCR stage (every base it covers), not
+    // per-PDF - the resource contention this guards against is "how many
+    // items are OCR-ing at once", not "how many PDF files". Re-check cancel
+    // immediately after acquiring: a permit can free up after a cancel was
+    // already requested, and a stale item shouldn't burn a fresh OCR run it
+    // would just have to settle `Pending` anyway.
+    let _permit = ocr_gate.acquire();
+    if cancel.is_cancelled() {
+        return Ok(());
     }
 
     set_stage_status(
@@ -533,7 +660,7 @@ fn run_ocr_stage(
                 None,
                 emit,
             )?;
-            outcome.any_done = true;
+            outcome.text_changed = true;
         }
         (Ok(_), Err(e)) | (Err(e), _) if e.is_cancelled() => {
             // A cancel is not a failure: leave the stage `Pending` so
@@ -739,6 +866,7 @@ fn run_supplied_pdf_stage(
 /// (`domain/pipeline.uploadCandidates`), so the operator's PDFs already *are*
 /// the web PDFs. Rewriting them in place would destroy the originals, which
 /// nothing else in this pipeline does.
+#[allow(clippy::too_many_arguments)]
 fn run_multiple_pdfs(
     db: &Db,
     request: &BatchRunRequest,
@@ -747,6 +875,7 @@ fn run_multiple_pdfs(
     outcome: &mut ItemOutcome,
     emit: &mut impl FnMut(JobEvent),
     cancel: &CancelToken,
+    ocr_gate: &Semaphore,
 ) -> Result<()> {
     let folder = Path::new(&item.folder_path);
     let bases = ocr_bases(item);
@@ -768,7 +897,14 @@ fn run_multiple_pdfs(
                         None,
                         emit,
                     )?;
-                    outcome.any_done = true;
+                    // Deliberately not `outcome.content_changed = true` here:
+                    // this arm only *verifies* the operator's own PDFs are
+                    // still present, it never writes anything for this shape
+                    // (see this function's own doc comment) - a plain
+                    // precondition-pass is not "new content," and flagging it
+                    // as one would make every Reprocess-with-Pdf-requested
+                    // pass on a `multiple-pdfs` item spuriously mark
+                    // `reupload`, even when nothing on disk changed.
                 } else {
                     let names: Vec<String> = missing.iter().map(|b| format!("{b}.pdf")).collect();
                     fail_stage_without_running(
@@ -786,7 +922,7 @@ fn run_multiple_pdfs(
                 run_multi_pdf_thumbnail(db, request, item, &bases, outcome, emit, cancel)?;
             }
             RunnableStage::Ocr => {
-                run_ocr_stage(db, request, item, outcome, emit, cancel)?;
+                run_ocr_stage(db, request, item, outcome, emit, cancel, ocr_gate)?;
             }
         }
     }
@@ -898,7 +1034,10 @@ fn settle_web_stages(
                     set_stage_status(db, request, item, stage, StageStatus::Pending, None, emit)?;
                 } else {
                     set_stage_status(db, request, item, stage, StageStatus::Done, None, emit)?;
-                    outcome.any_done = true;
+                    // `resolved` here is always a subset of {Pdf, Thumbnail}
+                    // (see this function's callers - never Ocr), so a real
+                    // settle at this point always means new blob bytes.
+                    outcome.content_changed = true;
                 }
             }
             Ok(())
@@ -931,6 +1070,7 @@ fn settle_web_stages(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_supplied_pdf(
     db: &Db,
     request: &BatchRunRequest,
@@ -939,6 +1079,7 @@ fn run_supplied_pdf(
     outcome: &mut ItemOutcome,
     emit: &mut impl FnMut(JobEvent),
     cancel: &CancelToken,
+    ocr_gate: &Semaphore,
 ) -> Result<()> {
     let wants_pdf = stages.contains(&RunnableStage::Pdf);
     let wants_thumb = stages.contains(&RunnableStage::Thumbnail);
@@ -956,11 +1097,12 @@ fn run_supplied_pdf(
         )?;
     }
     if stages.contains(&RunnableStage::Ocr) {
-        run_ocr_stage(db, request, item, outcome, emit, cancel)?;
+        run_ocr_stage(db, request, item, outcome, emit, cancel, ocr_gate)?;
     }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_pdf_thumbnail_ocr(
     db: &Db,
     request: &BatchRunRequest,
@@ -969,6 +1111,7 @@ fn run_pdf_thumbnail_ocr(
     outcome: &mut ItemOutcome,
     emit: &mut impl FnMut(JobEvent),
     cancel: &CancelToken,
+    ocr_gate: &Semaphore,
 ) -> Result<()> {
     let wants_pdf = stages.contains(&RunnableStage::Pdf);
     let wants_thumb = stages.contains(&RunnableStage::Thumbnail);
@@ -988,7 +1131,7 @@ fn run_pdf_thumbnail_ocr(
         )?;
     }
     if wants_ocr {
-        run_ocr_stage(db, request, item, outcome, emit, cancel)?;
+        run_ocr_stage(db, request, item, outcome, emit, cancel, ocr_gate)?;
     }
     Ok(())
 }
@@ -1054,6 +1197,7 @@ fn run_item(
     item: &ItemRunRequest,
     emit: &mut impl FnMut(JobEvent),
     cancel: &CancelToken,
+    ocr_gate: &Semaphore,
 ) -> Result<ItemOutcome> {
     let mut outcome = ItemOutcome::default();
     let stages = canonical_stages(&item.stages);
@@ -1063,16 +1207,43 @@ fn run_item(
 
     match item.input_shape {
         InputShape::PageImages | InputShape::Tiffs => {
-            run_pdf_thumbnail_ocr(db, request, item, &stages, &mut outcome, emit, cancel)?;
+            run_pdf_thumbnail_ocr(
+                db,
+                request,
+                item,
+                &stages,
+                &mut outcome,
+                emit,
+                cancel,
+                ocr_gate,
+            )?;
         }
         InputShape::ImagesOnly => {
             run_images_only(db, request, item, &stages, &mut outcome, emit, cancel)?;
         }
         InputShape::SuppliedPdf => {
-            run_supplied_pdf(db, request, item, &stages, &mut outcome, emit, cancel)?;
+            run_supplied_pdf(
+                db,
+                request,
+                item,
+                &stages,
+                &mut outcome,
+                emit,
+                cancel,
+                ocr_gate,
+            )?;
         }
         InputShape::MultiplePdfs => {
-            run_multiple_pdfs(db, request, item, &stages, &mut outcome, emit, cancel)?;
+            run_multiple_pdfs(
+                db,
+                request,
+                item,
+                &stages,
+                &mut outcome,
+                emit,
+                cancel,
+                ocr_gate,
+            )?;
         }
         InputShape::Empty => {
             // TS shouldn't send stages for an empty folder; handled
@@ -1130,13 +1301,113 @@ fn reset_unfinished_stages(
     Ok(())
 }
 
-/// Run every item in `request`, sequentially, one stage at a time. Handles
-/// `Run`/`Rerun`/`Reprocess` alike - `mode` only changes whether
-/// `mark_needs_reupload` fires, not the execution path.
+/// The `ReuploadKind` a Reprocess pass's [`ItemOutcome`] implies, or `None`
+/// when nothing actually changed (no reupload needed at all — e.g. every
+/// requested stage was already `done` and skip-if-done left it alone, or a
+/// `multiple-pdfs` item's `Pdf` stage only re-verified the operator's own
+/// files). Pulled out as its own pure function (no `Db`/IO) specifically so
+/// it's unit-testable without a real Python subprocess — a live OCR pass
+/// isn't available in every dev/CI environment (see this module's own doc
+/// comment and `core_jobs.rs`'s), so `text_changed`'s classification can't
+/// always be exercised through a real end-to-end `run_batch` call, but this
+/// function's logic can be pinned directly regardless.
+///
+/// Content changing always wins as `Full`, even when `text_changed` is also
+/// set from the same pass — see [`db::items::mark_needs_reupload`]'s own doc
+/// comment for why the *column* write is still more than a plain assignment
+/// beyond this per-call choice (it must not downgrade an already-pending
+/// `Full` from an *earlier*, still-unpublished pass).
+fn reupload_kind_for(outcome: &ItemOutcome) -> Option<items::ReuploadKind> {
+    if outcome.content_changed {
+        Some(items::ReuploadKind::Full)
+    } else if outcome.text_changed {
+        Some(items::ReuploadKind::TextOnly)
+    } else {
+        None
+    }
+}
+
+/// One item's full run, plus its own terminal `job://done` — always with
+/// `batch_complete: false`; that flag is now a single event [`run_batch`]
+/// emits once, after every worker has finished, since "the last item" isn't
+/// well-defined once items run concurrently (see `run_batch`'s own doc
+/// comment). Returns `Err` only for a genuine infra failure (e.g. a DB write
+/// failing) — a Python-script failure is already caught inside [`run_item`]
+/// and turned into a `Failed` stage status, never bubbled up here.
+fn run_one_item(
+    db: &Db,
+    request: &BatchRunRequest,
+    item: &ItemRunRequest,
+    emit: &mut impl FnMut(JobEvent),
+    cancel: &CancelToken,
+    ocr_gate: &Semaphore,
+) -> Result<()> {
+    let outcome = run_item(db, request, item, emit, cancel, ocr_gate)?;
+
+    if cancel.is_cancelled() {
+        // The cancel landed mid-item: its own settle points already left
+        // the interrupted stage(s) `Pending` (never `Failed`), but do not
+        // emit this item's own terminal event — reporting it `done`/
+        // `failed` here would be wrong when a later stage never ran. The
+        // post-join `reset_unfinished_stages` plus the batch-level
+        // `Cancelled` event in `run_batch` cover cleanup; `resetInFlightRuns`
+        // on the `.ts` side handles any item that never got a terminal event.
+        return Ok(());
+    }
+
+    if request.mode == JobRunMode::Reprocess {
+        if let Some(kind) = reupload_kind_for(&outcome) {
+            let already_uploaded = db.with(|c| items::get(c, &item.item_id))?.uploaded;
+            if already_uploaded {
+                db.with(|c| items::mark_needs_reupload(c, &item.item_id, kind))?;
+            }
+        }
+    }
+
+    emit(JobEvent::Done(JobDoneEvent {
+        batch_id: request.batch_id.clone(),
+        item_id: Some(item.item_id.clone()),
+        outcome: if outcome.any_failed {
+            JobOutcome::Failed
+        } else {
+            JobOutcome::Done
+        },
+        error: outcome.first_error,
+        batch_complete: false,
+    }));
+    Ok(())
+}
+
+/// Run every item in `request`, up to `limits.max_concurrent_items` at once
+/// — each item still runs its own `pdf` → `thumbnail` → `ocr` stages in
+/// strict order, on one worker thread ([`std::thread::scope`], borrowing
+/// `db`/the cancel token without needing `'static`/`Arc`), but different
+/// items' stages can now overlap. OCR is additionally gated by
+/// `limits.max_concurrent_ocr` across the *whole* batch regardless of which
+/// worker reaches it — see [`Semaphore`] — since that's the heavy stage
+/// (PaddleOCR); PDF/thumbnail assembly is comparatively light and is bounded
+/// only by `max_concurrent_items`. Handles `Run`/`Rerun`/`Reprocess` alike -
+/// `mode` only changes whether `mark_needs_reupload` fires, not the
+/// execution path.
+///
+/// `emit` stays a plain `FnMut`, called from exactly one thread — this one.
+/// Workers report events over an `mpsc` channel instead of calling `emit`
+/// directly, drained here while they're still running (not after they all
+/// finish, or progress would arrive in one late burst) — real concurrency in
+/// the *work*, without needing every caller of [`run_batch`] (and every
+/// existing test's `|e| events.push(e)`-style collector) to become `Sync`.
+///
+/// Per-item terminal events (`job://done` with a real `item_id`) can now
+/// arrive in any order — the `.ts` reducer already keys them by `itemId`, not
+/// position (`applyJobDone`). `batch_complete: true` is therefore its own,
+/// separate synthetic event (`item_id: None`), emitted exactly once after
+/// every worker has finished — the same shape the cancellation and
+/// empty-batch paths already used, just now also used on normal completion.
 pub fn run_batch(
     db: &Db,
     request: &BatchRunRequest,
     guard: &JobRunGuard<'_>,
+    limits: JobLimits,
     mut emit: impl FnMut(JobEvent),
 ) -> Result<()> {
     if request.items.is_empty() {
@@ -1151,7 +1422,8 @@ pub fn run_batch(
     }
 
     // Queue everything up front, so the UI can show the whole run's shape
-    // before the first stage actually starts.
+    // before the first stage actually starts. Single-threaded still - a
+    // fixed setup pass before any worker starts.
     for item in &request.items {
         for stage in canonical_stages(&item.stages) {
             set_stage_status(
@@ -1167,61 +1439,230 @@ pub fn run_batch(
     }
 
     let cancel_token = guard.cancel_token();
-    let last_index = request.items.len() - 1;
+    let ocr_gate = Semaphore::new(limits.max_concurrent_ocr);
+    let next_index = AtomicUsize::new(0);
+    let first_error: Mutex<Option<AppError>> = Mutex::new(None);
+    let worker_count = limits.max_concurrent_items.min(request.items.len()).max(1);
 
-    for (index, item) in request.items.iter().enumerate() {
-        if guard.cancel_requested() {
-            reset_unfinished_stages(db, request, &mut emit)?;
-            emit(JobEvent::Done(JobDoneEvent {
-                batch_id: request.batch_id.clone(),
-                item_id: None,
-                outcome: JobOutcome::Cancelled,
-                error: None,
-                batch_complete: true,
-            }));
-            return Ok(());
+    // Bind references once, outside the loop: `thread::scope`'s spawned
+    // closures need `move` (a per-iteration `Sender`/`CancelToken` clone
+    // can't be *borrowed* across the loop boundary into a thread that may
+    // outlive that iteration), and `move` takes full ownership of whatever
+    // it captures - so every worker captures a `Copy`-able shared
+    // *reference* into the one `Semaphore`/`AtomicUsize`/`Mutex`, not an
+    // attempt to move the shared value itself into more than one closure.
+    let ocr_gate_ref = &ocr_gate;
+    let next_index_ref = &next_index;
+    let first_error_ref = &first_error;
+    let (tx, rx) = std::sync::mpsc::channel::<JobEvent>();
+
+    thread::scope(|scope| {
+        for _ in 0..worker_count {
+            let tx = tx.clone();
+            let cancel_token = cancel_token.clone();
+            scope.spawn(move || {
+                let mut emit_worker = |e: JobEvent| {
+                    // Can only fail if every `Receiver` is already gone,
+                    // which can't happen while this thread is still running
+                    // inside the enclosing `thread::scope` - the receiver is
+                    // drained below, in that same scope, on the calling
+                    // thread.
+                    let _ = tx.send(e);
+                };
+                loop {
+                    if cancel_token.is_cancelled() {
+                        return;
+                    }
+                    let index = next_index_ref.fetch_add(1, Ordering::SeqCst);
+                    let Some(item) = request.items.get(index) else {
+                        return; // the queue is drained
+                    };
+                    if let Err(e) = run_one_item(
+                        db,
+                        request,
+                        item,
+                        &mut emit_worker,
+                        &cancel_token,
+                        ocr_gate_ref,
+                    ) {
+                        // A genuine infra failure: stop every other worker
+                        // from picking up new work, same as an operator
+                        // cancel, and keep the first error - it's the one
+                        // most likely to point at the actual cause.
+                        cancel_token.cancel();
+                        let mut slot = first_error_ref.lock().unwrap_or_else(|e| e.into_inner());
+                        if slot.is_none() {
+                            *slot = Some(e);
+                        }
+                        return;
+                    }
+                }
+            });
         }
+        drop(tx); // this scope's own sender - else the channel never closes
 
-        let outcome = run_item(db, request, item, &mut emit, &cancel_token)?;
-
-        if guard.cancel_requested() {
-            // The cancel landed mid-item: its own settle points already left
-            // the interrupted stage(s) `Pending` (never `Failed`), but do not
-            // emit this item's own terminal event — reporting it `done`/
-            // `failed` here would be wrong when a later stage never ran, and
-            // `resetInFlightRuns` on the `.ts` side already cleans up any
-            // item still mid-flight once the batch-level `Cancelled` event
-            // below arrives.
-            reset_unfinished_stages(db, request, &mut emit)?;
-            emit(JobEvent::Done(JobDoneEvent {
-                batch_id: request.batch_id.clone(),
-                item_id: None,
-                outcome: JobOutcome::Cancelled,
-                error: None,
-                batch_complete: true,
-            }));
-            return Ok(());
+        // Drain live, on the calling thread, while workers are still
+        // running - the loop ends once every worker has dropped its own
+        // `Sender` clone, i.e. once every worker has returned.
+        for event in rx.iter() {
+            emit(event);
         }
+    });
 
-        if request.mode == JobRunMode::Reprocess && outcome.any_done {
-            let already_uploaded = db.with(|c| items::get(c, &item.item_id))?.uploaded;
-            if already_uploaded {
-                db.with(|c| items::mark_needs_reupload(c, &item.item_id))?;
-            }
-        }
-
-        emit(JobEvent::Done(JobDoneEvent {
-            batch_id: request.batch_id.clone(),
-            item_id: Some(item.item_id.clone()),
-            outcome: if outcome.any_failed {
-                JobOutcome::Failed
-            } else {
-                JobOutcome::Done
-            },
-            error: outcome.first_error,
-            batch_complete: index == last_index,
-        }));
+    if cancel_token.is_cancelled() {
+        reset_unfinished_stages(db, request, &mut emit)?;
     }
 
+    if let Some(e) = first_error.into_inner().unwrap_or_else(|e| e.into_inner()) {
+        // No terminal event on an infra failure, same as before this run
+        // could be split across threads - the command's own `Result::Err`
+        // is what the `.ts` invoke call sees.
+        return Err(e);
+    }
+
+    emit(JobEvent::Done(JobDoneEvent {
+        batch_id: request.batch_id.clone(),
+        item_id: None,
+        outcome: if cancel_token.is_cancelled() {
+            JobOutcome::Cancelled
+        } else {
+            JobOutcome::Done
+        },
+        error: None,
+        batch_complete: true,
+    }));
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Deterministic, no real Python involved: spawn more workers than
+    /// permits, each holding its permit just long enough to overlap with its
+    /// neighbors, and prove the concurrent-holder count never exceeds what
+    /// was configured. This is the property a real `core_jobs.rs`
+    /// integration test can't assert without depending on actual subprocess
+    /// timing — which is exactly why it's pinned here instead, against a
+    /// synthetic workload.
+    #[test]
+    fn semaphore_never_exceeds_its_permit_count() {
+        let sem = Semaphore::new(2);
+        let current = AtomicUsize::new(0);
+        let high_water = AtomicUsize::new(0);
+
+        thread::scope(|scope| {
+            for _ in 0..6 {
+                scope.spawn(|| {
+                    let _permit = sem.acquire();
+                    let now = current.fetch_add(1, Ordering::SeqCst) + 1;
+                    high_water.fetch_max(now, Ordering::SeqCst);
+                    thread::sleep(Duration::from_millis(20));
+                    current.fetch_sub(1, Ordering::SeqCst);
+                });
+            }
+        });
+
+        // Not just "never exceeded a cap that happened never to be
+        // approached" - with 6 workers wanting 2 permits and a 20ms hold
+        // each, actually hitting the cap is all but guaranteed, so this also
+        // pins that the semaphore doesn't over-serialize (permits > 1 really
+        // do allow real overlap).
+        assert_eq!(high_water.load(Ordering::SeqCst), 2);
+    }
+
+    /// A released permit really does become available again - not just "the
+    /// count never exceeds N" (trivially true of a semaphore that never
+    /// released anything and deadlocked), but "every waiter eventually gets
+    /// in". Reaching the end of this test at all is the assertion: five
+    /// sequential acquires of a one-permit semaphore only succeed if each
+    /// guard's `Drop` actually returned its permit.
+    #[test]
+    fn semaphore_permits_are_reusable() {
+        let sem = Semaphore::new(1);
+        for _ in 0..5 {
+            let _permit = sem.acquire();
+        }
+    }
+
+    /// `JobLimits::from_config` guards against the three ways a hand-edited
+    /// config.json could otherwise wedge the runner: no file yet (`None`),
+    /// an explicit `0` (would deadlock every worker/OCR wait forever), and
+    /// an implausibly large number (a typo shouldn't fork the workstation
+    /// into dozens of processes).
+    #[test]
+    fn job_limits_from_config_defaults_and_clamps() {
+        let defaults = JobLimits::from_config(None);
+        assert_eq!(
+            defaults.max_concurrent_items,
+            JobLimits::DEFAULT_MAX_CONCURRENT_ITEMS
+        );
+        assert_eq!(
+            defaults.max_concurrent_ocr,
+            JobLimits::DEFAULT_MAX_CONCURRENT_OCR
+        );
+
+        let zeroed = JobLimits::from_config(Some(&PersistedConfig {
+            max_concurrent_items: Some(0),
+            max_concurrent_ocr: Some(0),
+            ..Default::default()
+        }));
+        assert_eq!(
+            zeroed.max_concurrent_items,
+            JobLimits::DEFAULT_MAX_CONCURRENT_ITEMS
+        );
+        assert_eq!(
+            zeroed.max_concurrent_ocr,
+            JobLimits::DEFAULT_MAX_CONCURRENT_OCR
+        );
+
+        let huge = JobLimits::from_config(Some(&PersistedConfig {
+            max_concurrent_items: Some(500),
+            max_concurrent_ocr: Some(500),
+            ..Default::default()
+        }));
+        assert_eq!(huge.max_concurrent_items, JobLimits::HARD_CEILING);
+        assert_eq!(huge.max_concurrent_ocr, JobLimits::HARD_CEILING);
+
+        let reasonable = JobLimits::from_config(Some(&PersistedConfig {
+            max_concurrent_items: Some(4),
+            max_concurrent_ocr: Some(2),
+            ..Default::default()
+        }));
+        assert_eq!(reasonable.max_concurrent_items, 4);
+        assert_eq!(reasonable.max_concurrent_ocr, 2);
+    }
+
+    /// `reupload_kind_for` (Epic 07 re-upload granularity) - pinned directly
+    /// since a real `text_changed = true` settle needs a live OCR pass this
+    /// environment can't run (see the function's own doc comment).
+    #[test]
+    fn reupload_kind_for_prefers_full_over_text_only() {
+        let outcome = ItemOutcome {
+            content_changed: true,
+            text_changed: true,
+            ..Default::default()
+        };
+        assert_eq!(reupload_kind_for(&outcome), Some(items::ReuploadKind::Full));
+    }
+
+    #[test]
+    fn reupload_kind_for_is_text_only_when_only_text_changed() {
+        let outcome = ItemOutcome {
+            content_changed: false,
+            text_changed: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            reupload_kind_for(&outcome),
+            Some(items::ReuploadKind::TextOnly)
+        );
+    }
+
+    #[test]
+    fn reupload_kind_for_is_none_when_nothing_changed() {
+        let outcome = ItemOutcome::default();
+        assert_eq!(reupload_kind_for(&outcome), None);
+    }
 }

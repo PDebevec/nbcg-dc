@@ -35,7 +35,7 @@ function makeItem(overrides: Partial<Item> = {}): Item {
     level: "main",
     assets: [],
     stages: emptyStages(),
-    flags: { uploaded: false, reupload: false },
+    flags: { uploaded: false, reupload: false, reuploadTextOnly: false },
     backendId: null,
     batchId: null,
     title: null,

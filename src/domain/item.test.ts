@@ -25,7 +25,7 @@ function makeItem(overrides: Partial<Item> = {}): Item {
     level: "main",
     assets: [],
     stages: emptyStages(),
-    flags: { uploaded: false, reupload: false },
+    flags: { uploaded: false, reupload: false, reuploadTextOnly: false },
     backendId: null,
     batchId: null,
     title: null,
@@ -59,7 +59,7 @@ describe("deriveItemState — first match wins (docs/01)", () => {
 
   it("the uploaded flag is Uploaded", () => {
     expect(
-      deriveItemState(makeItem({ flags: { uploaded: true, reupload: false } })),
+      deriveItemState(makeItem({ flags: { uploaded: true, reupload: false, reuploadTextOnly: false } })),
     ).toBe(ItemState.Uploaded);
   });
 
@@ -69,18 +69,18 @@ describe("deriveItemState — first match wins (docs/01)", () => {
   });
 
   it("published + reupload is Needs re-upload (Uploaded excludes reupload)", () => {
-    const item = makeItem({ flags: { uploaded: true, reupload: true } });
+    const item = makeItem({ flags: { uploaded: true, reupload: true, reuploadTextOnly: false } });
     expect(deriveItemState(item)).toBe(ItemState.NeedsReupload);
   });
 
   it("reupload alone (never cleanly uploaded) is still Needs re-upload", () => {
-    const item = makeItem({ flags: { uploaded: false, reupload: true } });
+    const item = makeItem({ flags: { uploaded: false, reupload: true, reuploadTextOnly: false } });
     expect(deriveItemState(item)).toBe(ItemState.NeedsReupload);
   });
 
   it("a dirtied published item in an active re-work batch is In progress", () => {
     const item = makeItem({
-      flags: { uploaded: true, reupload: true },
+      flags: { uploaded: true, reupload: true, reuploadTextOnly: false },
       batchId: "b9",
     });
     expect(deriveItemState(item)).toBe(ItemState.InProgress);
@@ -92,20 +92,20 @@ describe("deriveItemState — first match wins (docs/01)", () => {
     // progress, not Uploaded (docs/01 "locked to that batch"; Create batch → In
     // progress). It settles back to Uploaded only once the batch releases it.
     const item = makeItem({
-      flags: { uploaded: true, reupload: false },
+      flags: { uploaded: true, reupload: false, reuploadTextOnly: false },
       batchId: "b9",
     });
     expect(deriveItemState(item)).toBe(ItemState.InProgress);
   });
 
   it("a clean uploaded item with no batch is Uploaded", () => {
-    const item = makeItem({ flags: { uploaded: true, reupload: false } });
+    const item = makeItem({ flags: { uploaded: true, reupload: false, reuploadTextOnly: false } });
     expect(deriveItemState(item)).toBe(ItemState.Uploaded);
   });
 
   it("published wins over a stale failed stage", () => {
     const item = makeItem({
-      flags: { uploaded: true, reupload: false },
+      flags: { uploaded: true, reupload: false, reuploadTextOnly: false },
       stages: stagesWith("ocr", "failed", "bad"),
     });
     expect(deriveItemState(item)).toBe(ItemState.Uploaded);
@@ -123,9 +123,9 @@ describe("deriveItemState — first match wins (docs/01)", () => {
     const states = new Set([
       deriveItemState(makeItem()),
       deriveItemState(makeItem({ batchId: "b" })),
-      deriveItemState(makeItem({ flags: { uploaded: false, reupload: true } })),
+      deriveItemState(makeItem({ flags: { uploaded: false, reupload: true, reuploadTextOnly: false } })),
       deriveItemState(makeItem({ stages: stagesWith("pdf", "failed") })),
-      deriveItemState(makeItem({ flags: { uploaded: true, reupload: false } })),
+      deriveItemState(makeItem({ flags: { uploaded: true, reupload: false, reuploadTextOnly: false } })),
     ]);
     expect(states).toEqual(
       new Set([
@@ -148,7 +148,7 @@ describe("helpers", () => {
   it("isPublished reflects flag or upload-done", () => {
     expect(isPublished(makeItem())).toBe(false);
     expect(
-      isPublished(makeItem({ flags: { uploaded: true, reupload: false } })),
+      isPublished(makeItem({ flags: { uploaded: true, reupload: false, reuploadTextOnly: false } })),
     ).toBe(true);
     expect(isPublished(makeItem({ stages: stagesWith("upload", "done") }))).toBe(
       true,
@@ -168,12 +168,12 @@ describe("helpers", () => {
 
 describe("stagePipStatus", () => {
   it("maps the upload pip to re-upload when a published item is dirty", () => {
-    const item = makeItem({ flags: { uploaded: true, reupload: true } });
+    const item = makeItem({ flags: { uploaded: true, reupload: true, reuploadTextOnly: false } });
     expect(stagePipStatus(item, "upload")).toBe("re-upload");
   });
 
   it("does not show re-upload when the item was never published", () => {
-    const item = makeItem({ flags: { uploaded: false, reupload: true } });
+    const item = makeItem({ flags: { uploaded: false, reupload: true, reuploadTextOnly: false } });
     expect(stagePipStatus(item, "upload")).toBe("pending");
   });
 

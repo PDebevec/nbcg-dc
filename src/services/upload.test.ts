@@ -40,7 +40,7 @@ function makeItem(overrides: Partial<Item> = {}): Item {
     level: "main",
     assets: ASSETS,
     stages: stagesDone(),
-    flags: { uploaded: false, reupload: false },
+    flags: { uploaded: false, reupload: false, reuploadTextOnly: false },
     backendId: null,
     batchId: "batch-1",
     title: "Gorski vijenac",
@@ -514,7 +514,7 @@ describe("uploadItem — replace", () => {
   };
 
   function replaceItem(): Item {
-    return makeItem({ root: "processed", backendId: "rec_1", flags: { uploaded: true, reupload: true } });
+    return makeItem({ root: "processed", backendId: "rec_1", flags: { uploaded: true, reupload: true, reuploadTextOnly: false } });
   }
 
   it("PATCHes only the changed keys with expectedVersion and replaces matched files", async () => {
@@ -579,7 +579,7 @@ describe("uploadItem — replace", () => {
     const item = makeItem({
       root: "processed",
       backendId: "rec_1",
-      flags: { uploaded: true, reupload: true },
+      flags: { uploaded: true, reupload: true, reuploadTextOnly: false },
       folderName: "ОКТОИХ петогласник 2",
       assets: [discoverAsset(local, `/p/${local}`)],
     });
@@ -604,7 +604,7 @@ describe("uploadItem — replace", () => {
     const item = makeItem({
       root: "processed",
       backendId: "rec_1",
-      flags: { uploaded: true, reupload: true },
+      flags: { uploaded: true, reupload: true, reuploadTextOnly: false },
       assets: [
         discoverAsset("gorski.pdf", "/p/gorski.pdf"),
         discoverAsset("gorski_thumb.png", "/p/gorski_thumb.png"),
@@ -670,7 +670,7 @@ describe("uploadItem — replace", () => {
       readMirror: vi.fn(async () => MIRROR),
       listFiles: vi.fn(async () => [attachment("gorski.pdf", { id: "f-pdf" }), attachment("gorski_thumb.png", { id: "f-thumb" })]),
     });
-    const item = makeItem({ root: "processed", backendId: "rec_1", flags: { uploaded: true, reupload: false } });
+    const item = makeItem({ root: "processed", backendId: "rec_1", flags: { uploaded: true, reupload: false, reuploadTextOnly: false } });
     const res = await uploadItem(item, { ...CTX, metadata: { title: "New title", year: "2020" } }, deps);
     expect(res.status).toBe("uploaded");
     expect(deps.updateItem).toHaveBeenCalledTimes(1); // metadata still PATCHed
@@ -685,11 +685,40 @@ describe("uploadItem — replace", () => {
       readMirror: vi.fn(async () => MIRROR),
       listFiles: vi.fn(async () => [attachment("gorski_thumb.png", { id: "f-thumb" })]),
     });
-    const item = makeItem({ root: "processed", backendId: "rec_1", flags: { uploaded: true, reupload: false } });
+    const item = makeItem({ root: "processed", backendId: "rec_1", flags: { uploaded: true, reupload: false, reuploadTextOnly: false } });
     await uploadItem(item, { ...CTX, metadata: { title: "Old title", year: "2020" } }, deps);
     expect(deps.replaceFile).not.toHaveBeenCalled();
     expect(deps.uploadFiles).toHaveBeenCalledTimes(1); // the missing WEB pdf
     expect((deps.uploadFiles as any).mock.calls[0][1].map((f: any) => f.filename)).toEqual(["gorski.pdf"]);
+  });
+
+  it("pushes only the OCR text (no blob) on a text-only re-upload (reuploadTextOnly=true)", async () => {
+    const deps = fakeDeps({
+      readMirror: vi.fn(async () => MIRROR),
+      listFiles: vi.fn(async () => [attachment("gorski.pdf", { id: "f-pdf" }), attachment("gorski_thumb.png", { id: "f-thumb" })]),
+    });
+    const item = makeItem({ root: "processed", backendId: "rec_1", flags: { uploaded: true, reupload: true, reuploadTextOnly: true } });
+    const res = await uploadItem(item, { ...CTX, metadata: { title: "New title", year: "2020" } }, deps);
+
+    expect(res.status).toBe("uploaded");
+    expect(deps.replaceFile).not.toHaveBeenCalled(); // the whole point — no blob PUT
+    expect(deps.uploadFiles).not.toHaveBeenCalled(); // nothing missing
+    expect(deps.setFileText).toHaveBeenCalledWith("f-pdf", "OCR text");
+    // The thumbnail has no paired text file — nothing to push for it at all.
+    expect(deps.setFileText).toHaveBeenCalledTimes(1);
+  });
+
+  it("still does a full blob replace when reupload=true and reuploadTextOnly=false", async () => {
+    const deps = fakeDeps({
+      readMirror: vi.fn(async () => MIRROR),
+      listFiles: vi.fn(async () => [attachment("gorski.pdf", { id: "f-pdf" }), attachment("gorski_thumb.png", { id: "f-thumb" })]),
+    });
+    const item = makeItem({ root: "processed", backendId: "rec_1", flags: { uploaded: true, reupload: true, reuploadTextOnly: false } });
+    const res = await uploadItem(item, { ...CTX, metadata: { title: "New title", year: "2020" } }, deps);
+
+    expect(res.status).toBe("uploaded");
+    expect(deps.replaceFile).toHaveBeenCalledTimes(2); // both matched assets
+    expect(deps.setFileText).not.toHaveBeenCalled(); // text rides along on the replace instead
   });
 
   it("errors (asks for re-sync) on a replace with no known local version", async () => {

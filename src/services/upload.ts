@@ -449,8 +449,10 @@ export async function uploadItem(
 
       // Persist the confirmed metadata/version FIRST (the PATCH already
       // succeeded), then reconcile files. Only re-push blobs when a derived file
-      // actually changed (`flags.reupload`); a metadata-only edit still uploads
-      // any file the backend is missing, but never re-PUTs unchanged ones.
+      // actually changed (`flags.reupload`), and only the OCR text — no blob —
+      // when that's *all* that changed (`flags.reuploadTextOnly`); a
+      // metadata-only edit still uploads any file the backend is missing, but
+      // never re-PUTs unchanged ones.
       await writeThrough(item, deps, {
         backendId,
         version,
@@ -463,7 +465,7 @@ export async function uploadItem(
         backendId,
         plan,
         deps,
-        item.flags.reupload,
+        replaceKindFor(item.flags),
         warnings,
       );
       warnings.push(...textQualityWarnings(attachments));
@@ -799,20 +801,39 @@ async function settleEmptyTexts(
   }
 }
 
+/** What `pushReplaceAssets` should do with an already-matched attachment,
+ * derived from the item's persisted reupload flags
+ * (`core::db::items::ReuploadKind` on the native side — see
+ * `IndexedItemDto.reuploadTextOnly`). */
+type ReplaceKind = "none" | "text-only" | "full";
+
+function replaceKindFor(flags: Item["flags"]): ReplaceKind {
+  if (!flags.reupload) return "none";
+  return flags.reuploadTextOnly ? "text-only" : "full";
+}
+
 /**
  * Reconcile a re-upload's assets against what the backend already has, listing
  * once and matching by filename:
  *  - **missing** files are uploaded fresh (covers a new derived file, and
  *    recovery of a create whose asset step failed after the id was recorded);
- *  - **present** files are replaced in place (stable id) **only when
- *    `replaceExisting`** — i.e. a derived file actually changed
- *    (`item.flags.reupload`). A metadata-only re-upload leaves unchanged blobs
- *    untouched (docs/tasks/07: "Metadata-only changes go via PATCH, not
- *    re-upload"), so it never re-PUTs identical bytes.
+ *  - **present** files are left alone when `kind === "none"` — a
+ *    metadata-only re-upload (docs/tasks/07: "Metadata-only changes go via
+ *    PATCH, not re-upload"), so it never re-PUTs identical bytes;
+ *  - **present + `kind === "text-only"`** — only the paired OCR text is
+ *    pushed (`PUT /files/:fileId/text`, no blob), for a reprocess that only
+ *    re-ran OCR (`core::jobs::reupload_kind_for`). A cheaper path than a full
+ *    replace, and the whole point of `reuploadTextOnly` existing;
+ *  - **present + `kind === "full"`** — replaced in place (stable id), same
+ *    as every `kind` used to mean before `reuploadTextOnly` existed.
  *
- * The paired OCR text rides along (singular `extractedText` on a replace; the
- * per-file map on a fresh upload). Returns the touched attachments (for
- * text-quality warnings).
+ * The paired OCR text rides along on a full replace (singular `extractedText`
+ * — the backend wipes stored text and re-enqueues extraction if it's
+ * omitted) and on a fresh upload (the per-file map). Returns the touched
+ * attachments (for text-quality warnings) — a text-only push doesn't produce
+ * one (`PUT /text` returns no classification), so it's a known gap that a
+ * text-only re-upload never raises a post-push text-quality warning; not
+ * worth an extra fetch to close.
  *
  * ⚠️ **Matching is mangling-tolerant, and must stay that way.** The backend
  * stores a non-ASCII multipart filename corrupted (see
@@ -821,17 +842,12 @@ async function settleEmptyTexts(
  * backend" branch and **added a duplicate attachment** instead of replacing in
  * place. Live-verified before the fix: two attachments after one re-upload of
  * `ОКТОИХ петогласник 2.pdf`.
- *
- * NOTE: a changed file re-pushes the whole blob. The "only the OCR text changed
- * → PUT /text (no blob)" optimisation needs a native per-file "what changed"
- * signal (Arch handoff, docs/tasks/07 §Re-upload); `setFileText` is already
- * wired for it.
  */
 async function pushReplaceAssets(
   backendId: string,
   plan: ItemUploadPlan,
   deps: UploadDeps,
-  replaceExisting: boolean,
+  kind: ReplaceKind,
   warnings: UploadWarning[],
 ): Promise<FileAttachment[]> {
   const existing = await withRetry(() => deps.listFiles(backendId), deps);
@@ -857,7 +873,14 @@ async function pushReplaceAssets(
       if (isMangledFilename(match.filename, asset.filename)) {
         warnings.push(mangledFilenameWarning(asset.filename, match.filename));
       }
-      if (!replaceExisting) continue; // present + unchanged → leave it be
+      if (kind === "none") continue; // present + unchanged → leave it be
+      if (kind === "text-only") {
+        const textAsset = textByPdf.get(asset.filename);
+        if (!textAsset) continue; // e.g. a thumbnail asset — nothing to push
+        const text = await deps.readTextFile(textAsset.path);
+        await withRetry(() => deps.setFileText(match.id, text), deps);
+        continue; // no blob PUT — the whole point of "text-only"
+      }
       const file = await toUploadFile(asset, deps);
       const textAsset = textByPdf.get(asset.filename);
       const extractedText = textAsset

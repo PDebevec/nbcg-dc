@@ -22,7 +22,7 @@ function makeItem(overrides: Partial<Item> = {}): Item {
     level: "main",
     assets: [],
     stages: emptyStages(),
-    flags: { uploaded: false, reupload: false },
+    flags: { uploaded: false, reupload: false, reuploadTextOnly: false },
     backendId: null,
     batchId: null,
     title: null,
@@ -114,8 +114,8 @@ describe("countByFilter + filterItems", () => {
     makeItem({ id: "b" }), // To process
     makeItem({ id: "c", batchId: "b1" }), // In progress
     makeItem({ id: "d", stages: { ...emptyStages(), pdf: { status: "failed" } } }), // Stopped
-    makeItem({ id: "e", flags: { uploaded: true, reupload: false } }), // Uploaded
-    makeItem({ id: "f", flags: { uploaded: true, reupload: true } }), // Needs re-upload
+    makeItem({ id: "e", flags: { uploaded: true, reupload: false, reuploadTextOnly: false } }), // Uploaded
+    makeItem({ id: "f", flags: { uploaded: true, reupload: true, reuploadTextOnly: false } }), // Needs re-upload
   ];
 
   it("counts each state under its filter and totals under All", () => {

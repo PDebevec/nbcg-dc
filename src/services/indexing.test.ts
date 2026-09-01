@@ -26,6 +26,7 @@ function imagesOnlyDto(overrides: Partial<IndexedItemDto> = {}): IndexedItemDto 
     stages: { thumbnail: { status: "done" } },
     uploaded: false,
     reupload: false,
+    reuploadTextOnly: false,
     backendId: null,
     batchId: null,
   };

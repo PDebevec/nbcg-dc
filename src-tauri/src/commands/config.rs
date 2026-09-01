@@ -19,7 +19,7 @@ pub fn config_save(
     state: State<'_, AppState>,
     config: PersistedConfig,
 ) -> Result<()> {
-    config::save(&state.config_dir, &config)?;
+    config::save_preserving_job_limits(&state.config_dir, config)?;
 
     // The roots may have moved, so the watcher has to follow. Failing to
     // re-point it is silent: the app keeps running, but freshly scanned

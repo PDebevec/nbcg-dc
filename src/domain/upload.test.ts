@@ -50,7 +50,7 @@ function makeItem(overrides: Partial<Item> = {}): Item {
       thumbnail: { status: "done" },
       ocr: { status: "done" },
     }),
-    flags: { uploaded: false, reupload: false },
+    flags: { uploaded: false, reupload: false, reuploadTextOnly: false },
     backendId: null,
     batchId: "batch-1",
     title: "Gorski vijenac",
@@ -374,7 +374,7 @@ describe("planItemUpload / isUploadable", () => {
   });
 
   it("assembles a replace plan for a connected item", () => {
-    const plan = planItemUpload(makeItem({ backendId: "rec_1", flags: { uploaded: true, reupload: true } }), READY);
+    const plan = planItemUpload(makeItem({ backendId: "rec_1", flags: { uploaded: true, reupload: true, reuploadTextOnly: false } }), READY);
     expect(plan.mode).toBe("replace");
     expect(plan.backendId).toBe("rec_1");
   });

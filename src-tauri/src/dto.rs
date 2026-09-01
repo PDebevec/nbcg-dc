@@ -291,6 +291,10 @@ pub struct IndexedItemDto {
     pub stages: HashMap<StageName, IndexedStageDto>,
     pub uploaded: bool,
     pub reupload: bool,
+    /// Only meaningful while `reupload` is true: whether the pending
+    /// re-upload needs the blob replaced (`false`) or only its OCR text
+    /// pushed (`true`) — see `core::db::items::ReuploadKind`.
+    pub reupload_text_only: bool,
     pub backend_id: Option<String>,
     pub batch_id: Option<String>,
     #[serde(default)]
@@ -744,4 +748,13 @@ pub struct PersistedConfig {
     pub theme: Option<ThemePreference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_passing_collection_types: Option<Vec<i64>>,
+    /// Job-runner concurrency caps (Epic 06) — backend-only, hand-edited in
+    /// `config.json` directly. The `.ts` settings type does not carry these,
+    /// so `commands::config::config_save` restores whatever is already on
+    /// disk before writing, rather than let an unrelated Settings save reset
+    /// them to `None`. See `core::jobs::JobLimits`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_items: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_ocr: Option<u32>,
 }

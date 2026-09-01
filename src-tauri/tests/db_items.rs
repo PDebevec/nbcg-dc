@@ -289,6 +289,36 @@ fn record_upload_connects_and_clears_the_reupload_flag() {
     );
 }
 
+/// A clean slate, not just the flag — a stale `reupload_text_only = true`
+/// surviving a successful `Full` upload would misclassify the *next*
+/// reprocess's reupload kind before anything has actually run again.
+#[test]
+fn record_upload_clears_both_reupload_flags() {
+    let f = folder("BOOK", ScanRoot::Unprocessed);
+    let db = db_with(std::slice::from_ref(&f));
+    db.with(|c| items::mark_needs_reupload(c, &f.id, items::ReuploadKind::TextOnly))
+        .unwrap();
+    assert!(db.with(items::list).unwrap()[0].reupload_text_only);
+
+    let updated = db
+        .with(|c| {
+            items::record_upload(
+                c,
+                &f.id,
+                &UploadRecordDto {
+                    backend_id: "rec-9".into(),
+                    version: Some(7),
+                    target_state: ItemType::Record,
+                    visibility_status: VisibilityStatus::Hidden,
+                },
+            )
+        })
+        .unwrap();
+
+    assert!(!updated.reupload);
+    assert!(!updated.reupload_text_only);
+}
+
 #[test]
 fn record_upload_on_an_unknown_item_is_not_found() {
     let db = Db::open_in_memory().unwrap();
@@ -558,22 +588,74 @@ fn get_on_an_unknown_item_is_not_found() {
 }
 
 #[test]
-fn mark_needs_reupload_sets_the_flag() {
+fn mark_needs_reupload_full_sets_the_flag_and_kind() {
     let f = folder("BOOK", ScanRoot::Unprocessed);
     let db = db_with(std::slice::from_ref(&f));
 
     assert!(!db.with(items::list).unwrap()[0].reupload);
 
-    db.with(|c| items::mark_needs_reupload(c, &f.id)).unwrap();
+    db.with(|c| items::mark_needs_reupload(c, &f.id, items::ReuploadKind::Full))
+        .unwrap();
 
-    assert!(db.with(items::list).unwrap()[0].reupload);
+    let row = &db.with(items::list).unwrap()[0];
+    assert!(row.reupload);
+    assert!(!row.reupload_text_only, "Full must not read as text-only");
+}
+
+#[test]
+fn mark_needs_reupload_text_only_sets_the_flag_and_kind() {
+    let f = folder("BOOK", ScanRoot::Unprocessed);
+    let db = db_with(std::slice::from_ref(&f));
+
+    db.with(|c| items::mark_needs_reupload(c, &f.id, items::ReuploadKind::TextOnly))
+        .unwrap();
+
+    let row = &db.with(items::list).unwrap()[0];
+    assert!(row.reupload);
+    assert!(row.reupload_text_only);
+}
+
+/// A later content change must never be silently downgraded back to
+/// "text only" - the blob replace it needs would get skipped otherwise.
+#[test]
+fn a_full_reupload_is_never_downgraded_to_text_only_by_a_later_text_only_pass() {
+    let f = folder("BOOK", ScanRoot::Unprocessed);
+    let db = db_with(std::slice::from_ref(&f));
+
+    db.with(|c| items::mark_needs_reupload(c, &f.id, items::ReuploadKind::Full))
+        .unwrap();
+    // A second reprocess pass, later, that only touched OCR text this time -
+    // the earlier, still-unpublished Full change must still win.
+    db.with(|c| items::mark_needs_reupload(c, &f.id, items::ReuploadKind::TextOnly))
+        .unwrap();
+
+    let row = &db.with(items::list).unwrap()[0];
+    assert!(row.reupload);
+    assert!(!row.reupload_text_only, "an earlier Full must not be lost");
+}
+
+/// The opposite direction is fine, and expected: a pass that only touched
+/// text, followed later by a real content change, must upgrade to Full.
+#[test]
+fn a_text_only_reupload_upgrades_to_full_on_a_later_content_change() {
+    let f = folder("BOOK", ScanRoot::Unprocessed);
+    let db = db_with(std::slice::from_ref(&f));
+
+    db.with(|c| items::mark_needs_reupload(c, &f.id, items::ReuploadKind::TextOnly))
+        .unwrap();
+    db.with(|c| items::mark_needs_reupload(c, &f.id, items::ReuploadKind::Full))
+        .unwrap();
+
+    let row = &db.with(items::list).unwrap()[0];
+    assert!(row.reupload);
+    assert!(!row.reupload_text_only);
 }
 
 #[test]
 fn mark_needs_reupload_on_an_unknown_item_is_not_found() {
     let db = Db::open_in_memory().unwrap();
     assert!(matches!(
-        db.with(|c| items::mark_needs_reupload(c, "missing")),
+        db.with(|c| items::mark_needs_reupload(c, "missing", items::ReuploadKind::Full)),
         Err(nbcg_dc_lib::error::AppError::NotFound(_)),
     ));
 }

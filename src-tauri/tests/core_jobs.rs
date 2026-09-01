@@ -17,8 +17,18 @@ use std::sync::Mutex;
 use common::*;
 use nbcg_dc_lib::core::db::{items, Db};
 use nbcg_dc_lib::core::fs::item_id_for;
-use nbcg_dc_lib::core::jobs::{self, JobEvent, JobRunLock};
+use nbcg_dc_lib::core::jobs::{self, JobEvent, JobLimits, JobRunLock};
 use nbcg_dc_lib::dto::*;
+
+/// Every pre-existing test here asserts on exact event order / `batch_complete`
+/// placement, written back when the runner was strictly sequential. Force
+/// that same sequential behavior so those assertions stay valid unchanged —
+/// the concurrency mechanism itself gets its own dedicated tests instead
+/// (see the bottom of this file), which don't depend on timing.
+const SEQUENTIAL: JobLimits = JobLimits {
+    max_concurrent_items: 1,
+    max_concurrent_ocr: 1,
+};
 
 /// A real, tiny, valid JPEG - Rust has no image-encoding crate in this
 /// project, so this is a fixture rather than generated in-test.
@@ -184,7 +194,7 @@ fn page_images_pdf_and_thumbnail_run_for_real() {
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, |e| events.push(e)).unwrap();
+    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
 
     // Real outputs on disk, correctly named, no archival PDF for a flat-JPG item.
@@ -212,9 +222,11 @@ fn page_images_pdf_and_thumbnail_run_for_real() {
     }
 
     let done = done_events(&events);
-    assert_eq!(done.len(), 1);
+    assert_eq!(done.len(), 2);
     assert_eq!(done[0].outcome, JobOutcome::Done);
-    assert!(done[0].batch_complete);
+    assert!(!done[0].batch_complete);
+    assert!(done[1].item_id.is_none());
+    assert!(done[1].batch_complete);
 }
 
 #[test]
@@ -260,7 +272,7 @@ fn page_images_shape_is_not_misclassified_as_paired_by_web_pys_own_folder_sniffi
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, |e| events.push(e)).unwrap();
+    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
 
     let stored = db.with(|c| items::get(c, &item_id)).unwrap();
@@ -313,7 +325,7 @@ fn spread_thumbnail_right_side_red(split_spreads: bool) -> u8 {
 
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
-    jobs::run_batch(&db, &request, &guard, |_| {}).unwrap();
+    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |_| {}).unwrap();
     drop(guard);
 
     let stored = db.with(|c| items::get(c, &item_id)).unwrap();
@@ -393,7 +405,7 @@ fn split_spreads_keeps_the_operators_thumbnail_pick_unsplit() {
 
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
-    jobs::run_batch(&db, &request, &guard, |_| {}).unwrap();
+    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |_| {}).unwrap();
     drop(guard);
 
     let stored = db.with(|c| items::get(c, &item_id)).unwrap();
@@ -450,7 +462,7 @@ fn split_spreads_on_a_tiffs_item_fails_clearly_instead_of_being_ignored() {
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, |e| events.push(e)).unwrap();
+    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
 
     let stored = db.with(|c| items::get(c, &item_id)).unwrap();
@@ -464,8 +476,11 @@ fn split_spreads_on_a_tiffs_item_fails_clearly_instead_of_being_ignored() {
     assert!(!dir.join("PAIRED_archive.pdf").exists());
 
     let done = done_events(&events);
-    assert_eq!(done.len(), 1);
+    assert_eq!(done.len(), 2);
     assert_eq!(done[0].outcome, JobOutcome::Failed);
+    assert!(!done[0].batch_complete);
+    assert!(done[1].item_id.is_none());
+    assert!(done[1].batch_complete);
 }
 
 /// Run one item to completion and hand back the events, for the PDF-shape
@@ -479,7 +494,7 @@ fn run_one(db: &Db, item: ItemRunRequest) -> Vec<JobEvent> {
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(db, &request, &guard, |e| events.push(e)).unwrap();
+    jobs::run_batch(db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
     events
 }
@@ -754,7 +769,7 @@ fn thumbnail_needs_choice_withholds_done_and_leaves_it_pending() {
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, |e| events.push(e)).unwrap();
+    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
 
     // web.py still produced a candidate thumbnail on disk...
@@ -810,7 +825,7 @@ fn images_only_thumbnail_only_never_builds_a_pdf() {
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, |e| events.push(e)).unwrap();
+    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
 
     assert!(dir.join("MAP_thumb.png").is_file());
@@ -865,7 +880,7 @@ fn images_only_honours_the_tagged_thumbnail_over_the_natural_first_image() {
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, |e| events.push(e)).unwrap();
+    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
 
     let stored = db.with(|c| items::get(c, &item_id)).unwrap();
@@ -906,7 +921,7 @@ fn ocr_without_a_pdf_fails_on_the_precondition_and_never_spawns_python() {
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, |e| events.push(e)).unwrap();
+    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
 
     let stored = db.with(|c| items::get(c, &item_id)).unwrap();
@@ -976,7 +991,7 @@ fn a_shape_with_nothing_to_run_fails_that_item_but_the_batch_continues() {
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, |e| events.push(e)).unwrap();
+    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
 
     let stored_a = db.with(|c| items::get(c, &id_a)).unwrap();
@@ -996,11 +1011,13 @@ fn a_shape_with_nothing_to_run_fails_that_item_but_the_batch_continues() {
     assert!(dir_b.join("BOOK_thumb.png").is_file());
 
     let done = done_events(&events);
-    assert_eq!(done.len(), 2);
+    assert_eq!(done.len(), 3);
     assert_eq!(done[0].outcome, JobOutcome::Failed);
     assert!(!done[0].batch_complete);
     assert_eq!(done[1].outcome, JobOutcome::Done);
-    assert!(done[1].batch_complete);
+    assert!(!done[1].batch_complete);
+    assert!(done[2].item_id.is_none());
+    assert!(done[2].batch_complete);
 }
 
 #[test]
@@ -1015,7 +1032,7 @@ fn an_empty_batch_still_emits_a_terminal_done_event() {
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, |e| events.push(e)).unwrap();
+    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
 
     let done = done_events(&events);
@@ -1091,7 +1108,7 @@ fn a_cancel_before_the_run_leaves_every_stage_pending_not_queued() {
     jobs::request_cancel(&lock, &request.batch_id);
 
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, |e| events.push(e)).unwrap();
+    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
 
     let stored = db.with(|c| items::get(c, &item_id)).unwrap();
@@ -1147,7 +1164,7 @@ fn a_cancel_mid_run_settles_the_interrupted_stage_pending_not_failed() {
     let cancel = guard.cancel_token();
 
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, |e| {
+    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| {
         if let JobEvent::StageChanged(p) = &e {
             if p.status == StageStatus::Running {
                 cancel.cancel();
@@ -1232,7 +1249,7 @@ fn a_cancel_mid_run_settles_ocr_pending_too_not_a_stale_precondition_failure() {
     let cancel = guard.cancel_token();
 
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, |e| {
+    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| {
         if let JobEvent::StageChanged(p) = &e {
             if p.status == StageStatus::Running {
                 cancel.cancel();
@@ -1269,4 +1286,199 @@ fn a_cancel_mid_run_settles_ocr_pending_too_not_a_stale_precondition_failure() {
     // web.py was killed before writing BOOK.pdf; ocr.py was never spawned at
     // all - the folder holds nothing beyond the two source images.
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+}
+
+// ─── concurrency (default, non-`SEQUENTIAL` limits) ────────────────────────
+
+/// Real concurrency, not the `SEQUENTIAL` limits every other test in this
+/// file forces - default `JobLimits` (`max_concurrent_items: 3`), three
+/// independent items, real `web.py` calls. Asserts *outcome* correctness,
+/// not timing: asserting actual wall-clock overlap would be flaky against
+/// real subprocess scheduling (`core::jobs::tests::semaphore_*` pins the
+/// concurrency mechanism itself against a synthetic, timing-controlled
+/// workload instead). Every item still reaches `Done`, exactly one
+/// batch-level terminal event fires, and nothing - no `StageChanged`, no
+/// `Progress`, no other `Done` - arrives after it.
+#[test]
+fn concurrent_items_all_complete_and_the_batch_terminal_event_fires_once_last() {
+    let root = tempfile::TempDir::new().unwrap();
+    let mut folders = Vec::new();
+    for name in ["BOOK-A", "BOOK-B", "BOOK-C"] {
+        let dir = root.path().join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("1.jpg"), TINY_JPG).unwrap();
+        folders.push((name, dir));
+    }
+
+    let db = Db::open_in_memory().unwrap();
+    let discovered_folders: Vec<_> = folders
+        .iter()
+        .map(|(name, dir)| discovered(name, dir))
+        .collect();
+    let ids: Vec<String> = discovered_folders.iter().map(|f| f.id.clone()).collect();
+    db.with(|c| items::reconcile(c, &discovered_folders))
+        .unwrap();
+
+    let batch_items: Vec<ItemRunRequest> = folders
+        .iter()
+        .zip(&ids)
+        .map(|((name, dir), id)| {
+            page_images_item(
+                id,
+                dir,
+                name,
+                vec![RunnableStage::Pdf, RunnableStage::Thumbnail],
+                vec!["1.jpg"],
+            )
+        })
+        .collect();
+
+    let request = BatchRunRequest {
+        batch_id: "batch-1".to_string(),
+        mode: JobRunMode::Run,
+        items: batch_items,
+    };
+
+    let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
+    let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
+    let mut events = Vec::new();
+    jobs::run_batch(&db, &request, &guard, JobLimits::from_config(None), |e| {
+        events.push(e);
+    })
+    .unwrap();
+    drop(guard);
+
+    for id in &ids {
+        let stored = db.with(|c| items::get(c, id)).unwrap();
+        assert_eq!(stored.stages[&StageName::Pdf].status, StageStatus::Done);
+        assert_eq!(
+            stored.stages[&StageName::Thumbnail].status,
+            StageStatus::Done
+        );
+    }
+
+    let done = done_events(&events);
+    assert_eq!(done.len(), 4, "3 items + 1 batch-level terminal event");
+    let item_dones: Vec<_> = done.iter().filter(|d| d.item_id.is_some()).collect();
+    assert_eq!(item_dones.len(), 3);
+    for d in &item_dones {
+        assert_eq!(d.outcome, JobOutcome::Done);
+        assert!(!d.batch_complete);
+    }
+    assert_eq!(
+        done.iter().filter(|d| d.item_id.is_none()).count(),
+        1,
+        "exactly one batch-level terminal event, no matter how the workers interleaved"
+    );
+
+    let is_terminal_done =
+        |e: &JobEvent| matches!(e, JobEvent::Done(d) if d.item_id.is_none() && d.batch_complete);
+    assert!(
+        events.last().is_some_and(is_terminal_done),
+        "the batch-level terminal event must be the very last event of the run"
+    );
+}
+
+// ─── re-upload granularity (Epic 07) ────────────────────────────────────────
+
+fn mark_uploaded(db: &Db, item_id: &str) {
+    db.with(|c| {
+        items::record_upload(
+            c,
+            item_id,
+            &UploadRecordDto {
+                backend_id: "rec-1".to_string(),
+                version: Some(1),
+                target_state: ItemType::Record,
+                visibility_status: VisibilityStatus::Public,
+            },
+        )
+    })
+    .unwrap();
+}
+
+/// The `content_changed` half of `core::jobs::reupload_kind_for` runs for
+/// real here (Pillow is installed, unlike paddleocr - see
+/// `reupload_kind_for`'s own doc comment for why `text_changed` can only be
+/// pinned at the unit level in this environment): a real `pdf`/`thumbnail`
+/// rebuild on an already-uploaded item must classify as `Full`.
+#[test]
+fn reprocessing_the_pdf_stage_marks_a_full_reupload_when_already_uploaded() {
+    let root = tempfile::TempDir::new().unwrap();
+    let dir = root.path().join("BOOK");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("1.jpg"), TINY_JPG).unwrap();
+
+    let db = Db::open_in_memory().unwrap();
+    let item_id = reconciled_item(&db, "BOOK", &dir);
+    mark_uploaded(&db, &item_id);
+
+    let item = page_images_item(
+        &item_id,
+        &dir,
+        "BOOK",
+        vec![RunnableStage::Pdf, RunnableStage::Thumbnail],
+        vec!["1.jpg"],
+    );
+    let request = BatchRunRequest {
+        batch_id: "batch-1".to_string(),
+        mode: JobRunMode::Reprocess,
+        items: vec![item],
+    };
+    let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
+    let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
+    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |_| {}).unwrap();
+    drop(guard);
+
+    let stored = db.with(|c| items::get(c, &item_id)).unwrap();
+    assert!(stored.reupload);
+    assert!(
+        !stored.reupload_text_only,
+        "a real pdf/thumbnail rebuild must classify as Full, not text-only"
+    );
+}
+
+/// The regression test for the found-along-the-way fix: `run_multiple_pdfs`'s
+/// `Pdf` arm only ever *verifies* the operator's own PDFs for this shape — it
+/// writes nothing — so a Reprocess that only requests `Pdf` on an
+/// already-uploaded `multiple-pdfs` item must not spuriously flag `reupload`
+/// when nothing on disk actually changed.
+#[test]
+fn multiple_pdfs_pdf_verify_alone_does_not_spuriously_mark_reupload() {
+    let root = tempfile::TempDir::new().unwrap();
+    let dir = root.path().join("SERIAL");
+    std::fs::create_dir_all(&dir).unwrap();
+    write_pdf(&dir.join("vol1.pdf"), &[(220, 20, 20)]);
+    write_pdf(&dir.join("vol2.pdf"), &[(20, 20, 220)]);
+
+    let db = Db::open_in_memory().unwrap();
+    let item_id = reconciled_item(&db, "SERIAL", &dir);
+    mark_uploaded(&db, &item_id);
+
+    let mut item = page_images_item(
+        &item_id,
+        &dir,
+        "SERIAL",
+        vec![RunnableStage::Pdf],
+        Vec::new(),
+    );
+    item.input_shape = InputShape::MultiplePdfs;
+    item.web_pdf_bases = vec!["vol1".to_string(), "vol2".to_string()];
+
+    let request = BatchRunRequest {
+        batch_id: "batch-1".to_string(),
+        mode: JobRunMode::Reprocess,
+        items: vec![item],
+    };
+    let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
+    let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
+    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |_| {}).unwrap();
+    drop(guard);
+
+    let stored = db.with(|c| items::get(c, &item_id)).unwrap();
+    assert_eq!(stored.stages[&StageName::Pdf].status, StageStatus::Done);
+    assert!(
+        !stored.reupload,
+        "a pure verify-pass that changed nothing on disk must not flag reupload"
+    );
 }

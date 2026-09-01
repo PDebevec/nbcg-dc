@@ -84,7 +84,11 @@ export function toItem(dto: IndexedItemDto): Item {
     level: dto.level ?? "main",
     assets,
     stages: markNonApplicableSkipped(toStages(dto.stages), plan),
-    flags: { uploaded: dto.uploaded, reupload: dto.reupload },
+    flags: {
+      uploaded: dto.uploaded,
+      reupload: dto.reupload,
+      reuploadTextOnly: dto.reuploadTextOnly,
+    },
     backendId: dto.backendId,
     batchId: dto.batchId,
     title: dto.title ?? null,

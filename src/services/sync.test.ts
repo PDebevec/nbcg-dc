@@ -20,7 +20,7 @@ function makeItem(overrides: Partial<Item> = {}): Item {
     level: "main",
     assets: [],
     stages: emptyStages(),
-    flags: { uploaded: true, reupload: false },
+    flags: { uploaded: true, reupload: false, reuploadTextOnly: false },
     backendId: "b1",
     batchId: null,
     title: "Gorski vijenac",

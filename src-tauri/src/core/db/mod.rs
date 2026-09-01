@@ -23,7 +23,7 @@ use crate::error::Result;
 
 /// The schema version stored in `PRAGMA user_version`. Bump it and add a step
 /// to [`migrate`] when the schema changes.
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 /// How many sync runs to retain. The Sync screen shows a recent-runs log, not
 /// an audit trail, so old rows are pruned on append.
@@ -216,6 +216,18 @@ fn migrate(conn: &Connection) -> Result<()> {
                 ALTER TABLE items ADD COLUMN relative_path TEXT NOT NULL DEFAULT '';
                 UPDATE items SET relative_path = folder_name WHERE relative_path = '';
                 "#,
+            )?;
+        }
+    }
+
+    if version < 3 {
+        // Whether a *pending* `reupload` needs the full blob replaced or only
+        // its OCR text pushed (`core::db::items::ReuploadKind`) — 0 (full) is
+        // the safe default for every pre-existing row, since it's exactly
+        // today's behavior (always a full replace) rather than a guess.
+        if !column_exists(&tx, "items", "reupload_text_only")? {
+            tx.execute_batch(
+                "ALTER TABLE items ADD COLUMN reupload_text_only INTEGER NOT NULL DEFAULT 0;",
             )?;
         }
     }
