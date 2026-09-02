@@ -3,7 +3,8 @@
  *
  * Every backend call goes through here. Responsibilities:
  *  - join `<baseUrl><apiPrefix><path>` (the backend sets a global `/api` prefix);
- *  - attach `Authorization: Bearer <token>` (the static Keycloak token);
+ *  - attach `Authorization: Bearer <token>` (a Keycloak access token, minted
+ *    and silently refreshed by `services/keycloakAuth.ts`);
  *  - JSON, multipart (`FormData`), and binary responses;
  *  - map HTTP + network failures to a typed {@link ApiError}.
  *
@@ -128,8 +129,10 @@ export interface ApiClientOptions {
   /** Global API prefix, e.g. `/api`. */
   apiPrefix: string;
   /** Supplies the current bearer token (read lazily, so token changes apply
-   * without rebuilding the client). Return `null` to send no auth header. */
-  getToken?: () => string | null;
+   * without rebuilding the client). Return/resolve `null` to send no auth
+   * header. May be async — `keycloakAuth.getValidAccessToken` mints/refreshes
+   * on demand, so this is awaited before every request. */
+  getToken?: () => string | null | Promise<string | null>;
   /** Override the transport (default: `@tauri-apps/plugin-http` fetch). */
   fetchImpl?: FetchLike;
   /** Per-request timeout in ms. Default 30_000. */
@@ -175,7 +178,7 @@ function messageFromBody(body: unknown, fallback: string): string {
 export class ApiClient {
   private readonly baseUrl: string;
   private readonly apiPrefix: string;
-  private readonly getToken: () => string | null;
+  private readonly getToken: () => string | null | Promise<string | null>;
   private readonly fetchImpl: FetchLike;
   private readonly timeoutMs: number;
 
@@ -218,8 +221,6 @@ export class ApiClient {
       Accept: "application/json",
       ...options.headers,
     };
-    const token = this.getToken();
-    if (token) headers.Authorization = `Bearer ${token}`;
 
     let bodyInit: BodyInit | undefined;
     if (options.form) {
@@ -231,7 +232,11 @@ export class ApiClient {
 
     // Timeout via an AbortController, combined with any caller-supplied signal.
     // `timedOut` distinguishes our timeout from a caller-driven abort so they
-    // are not both reported as "timeout".
+    // are not both reported as "timeout". This all happens *synchronously*,
+    // before the `await this.getToken()` below — `getToken` can be async
+    // (`keycloakAuth.getValidAccessToken` mints/refreshes on demand), and
+    // awaiting it before wiring the abort signal would open a gap where a
+    // caller's synchronous `.abort()` fires with no listener attached yet.
     const controller = new AbortController();
     const timeoutMs = options.timeoutMs ?? this.timeoutMs;
     let timedOut = false;
@@ -246,6 +251,19 @@ export class ApiClient {
     }
 
     try {
+      const token = await this.getToken();
+      if (token) headers.Authorization = `Bearer ${token}`;
+
+      // `getToken` awaiting means a caller's abort can land *during* the
+      // token fetch, before `fetchImpl` is ever invoked — a real `fetch`
+      // rejects immediately when handed an already-aborted signal, but
+      // nothing guarantees every `fetchImpl` (including test doubles) checks
+      // `signal.aborted` up front rather than only listening for a future
+      // event. Checking here, uniformly, means this doesn't depend on that.
+      if (controller.signal.aborted) {
+        throw new Error("aborted before the request was sent");
+      }
+
       return await this.fetchImpl(url, {
         method,
         headers,

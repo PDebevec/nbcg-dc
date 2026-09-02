@@ -1,15 +1,16 @@
 /**
  * Config accessor (Seam-3-adjacent application service).
  *
- * Persists non-secret {@link AppConfig} and the secret API token. In production
- * these go through the native secure store (`ipc.config.*`, owned by `core/config`
- * in the Arch lane). Until those commands exist — and when running outside Tauri
- * (plain `vite`) — it transparently falls back to `localStorage` so the logic
- * lane is independently runnable and testable.
+ * Persists non-secret {@link AppConfig} (including the Keycloak username —
+ * not a secret) and the secret Keycloak password. In production these go
+ * through the native secure store (`ipc.config.*`, owned by `core/config` in
+ * the Arch lane). Until those commands exist — and when running outside
+ * Tauri (plain `vite`) — it transparently falls back to `localStorage` so
+ * the logic lane is independently runnable and testable.
  *
- * SECURITY: the `localStorage` fallback stores the token in plain text and is
- * DEV-ONLY. The real deployment must run under Tauri with the secure store, so
- * the token never touches the webview persistence layer.
+ * SECURITY: the `localStorage` fallback stores the password in plain text
+ * and is DEV-ONLY. The real deployment must run under Tauri with the secure
+ * store, so the password never touches the webview persistence layer.
  */
 
 import {
@@ -21,19 +22,19 @@ import {
   type RootStatus,
   type RootValidity,
 } from "@domain/config";
-import { ipc, isTauri, API_TOKEN_SECRET_KEY } from "@ipc/bindings";
+import { ipc, isTauri, KC_PASSWORD_SECRET_KEY } from "@ipc/bindings";
 import { APP_VERSION } from "@app/config";
 import { logger } from "@lib/logger";
 
 const CONFIG_LS_KEY = "nbcg-dc.config";
-const TOKEN_LS_KEY = `nbcg-dc.secret.${API_TOKEN_SECRET_KEY}`;
+const PASSWORD_LS_KEY = `nbcg-dc.secret.${KC_PASSWORD_SECRET_KEY}`;
 
 interface ConfigStore {
   loadConfig(): Promise<Partial<AppConfig> | null>;
   saveConfig(config: AppConfig): Promise<void>;
-  getToken(): Promise<string | null>;
-  setToken(token: string): Promise<void>;
-  clearToken(): Promise<void>;
+  getPassword(): Promise<string | null>;
+  setPassword(password: string): Promise<void>;
+  clearPassword(): Promise<void>;
 }
 
 function hasLocalStorage(): boolean {
@@ -57,17 +58,17 @@ const localStore: ConfigStore = {
     if (!hasLocalStorage()) return;
     localStorage.setItem(CONFIG_LS_KEY, JSON.stringify(config));
   },
-  async getToken() {
+  async getPassword() {
     if (!hasLocalStorage()) return null;
-    return localStorage.getItem(TOKEN_LS_KEY);
+    return localStorage.getItem(PASSWORD_LS_KEY);
   },
-  async setToken(token) {
+  async setPassword(password) {
     if (!hasLocalStorage()) return;
-    localStorage.setItem(TOKEN_LS_KEY, token);
+    localStorage.setItem(PASSWORD_LS_KEY, password);
   },
-  async clearToken() {
+  async clearPassword() {
     if (!hasLocalStorage()) return;
-    localStorage.removeItem(TOKEN_LS_KEY);
+    localStorage.removeItem(PASSWORD_LS_KEY);
   },
 };
 
@@ -91,28 +92,28 @@ const tauriStore: ConfigStore = {
       await localStore.saveConfig(config);
     }
   },
-  async getToken() {
+  async getPassword() {
     try {
-      return await ipc.config.getSecret(API_TOKEN_SECRET_KEY);
+      return await ipc.config.getSecret(KC_PASSWORD_SECRET_KEY);
     } catch (err) {
       logger.warn("config", "config_get_secret unavailable; using local fallback.", err);
-      return localStore.getToken();
+      return localStore.getPassword();
     }
   },
-  async setToken(token) {
+  async setPassword(password) {
     try {
-      await ipc.config.setSecret(API_TOKEN_SECRET_KEY, token);
+      await ipc.config.setSecret(KC_PASSWORD_SECRET_KEY, password);
     } catch (err) {
       logger.warn("config", "config_set_secret unavailable; using local fallback.", err);
-      await localStore.setToken(token);
+      await localStore.setPassword(password);
     }
   },
-  async clearToken() {
+  async clearPassword() {
     try {
-      await ipc.config.deleteSecret(API_TOKEN_SECRET_KEY);
+      await ipc.config.deleteSecret(KC_PASSWORD_SECRET_KEY);
     } catch (err) {
       logger.warn("config", "config_delete_secret unavailable; using local fallback.", err);
-      await localStore.clearToken();
+      await localStore.clearPassword();
     }
   },
 };
@@ -133,15 +134,16 @@ export async function saveConfig(config: AppConfig): Promise<AppConfig> {
   return normalized;
 }
 
-/** Read the API token (secret). */
-export function getApiToken(): Promise<string | null> {
-  return store.getToken();
+/** Read the Keycloak password (secret; the username is a plain `AppConfig`
+ * field, persisted by {@link saveConfig} like any other setting). */
+export function getKcPassword(): Promise<string | null> {
+  return store.getPassword();
 }
 
-/** Set (or, with an empty string, clear) the API token. */
-export async function setApiToken(token: string): Promise<void> {
-  if (token) await store.setToken(token);
-  else await store.clearToken();
+/** Set (or, with an empty string, clear) the Keycloak password. */
+export async function setKcPassword(password: string): Promise<void> {
+  if (password) await store.setPassword(password);
+  else await store.clearPassword();
 }
 
 // ─── folder roots (Epic 10 §Configure → Folder locations) ────────────────────

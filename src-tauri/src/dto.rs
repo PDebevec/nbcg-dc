@@ -728,8 +728,11 @@ pub enum ThemePreference {
     System,
 }
 
-/// Non-secret persisted config. The `apiToken` is deliberately **not** here —
-/// it lives in the OS secret store (`config_*_secret`).
+/// Non-secret persisted config. The Keycloak **password** (previously a
+/// single manually-pasted `apiToken`) is deliberately **not** here — it
+/// lives in the OS secret store (`config_*_secret`); the username (below)
+/// is not sensitive and is stored right here. See `services/keycloakAuth.ts`
+/// on the TS side for how the actual bearer token is minted/refreshed.
 ///
 /// Stored and returned partially (`PersistedConfig = Partial<AppConfig>` on the
 /// TS side), so every field is optional and callers merge with defaults.
@@ -744,6 +747,14 @@ pub struct PersistedConfig {
     pub backend_base_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_prefix: Option<String>,
+    /// Keycloak host (e.g. `http://localhost:8082` in dev). Realm/client id
+    /// are not configurable — see `services/keycloakAuth.ts`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keycloak_url: Option<String>,
+    /// Keycloak username. Not a secret (see `dto.rs`'s note on this struct);
+    /// the password pairing it lives in the OS secret store.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kc_username: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<ThemePreference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

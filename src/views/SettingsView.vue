@@ -10,11 +10,16 @@ const {
   apiUrl,
   apiUrlError,
   setApiUrl,
-  tokenValue,
-  tokenPlaceholder,
-  tokenShown,
-  toggleToken,
-  setToken,
+  keycloakUrl,
+  keycloakUrlError,
+  setKeycloakUrl,
+  username,
+  setUsername,
+  passwordValue,
+  passwordPlaceholder,
+  passwordShown,
+  togglePassword,
+  setPassword,
   theme,
   setTheme,
   dataPassingTypes,
@@ -23,6 +28,8 @@ const {
   testing,
   testMessage,
   testOk,
+  credentialsCheckMessage,
+  credentialsCheckOk,
   testConnection,
   canSave,
   saving,
@@ -99,23 +106,44 @@ const themeOptions = [
           <div v-if="apiUrlError" class="field-error">{{ apiUrlError }}</div>
         </div>
         <div class="field">
-          <label>API access token</label>
+          <label>Keycloak URL</label>
+          <input
+            class="mono-input"
+            :value="keycloakUrl"
+            placeholder="http://localhost:8082"
+            @input="setKeycloakUrl(($event.target as HTMLInputElement).value)"
+          />
+          <div v-if="keycloakUrlError" class="field-error">{{ keycloakUrlError }}</div>
+        </div>
+        <div class="field">
+          <label>Keycloak username</label>
+          <input
+            class="mono-input"
+            :value="username"
+            placeholder="your Keycloak username"
+            @input="setUsername(($event.target as HTMLInputElement).value)"
+          />
+        </div>
+        <div class="field">
+          <label>Keycloak password</label>
           <div class="token-line">
             <div class="token-box">
               <input
                 class="mono-input bare"
-                :type="tokenShown ? 'text' : 'password'"
-                :value="tokenValue"
-                :placeholder="tokenPlaceholder"
-                @input="setToken(($event.target as HTMLInputElement).value)"
+                :type="passwordShown ? 'text' : 'password'"
+                :value="passwordValue"
+                :placeholder="passwordPlaceholder"
+                @input="setPassword(($event.target as HTMLInputElement).value)"
               />
-              <button class="token-toggle" @click="toggleToken()">
-                {{ tokenShown ? "Hide" : "Show" }}
+              <button class="token-toggle" @click="togglePassword()">
+                {{ passwordShown ? "Hide" : "Show" }}
               </button>
             </div>
           </div>
           <div class="field-hint">
-            Stored as a secret. Never shown in plain text by default.
+            Stored as a secret. The app signs in and silently refreshes the
+            access token itself — no more re-pasting a token every few
+            minutes.
           </div>
         </div>
         <div class="test-line">
@@ -128,6 +156,14 @@ const themeOptions = [
             :class="{ ok: testOk, fail: !testOk }"
           >
             {{ testOk ? "✓" : "✗" }} {{ testMessage }}
+          </span>
+        </div>
+        <div v-if="credentialsCheckMessage" class="test-line">
+          <span
+            class="test-result"
+            :class="{ ok: credentialsCheckOk, fail: !credentialsCheckOk }"
+          >
+            {{ credentialsCheckOk ? "✓" : "✗" }} {{ credentialsCheckMessage }}
           </span>
         </div>
       </div>

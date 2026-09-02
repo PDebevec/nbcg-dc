@@ -2,28 +2,27 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
 import { DEFAULT_CONFIG, type AppConfig, type RootKey } from "@domain/config";
 
-/** A shape-valid (not real) JWT. */
-const JWT = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJuYmNnIn0.c2lnbmF0dXJl";
-const JWT2 = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJvdGhlciJ9.c2lnbmF0dXJl";
-
 // ── the service layer this store sits on, faked ────────────────────────────
 // The store's job is orchestration (draft vs saved, ordering, when the client is
 // rebuilt), so the services are stubs and the assertions are about the calls.
 
 const state = {
   saved: { ...DEFAULT_CONFIG } as AppConfig,
-  token: null as string | null,
+  password: null as string | null,
   pathExists: true,
   picked: null as string | null,
+  mintShouldFail: false as boolean,
 };
 
 const calls = {
   saveConfig: [] as AppConfig[],
-  setApiToken: [] as string[],
+  setKcPassword: [] as string[],
   configureApiClient: [] as Array<{ baseUrl: string; apiPrefix: string }>,
   createApiClient: [] as Array<{ baseUrl: string; apiPrefix: string }>,
   checkConnection: 0,
   refreshSchema: 0,
+  clearCache: 0,
+  mintOnce: [] as Array<{ username: string; password: string }>,
 };
 
 vi.mock("@services/config", () => ({
@@ -36,10 +35,10 @@ vi.mock("@services/config", () => ({
     state.saved = normalized;
     return normalized;
   },
-  getApiToken: async () => state.token,
-  setApiToken: async (token: string) => {
-    calls.setApiToken.push(token);
-    state.token = token || null;
+  getKcPassword: async () => state.password,
+  setKcPassword: async (password: string) => {
+    calls.setKcPassword.push(password);
+    state.password = password || null;
   },
   probeRoots: async (config: Pick<AppConfig, RootKey>) => ({
     unprocessedRoot: {
@@ -82,6 +81,25 @@ vi.mock("@services/backend", () => ({
   },
 }));
 
+class MockKeycloakAuthError extends Error {
+  readonly reason = "invalid_credentials";
+}
+
+vi.mock("@services/keycloakAuth", () => ({
+  configureKeycloakAuth: () => ({}) as unknown,
+  getKeycloakAuth: () => ({
+    getValidAccessToken: async () => null,
+    clearCache: () => {
+      calls.clearCache += 1;
+    },
+    mintOnce: async (username: string, password: string) => {
+      calls.mintOnce.push({ username, password });
+      if (state.mintShouldFail) throw new MockKeycloakAuthError("Invalid user credentials");
+    },
+  }),
+  KeycloakAuthError: MockKeycloakAuthError,
+}));
+
 vi.mock("@services/api", () => ({
   checkConnection: async (_client: unknown, options?: { baseUrl?: string }) => {
     calls.checkConnection += 1;
@@ -113,38 +131,42 @@ const { useSettingsStore } = await import("./useSettings");
 beforeEach(() => {
   setActivePinia(createPinia());
   state.saved = { ...DEFAULT_CONFIG };
-  state.token = null;
+  state.password = null;
   state.pathExists = true;
   state.picked = null;
+  state.mintShouldFail = false;
   calls.saveConfig = [];
-  calls.setApiToken = [];
+  calls.setKcPassword = [];
   calls.configureApiClient = [];
   calls.createApiClient = [];
   calls.checkConnection = 0;
   calls.refreshSchema = 0;
+  calls.clearCache = 0;
+  calls.mintOnce = [];
 });
 
-/** A loaded store with a realistic saved config. */
+/** A loaded store with a realistic saved config + Keycloak credentials. */
 async function loadedStore() {
   state.saved = {
     ...DEFAULT_CONFIG,
     backendBaseUrl: "http://localhost:3000",
     unprocessedRoot: "C:/scans",
     processedRoot: "C:/done",
+    kcUsername: "alice",
   };
-  state.token = JWT;
+  state.password = "hunter2";
   const store = useSettingsStore();
   await store.load();
   return store;
 }
 
 describe("load", () => {
-  it("loads config + token, configures the client, and seeds the draft", async () => {
+  it("loads config + password, configures the client, and seeds the draft", async () => {
     const store = await loadedStore();
 
     expect(store.loaded).toBe(true);
     expect(store.config.backendBaseUrl).toBe("http://localhost:3000");
-    expect(store.hasToken).toBe(true);
+    expect(store.hasCredentials).toBe(true);
     expect(store.configured).toBe(true);
     expect(store.draft).toEqual(store.config);
     expect(store.dirty).toBe(false);
@@ -201,11 +223,11 @@ describe("draft editing", () => {
     expect(calls.saveConfig).toEqual([]);
   });
 
-  it("allows Save with an odd-looking token (warning, not error)", async () => {
+  it("allows Save with a half-filled-in username/password (warning, not error)", async () => {
     const store = await loadedStore();
-    store.editToken("garbage");
+    store.editDraft({ kcUsername: "" }); // saved password is still "hunter2"
 
-    expect(store.validation.warnings.apiToken).toBeTruthy();
+    expect(store.validation.warnings.kcPassword).toBeTruthy();
     expect(store.validation.valid).toBe(true);
     expect(store.canSave).toBe(true);
   });
@@ -213,25 +235,26 @@ describe("draft editing", () => {
   it("revert discards edits and the test result", async () => {
     const store = await loadedStore();
     store.editDraft({ backendBaseUrl: "https://api.nbcg.me" });
-    store.editToken(JWT2);
+    store.editPassword("new-password");
     await store.testConnection();
     expect(store.testResult).not.toBeNull();
 
     store.revert();
 
     expect(store.draft).toEqual(store.config);
-    expect(store.draftToken).toBeNull();
+    expect(store.draftPassword).toBeNull();
     expect(store.dirty).toBe(false);
     expect(store.testResult).toBeNull();
+    expect(store.credentialsCheck).toBeNull();
   });
 });
 
 describe("save", () => {
-  it("persists the canonical config, then the token, then rebuilds the client", async () => {
+  it("persists the canonical config, then the password, then rebuilds the client", async () => {
     const store = await loadedStore();
     calls.configureApiClient = [];
     store.editDraft({ backendBaseUrl: "  https://api.nbcg.me/  ", apiPrefix: "api/" });
-    store.editToken(`Bearer ${JWT2}`);
+    store.editPassword("new-password");
 
     await expect(store.save()).resolves.toBe(true);
 
@@ -241,36 +264,38 @@ describe("save", () => {
         apiPrefix: "/api",
       }),
     ]);
-    // The token is stored normalised — no "Bearer " prefix reaches the store.
-    expect(calls.setApiToken).toEqual([JWT2]);
-    // The client is rebuilt once the new config AND token are both in place.
+    expect(calls.setKcPassword).toEqual(["new-password"]);
+    // The client is rebuilt once the new config AND password are both in place.
     expect(calls.configureApiClient).toEqual([
       { baseUrl: "https://api.nbcg.me", apiPrefix: "/api" },
     ]);
+    // A changed password discards the cached access token.
+    expect(calls.clearCache).toBe(1);
     expect(store.dirty).toBe(false);
     expect(store.draft).toEqual(store.config);
   });
 
-  it("does not write the token when it was not edited", async () => {
+  it("does not write the password when it was not edited", async () => {
     const store = await loadedStore();
     store.editDraft({ backendBaseUrl: "https://api.nbcg.me" });
 
     await store.save();
 
-    expect(calls.setApiToken).toEqual([]);
-    expect(store.apiToken).toBe(JWT);
+    expect(calls.setKcPassword).toEqual([]);
+    expect(store.kcPassword).toBe("hunter2");
+    expect(calls.clearCache).toBe(0);
   });
 
-  it("clears the token when the field is emptied", async () => {
+  it("clears the password when the field is emptied", async () => {
     const store = await loadedStore();
-    store.editToken("");
+    store.editPassword("");
 
     expect(store.dirty).toBe(true);
     await store.save();
 
-    expect(calls.setApiToken).toEqual([""]);
-    expect(store.apiToken).toBeNull();
-    expect(store.hasToken).toBe(false);
+    expect(calls.setKcPassword).toEqual([""]);
+    expect(store.kcPassword).toBeNull();
+    expect(store.hasCredentials).toBe(false);
   });
 
   it("re-probes the roots after saving new paths", async () => {
@@ -294,18 +319,18 @@ describe("save", () => {
     expect(store.saving).toBe(false);
   });
 
-  // The config write can succeed and the token write fail. `config` is what the
-  // UI shows as the current host; `configureApiClient` is where calls actually
-  // go. Committing the config before the token write settled left those two
-  // pointing at different backends while `save()` reported failure.
-  it("does not move the app to the new host when the token write fails", async () => {
+  // The config write can succeed and the password write fail. `config` is what
+  // the UI shows as the current host; `configureApiClient` is where calls
+  // actually go. Committing the config before the password write settled left
+  // those two pointing at different backends while `save()` reported failure.
+  it("does not move the app to the new host when the password write fails", async () => {
     const store = await loadedStore();
     const config = await import("@services/config");
-    vi.spyOn(config, "setApiToken").mockRejectedValueOnce(new Error("keyring locked"));
+    vi.spyOn(config, "setKcPassword").mockRejectedValueOnce(new Error("keyring locked"));
 
     const clientCalls = calls.configureApiClient.length;
     store.editDraft({ backendBaseUrl: "https://api.nbcg.me" });
-    store.editToken(JWT2);
+    store.editPassword("new-password");
     await expect(store.save()).resolves.toBe(false);
 
     // Saved state and the live client agree: neither moved.
@@ -317,20 +342,19 @@ describe("save", () => {
   });
 });
 
-describe("token display", () => {
-  it("masks the saved token and never exposes it", async () => {
+describe("password display", () => {
+  it("masks the saved password and never exposes it", async () => {
     const store = await loadedStore();
-    expect(store.tokenDisplay.present).toBe(true);
-    expect(store.tokenDisplay.jwtShaped).toBe(true);
-    expect(store.tokenDisplay.masked).toMatch(/^•+$/);
-    expect(store.tokenDisplay.masked).not.toContain("ey");
+    expect(store.passwordDisplay.present).toBe(true);
+    expect(store.passwordDisplay.masked).toMatch(/^•+$/);
+    expect(store.passwordDisplay.masked).not.toContain("hunter2");
   });
 
   it("reflects a cleared field before saving", async () => {
     const store = await loadedStore();
-    store.editToken("");
-    expect(store.tokenDisplay.present).toBe(false);
-    expect(store.tokenDisplay.masked).toBe("");
+    store.editPassword("");
+    expect(store.passwordDisplay.present).toBe(false);
+    expect(store.passwordDisplay.masked).toBe("");
   });
 });
 
@@ -370,6 +394,37 @@ describe("testConnection", () => {
     expect(calls.checkConnection).toBe(0);
     expect(store.testResult).toBeNull();
   });
+
+  it("also probes the effective credentials and reports success", async () => {
+    const store = await loadedStore();
+    await store.testConnection();
+
+    expect(calls.mintOnce).toEqual([{ username: "alice", password: "hunter2" }]);
+    expect(store.credentialsCheck).toEqual({ ok: true, message: "Keycloak login succeeded." });
+  });
+
+  it("reports a rejected mint as a failed credentials check without failing the whole probe", async () => {
+    state.mintShouldFail = true;
+    const store = await loadedStore();
+
+    const result = await store.testConnection();
+
+    expect(result?.reachable).toBe(true); // reachability itself is unaffected
+    expect(store.credentialsCheck).toEqual({
+      ok: false,
+      message: "Invalid user credentials",
+    });
+  });
+
+  it("skips the credentials probe when either field is blank", async () => {
+    const store = await loadedStore();
+    store.editPassword("");
+
+    await store.testConnection();
+
+    expect(calls.mintOnce).toEqual([]);
+    expect(store.credentialsCheck).toBeNull();
+  });
 });
 
 describe("refreshSchema", () => {
@@ -384,7 +439,7 @@ describe("refreshSchema", () => {
   });
 });
 
-describe("update / setTheme / updateToken (immediate writes)", () => {
+describe("update / setTheme / updatePassword (immediate writes)", () => {
   it("update persists and reconfigures immediately", async () => {
     const store = await loadedStore();
     calls.configureApiClient = [];
@@ -419,16 +474,17 @@ describe("update / setTheme / updateToken (immediate writes)", () => {
     expect(store.draft.processedRoot).toBe("C:/mine");
   });
 
-  it("updateToken normalises, persists, and rebuilds the client", async () => {
+  it("updatePassword persists and rebuilds the client, discarding the cache", async () => {
     const store = await loadedStore();
     calls.configureApiClient = [];
 
-    await store.updateToken(`  "${JWT2}"  `);
+    await store.updatePassword("new-password");
 
-    expect(calls.setApiToken).toEqual([JWT2]);
-    expect(store.apiToken).toBe(JWT2);
-    expect(store.draftToken).toBeNull();
+    expect(calls.setKcPassword).toEqual(["new-password"]);
+    expect(store.kcPassword).toBe("new-password");
+    expect(store.draftPassword).toBeNull();
     expect(calls.configureApiClient).toHaveLength(1);
+    expect(calls.clearCache).toBe(1);
   });
 });
 

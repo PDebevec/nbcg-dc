@@ -4,10 +4,11 @@
  * only this; it never touches the store, services, or IPC directly.
  *
  * Configure tab: folder roots (browse + validity), backend connection (draft
- * URL + token, Test connection against the draft), theme, schema refresh, app
- * version, Save/Revert. Data tab: the fixed folder-derived naming convention,
- * shown read-only for reference (docs/01 — the prototype's naming picker was
- * dropped).
+ * API URL + Keycloak URL/username/password, Test connection against the
+ * draft — which also validates the credentials, not just reachability),
+ * theme, schema refresh, app version, Save/Revert. Data tab: the fixed
+ * folder-derived naming convention, shown read-only for reference (docs/01 —
+ * the prototype's naming picker was dropped).
  */
 
 import { computed, getCurrentInstance, onMounted, ref } from "vue";
@@ -46,20 +47,21 @@ export function useSettingsScreen() {
   const toasts = useToastsStore();
   const {
     draft,
-    draftToken,
+    draftPassword,
     dirty,
     canSave,
     saving,
     validation,
-    tokenDisplay,
+    passwordDisplay,
     roots,
     testing,
     testResult,
+    credentialsCheck,
     refreshingSchema,
     appVersion,
   } = storeToRefs(store);
 
-  const tokenShown = ref(false);
+  const passwordShown = ref(false);
 
   const folderRows = computed<RootRowView[]>(() =>
     ROOT_KEYS.map((key) => {
@@ -76,22 +78,25 @@ export function useSettingsScreen() {
 
   const apiUrl = computed(() => draft.value.backendBaseUrl);
   const apiUrlError = computed(() => validation.value.errors.backendBaseUrl ?? null);
+  const keycloakUrl = computed(() => draft.value.keycloakUrl);
+  const keycloakUrlError = computed(() => validation.value.errors.keycloakUrl ?? null);
+  const username = computed(() => draft.value.kcUsername);
   const theme = computed(() => draft.value.theme);
 
-  /** The token field's editable value — always the draft, so pasting works
+  /** The password field's editable value — always the draft, so typing works
    * whether or not it is revealed (the view masks it with type=password). */
-  const tokenValue = computed(() => draftToken.value ?? "");
+  const passwordValue = computed(() => draftPassword.value ?? "");
 
-  /** Masked summary of the currently effective token, shown as the field's
-   * placeholder when no draft edit is pending. */
-  const tokenPlaceholder = computed(() =>
-    tokenDisplay.value.present
-      ? tokenDisplay.value.masked
-      : "paste the access token",
+  /** Masked summary of the currently effective password, shown as the
+   * field's placeholder when no draft edit is pending. */
+  const passwordPlaceholder = computed(() =>
+    passwordDisplay.value.present ? passwordDisplay.value.masked : "enter the Keycloak password",
   );
 
   const testMessage = computed(() => testResult.value?.message ?? null);
   const testOk = computed(() => testResult.value?.reachable ?? false);
+  const credentialsCheckMessage = computed(() => credentialsCheck.value?.message ?? null);
+  const credentialsCheckOk = computed(() => credentialsCheck.value?.ok ?? null);
 
   /** Raw text of the data-passing types field while it is being edited (so a
    * trailing comma survives typing); null = show the parsed draft. */
@@ -128,12 +133,20 @@ export function useSettingsScreen() {
     store.editDraft({ backendBaseUrl: value });
   }
 
-  function setToken(value: string): void {
-    store.editToken(value);
+  function setKeycloakUrl(value: string): void {
+    store.editDraft({ keycloakUrl: value });
   }
 
-  function toggleToken(): void {
-    tokenShown.value = !tokenShown.value;
+  function setUsername(value: string): void {
+    store.editDraft({ kcUsername: value });
+  }
+
+  function setPassword(value: string): void {
+    store.editPassword(value);
+  }
+
+  function togglePassword(): void {
+    passwordShown.value = !passwordShown.value;
   }
 
   async function browse(key: RootKey): Promise<void> {
@@ -197,11 +210,16 @@ export function useSettingsScreen() {
     apiUrl,
     apiUrlError,
     setApiUrl,
-    tokenValue,
-    tokenPlaceholder,
-    tokenShown,
-    toggleToken,
-    setToken,
+    keycloakUrl,
+    keycloakUrlError,
+    setKeycloakUrl,
+    username,
+    setUsername,
+    passwordValue,
+    passwordPlaceholder,
+    passwordShown,
+    togglePassword,
+    setPassword,
     theme,
     setTheme,
     dataPassingTypes,
@@ -210,6 +228,8 @@ export function useSettingsScreen() {
     testing,
     testMessage,
     testOk,
+    credentialsCheckMessage,
+    credentialsCheckOk,
     testConnection,
     dirty,
     canSave,

@@ -515,5 +515,14 @@ export const ipc = {
   },
 } as const;
 
-/** The secret-store key under which the Keycloak API token is kept. */
+/** The secret-store key under which the old, manually-pasted Keycloak API
+ * token used to be kept. Superseded by {@link KC_PASSWORD_SECRET_KEY} — kept
+ * here only so any leftover stored value is inert rather than a dangling
+ * reference; nothing reads or writes this key anymore. */
 export const API_TOKEN_SECRET_KEY = "apiToken";
+
+/** The secret-store key under which the Keycloak password is kept (the
+ * username is not a secret — see `AppConfig.kcUsername`). See
+ * `services/keycloakAuth.ts`, which mints and silently refreshes the actual
+ * bearer token from the pair. */
+export const KC_PASSWORD_SECRET_KEY = "kcPassword";

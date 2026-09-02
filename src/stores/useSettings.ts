@@ -1,6 +1,7 @@
 /**
- * Settings store — the persisted {@link AppConfig} + the secret API token, and
- * the single place that (re)configures the backend API client.
+ * Settings store — the persisted {@link AppConfig} (including the Keycloak
+ * username) + the secret Keycloak password, and the single place that
+ * (re)configures the Keycloak auth helper and the backend API client.
  *
  * The GUI binds this via a composable; it never talks to `services/config` or
  * the client directly.
@@ -25,9 +26,8 @@ import {
   DEFAULT_CONFIG,
   ROOT_KEYS,
   isConfigured,
-  normalizeApiToken,
   normalizeConfig,
-  summarizeToken,
+  summarizePassword,
   validateConfig,
   type AppConfig,
   type ConfigValidation,
@@ -39,13 +39,14 @@ import type { ReachabilityResult } from "@domain/connection";
 import {
   loadConfig,
   saveConfig,
-  getApiToken,
-  setApiToken,
+  getKcPassword,
+  setKcPassword,
   probeRoots,
   pickDirectory,
   getAppVersion,
 } from "@services/config";
 import { configureApiClient, createApiClient } from "@services/backend";
+import { configureKeycloakAuth, getKeycloakAuth, KeycloakAuthError } from "@services/keycloakAuth";
 import {
   checkConnection,
   refreshRecordSchema,
@@ -75,16 +76,21 @@ function initialRootStatuses(config: AppConfig): Record<RootKey, RootStatus> {
 export const useSettingsStore = defineStore("settings", () => {
   // ── saved state (what the app runs on) ────────────────────────────────────
   const config = ref<AppConfig>({ ...DEFAULT_CONFIG });
-  /** In-memory token (needed to build the client + drive the masked field).
-   * Persisted separately via the secure store, not in this reactive object. */
-  const apiToken = ref<string | null>(null);
+  /** In-memory Keycloak password (needed to mint the access token + drive the
+   * masked field). Persisted separately via the secure store, not in this
+   * reactive object. The username lives in `config.kcUsername` — not a
+   * secret, so it needs no parallel treatment. */
+  const kcPassword = ref<string | null>(null);
   const loaded = ref(false);
 
   // ── draft state (what is in the Settings fields) ──────────────────────────
   const draft = ref<AppConfig>({ ...DEFAULT_CONFIG });
-  /** Draft token. `null` means "unchanged"; `""` means "clear it". */
-  const draftToken = ref<string | null>(null);
+  /** Draft password. `null` means "unchanged"; `""` means "clear it". */
+  const draftPassword = ref<string | null>(null);
   const saving = ref(false);
+  /** Result of the last Test connection's credentials probe (Settings →
+   * "Test connection"), alongside the existing reachability `testResult`. */
+  const credentialsCheck = ref<{ ok: boolean; message: string } | null>(null);
 
   // ── ancillary state ───────────────────────────────────────────────────────
   const roots = ref<Record<RootKey, RootStatus>>(
@@ -97,26 +103,26 @@ export const useSettingsStore = defineStore("settings", () => {
   const refreshingSchema = ref(false);
   const schemaRefresh = ref<SchemaRefreshResult | null>(null);
 
-  const hasToken = computed(() => Boolean(apiToken.value));
+  const hasCredentials = computed(() => Boolean(config.value.kcUsername && kcPassword.value));
   const configured = computed(() => isConfigured(config.value));
 
-  /** The token as the field should show it — the draft if edited, else the saved
-   * one. Masking is applied by {@link tokenDisplay}. */
-  const effectiveToken = computed(() =>
-    draftToken.value === null ? (apiToken.value ?? "") : draftToken.value,
+  /** The password as the field should show it — the draft if edited, else the
+   * saved one. Masking is applied by {@link passwordDisplay}. */
+  const effectivePassword = computed(() =>
+    draftPassword.value === null ? (kcPassword.value ?? "") : draftPassword.value,
   );
 
-  /** Masked, non-secret rendering + shape facts for the token field. */
-  const tokenDisplay = computed(() => summarizeToken(effectiveToken.value));
+  /** Masked, non-secret rendering for the password field. */
+  const passwordDisplay = computed(() => summarizePassword(effectivePassword.value));
 
   /** Validation of the **draft** — what gates Save. */
   const validation = computed<ConfigValidation>(() =>
-    validateConfig(draft.value, effectiveToken.value),
+    validateConfig(draft.value, effectivePassword.value),
   );
 
   /** Whether the draft differs from what is saved (drives "unsaved changes"). */
   const dirty = computed(() => {
-    if (draftToken.value !== null && draftToken.value !== (apiToken.value ?? "")) {
+    if (draftPassword.value !== null && draftPassword.value !== (kcPassword.value ?? "")) {
       return true;
     }
     const a = normalizeConfig(draft.value);
@@ -125,6 +131,8 @@ export const useSettingsStore = defineStore("settings", () => {
       ROOT_KEYS.some((key) => a[key] !== b[key]) ||
       a.backendBaseUrl !== b.backendBaseUrl ||
       a.apiPrefix !== b.apiPrefix ||
+      a.keycloakUrl !== b.keycloakUrl ||
+      a.kcUsername !== b.kcUsername ||
       a.theme !== b.theme ||
       a.dataPassingCollectionTypes.join(",") !==
         b.dataPassingCollectionTypes.join(",")
@@ -133,26 +141,35 @@ export const useSettingsStore = defineStore("settings", () => {
 
   const canSave = computed(() => dirty.value && validation.value.valid && !saving.value);
 
-  /** (Re)build the API client from the current **saved** config + token. */
+  /** (Re)build the Keycloak auth helper + API client from the current
+   * **saved** config + password. */
   function applyClient(): void {
+    configureKeycloakAuth({
+      keycloakUrl: config.value.keycloakUrl,
+      getCredentials: async () =>
+        config.value.kcUsername && kcPassword.value
+          ? { username: config.value.kcUsername, password: kcPassword.value }
+          : null,
+    });
     configureApiClient({
       baseUrl: config.value.backendBaseUrl,
       apiPrefix: config.value.apiPrefix,
-      getToken: () => apiToken.value,
+      getToken: () => getKeycloakAuth().getValidAccessToken(),
     });
   }
 
   /** Reset the draft to the saved config, discarding edits. */
   function revert(): void {
     draft.value = { ...config.value };
-    draftToken.value = null;
+    draftPassword.value = null;
     testResult.value = null;
+    credentialsCheck.value = null;
   }
 
-  /** Load persisted config + token and configure the client. Idempotent. */
+  /** Load persisted config + password and configure the client. Idempotent. */
   async function load(): Promise<void> {
     config.value = await loadConfig();
-    apiToken.value = await getApiToken();
+    kcPassword.value = await getKcPassword();
     applyClient();
     revert();
     roots.value = initialRootStatuses(config.value);
@@ -188,25 +205,29 @@ export const useSettingsStore = defineStore("settings", () => {
     editDraft({ theme });
   }
 
-  /** Set (empty string clears) the API token and reconfigure the client. */
-  async function updateToken(token: string): Promise<void> {
-    const normalized = normalizeApiToken(token);
-    await setApiToken(normalized);
-    apiToken.value = normalized || null;
-    draftToken.value = null;
+  /** Set (empty string clears) the Keycloak password and reconfigure the
+   * client, discarding any cached access token so the change takes effect on
+   * the very next request. */
+  async function updatePassword(password: string): Promise<void> {
+    await setKcPassword(password);
+    kcPassword.value = password || null;
+    draftPassword.value = null;
     applyClient();
+    getKeycloakAuth().clearCache();
   }
 
   // ── the Settings form ─────────────────────────────────────────────────────
 
-  /** Edit draft fields (no persistence, no client change). */
+  /** Edit draft fields (no persistence, no client change). Covers
+   * `kcUsername` too — it is a plain field, same as `backendBaseUrl`. */
   function editDraft(patch: Partial<AppConfig>): void {
     draft.value = { ...draft.value, ...patch };
   }
 
-  /** Edit the draft token. Pass `""` to clear it on save. */
-  function editToken(token: string): void {
-    draftToken.value = normalizeApiToken(token);
+  /** Edit the draft password. Pass `""` to clear it on save. */
+  function editPassword(password: string): void {
+    draftPassword.value = password;
+    credentialsCheck.value = null;
   }
 
   /**
@@ -217,31 +238,32 @@ export const useSettingsStore = defineStore("settings", () => {
    * fields point the whole app at a backend, and `config` is what
    * `useConnection.host` / `useSync.host` display while `applyClient()` is what
    * the `ApiClient` actually requests. Committing the config as soon as it
-   * persisted meant a failing token write left those two disagreeing — the UI
-   * naming the new host, every call still going to the old one, and `save()`
-   * returning `false` as if nothing had happened. Staging the commit keeps the
-   * in-memory state coherent whatever fails: either the app moved to the new
-   * backend or it did not.
+   * persisted meant a failing password write left those two disagreeing — the
+   * UI naming the new host, every call still going to the old one, and
+   * `save()` returning `false` as if nothing had happened. Staging the commit
+   * keeps the in-memory state coherent whatever fails: either the app moved
+   * to the new backend or it did not.
    *
-   * A partial write can still reach *disk* (config persisted, token not); the
-   * next `load()` reconciles that, and the operator sees an unsaved-looking form
-   * rather than a silently half-applied one.
+   * A partial write can still reach *disk* (config persisted, password not);
+   * the next `load()` reconciles that, and the operator sees an
+   * unsaved-looking form rather than a silently half-applied one.
    */
   async function save(): Promise<boolean> {
     if (!validation.value.valid) return false;
     saving.value = true;
     try {
       const savedConfig = await saveConfig(draft.value);
-      const savedToken = draftToken.value;
-      if (savedToken !== null) await setApiToken(savedToken);
+      const savedPassword = draftPassword.value;
+      if (savedPassword !== null) await setKcPassword(savedPassword);
 
       // Both persisted — commit.
       config.value = savedConfig;
-      if (savedToken !== null) {
-        apiToken.value = savedToken || null;
-        draftToken.value = null;
+      if (savedPassword !== null) {
+        kcPassword.value = savedPassword || null;
+        draftPassword.value = null;
       }
       applyClient();
+      if (savedPassword !== null) getKeycloakAuth().clearCache();
       draft.value = { ...config.value };
       await refreshRootStatuses();
       return true;
@@ -283,20 +305,21 @@ export const useSettingsStore = defineStore("settings", () => {
   /**
    * Probe reachability for the **draft** connection settings using a throwaway
    * client, so testing an unsaved URL never repoints the running app at it.
-   * Reachability only — no token/identity verification (docs/PROJECT-KNOWLEDGE §3).
+   * `/api/health` itself needs no token (docs/PROJECT-KNOWLEDGE §3), but when
+   * the effective username/password are both filled in this also does a
+   * one-off Keycloak mint against them — closing the "no token probe" gap
+   * (docs/tasks/10-settings-and-naming.md) by surfacing a bad password right
+   * here instead of on the first real upload.
    */
   async function testConnection(): Promise<ReachabilityResult | null> {
     if (validation.value.errors.backendBaseUrl) return null;
     testing.value = true;
     try {
       const { backendBaseUrl: baseUrl, apiPrefix } = normalizeConfig(draft.value);
-      const client = createApiClient({
-        baseUrl,
-        apiPrefix,
-        getToken: () => effectiveToken.value || null,
-      });
+      const client = createApiClient({ baseUrl, apiPrefix });
       const result = await checkConnection(client, { baseUrl });
       testResult.value = result;
+      await probeCredentials();
       return result;
     } catch (err) {
       // checkConnection never throws, so this is a programming error, not a
@@ -305,6 +328,29 @@ export const useSettingsStore = defineStore("settings", () => {
       return null;
     } finally {
       testing.value = false;
+    }
+  }
+
+  /** The credentials half of {@link testConnection} — a cache-bypassing
+   * one-off mint against the draft username + effective password. Skips
+   * silently when either is blank; that is a legitimate, if limited,
+   * configuration, not a failed check. */
+  async function probeCredentials(): Promise<void> {
+    const username = draft.value.kcUsername.trim();
+    const password = effectivePassword.value;
+    if (!username || !password) {
+      credentialsCheck.value = null;
+      return;
+    }
+    try {
+      await getKeycloakAuth().mintOnce(username, password);
+      credentialsCheck.value = { ok: true, message: "Keycloak login succeeded." };
+    } catch (err) {
+      const message =
+        err instanceof KeycloakAuthError
+          ? err.message
+          : `Could not verify credentials: ${(err as Error)?.message ?? err}`;
+      credentialsCheck.value = { ok: false, message };
     }
   }
 
@@ -329,20 +375,20 @@ export const useSettingsStore = defineStore("settings", () => {
   return {
     // saved
     config,
-    apiToken,
+    kcPassword,
     loaded,
-    hasToken,
+    hasCredentials,
     configured,
     // draft / form
     draft,
-    draftToken,
+    draftPassword,
     dirty,
     canSave,
     saving,
     validation,
-    tokenDisplay,
+    passwordDisplay,
     editDraft,
-    editToken,
+    editPassword,
     save,
     revert,
     // roots
@@ -352,6 +398,7 @@ export const useSettingsStore = defineStore("settings", () => {
     // connection
     testing,
     testResult,
+    credentialsCheck,
     testConnection,
     // schema
     schemaCache,
@@ -363,6 +410,6 @@ export const useSettingsStore = defineStore("settings", () => {
     load,
     update,
     setTheme,
-    updateToken,
+    updatePassword,
   };
 });

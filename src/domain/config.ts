@@ -1,10 +1,12 @@
 /**
  * Persisted application configuration (Epic 01 / Epic 10).
  *
- * The `apiToken` is a SECRET and is intentionally NOT part of this object — it
- * is stored and read separately (secure store in production; see
- * services/config.ts). Everything here is non-secret and safe to mirror to a
- * plain settings store.
+ * The Keycloak **password** is a SECRET and is intentionally NOT part of this
+ * object — it is stored and read separately (secure store in production; see
+ * services/config.ts and services/keycloakAuth.ts, which mint/refresh the
+ * actual bearer token from it). The **username** is not sensitive (an
+ * identifier, not a credential) and lives right here alongside the other
+ * plain settings, same as `backendBaseUrl`.
  */
 
 export type ThemePreference = "light" | "dark" | "system";
@@ -23,6 +25,15 @@ export interface AppConfig {
    * Kept configurable in case a reverse proxy rewrites it.
    */
   apiPrefix: string;
+  /**
+   * Keycloak host, e.g. `http://localhost:8082` in dev. Realm (`nbcg`) and
+   * client id (`nbcg-web`) are not configurable — see
+   * `services/keycloakAuth.ts` — only the host differs between dev and prod.
+   */
+  keycloakUrl: string;
+  /** Keycloak username. Not a secret — see this file's header comment. The
+   * password pairing it lives in the secure store (`services/config.ts`). */
+  kcUsername: string;
   theme: ThemePreference;
   /**
    * Which `collectionType` numbers make a linked parent eligible to pass its
@@ -40,6 +51,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   processedRoot: null,
   backendBaseUrl: "https://api.nbcg.me",
   apiPrefix: "/api",
+  keycloakUrl: "http://localhost:8082",
+  kcUsername: "",
   theme: "system",
   dataPassingCollectionTypes: [],
 };
@@ -143,6 +156,31 @@ export function validateBaseUrl(raw: string): string | null {
   return null;
 }
 
+/**
+ * Validate the Keycloak host, same rules as {@link validateBaseUrl} minus the
+ * `/api`-suffix check (Keycloak is not the `nbcg` backend, so that mistake
+ * does not apply here).
+ */
+export function validateKeycloakUrl(raw: string): string | null {
+  const value = normalizeBaseUrl(raw);
+  if (!value) return "Enter the Keycloak host.";
+
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return "Not a valid URL — include the scheme, e.g. http://localhost:8082";
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return "The URL must start with http:// or https://";
+  }
+  if (!url.hostname) return "The URL is missing a host.";
+  if (url.search || url.hash) {
+    return "The Keycloak URL must not carry a query string or fragment.";
+  }
+  return null;
+}
+
 /** Canonical form of the API prefix: leading slash, no trailing slash. `""`
  * stays empty (a proxy that already serves the API at the root). */
 export function normalizeApiPrefix(raw: string): string {
@@ -161,95 +199,74 @@ export function validateApiPrefix(raw: string): string | null {
   return null;
 }
 
-// ─── API token (Epic 10 §Configure → API access token) ───────────────────────
+// ─── Keycloak credentials (Epic 10 §Configure → Backend connection) ──────────
+//
+// The app used to ask for a manually-minted token pasted in whole. It now
+// asks for the Keycloak username (a plain `AppConfig` field, above) and
+// password (a secret, handled here + in services/config.ts) once, and mints
+// + silently refreshes the actual bearer token itself
+// (`services/keycloakAuth.ts`).
 
-/**
- * Clean up a pasted token. Operators mint tokens with the `curl` in
- * docs/00-project-overview.md, which prints the **whole Keycloak JSON envelope**
- * — so a paste is as likely to be `{"access_token":"eyJ…","expires_in":300,…}`
- * as the bare token. This unwraps that, and strips the quoting/`Bearer ` prefix
- * a copy-paste tends to bring along, rather than storing a token that fails every
- * request with an unexplained 401.
- */
-export function normalizeApiToken(raw: string): string {
-  let value = raw.trim();
-  if (!value) return "";
-
-  // The full Keycloak token response, pasted wholesale.
-  if (value.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(value) as { access_token?: unknown };
-      if (typeof parsed.access_token === "string") {
-        value = parsed.access_token.trim();
-      }
-    } catch {
-      // Not JSON after all — fall through and treat it as a literal token.
-    }
-  }
-
-  // Surrounding quotes from a shell copy, then an `Authorization:`-style prefix.
-  value = value.replace(/^["'`]|["'`]$/g, "").trim();
-  value = value.replace(/^Bearer\s+/i, "").trim();
-  // A wrapped paste can carry newlines/spaces a JWT never contains.
-  return value.replace(/\s+/g, "");
+/** What `services/keycloakAuth.ts` needs to mint a token. Assembled from two
+ * different sources — `AppConfig.kcUsername` (plain) + the secret password
+ * (`services/config.ts`) — not stored as a unit anywhere. */
+export interface KeycloakCredentials {
+  username: string;
+  password: string;
 }
 
-/** Whether a token has the three dot-separated segments of a JWT. */
-export function looksLikeJwt(token: string): boolean {
-  const parts = token.split(".");
-  return (
-    parts.length === 3 && parts.every((p) => /^[A-Za-z0-9_-]+$/.test(p))
-  );
+/** Trim a pasted username. */
+export function normalizeUsername(raw: string): string {
+  return raw.trim();
 }
 
 /**
- * Validate a token, returning a **warning** message or `null`. Deliberately not
- * a hard error: the app never verifies the token itself (single-user, static
- * token, verify-on-use — docs/PROJECT-KNOWLEDGE §3), so a shape that merely
- * *looks* wrong must not block saving. It only flags an obvious paste mistake.
+ * Validate the username/password pair, returning a **warning** message or
+ * `null`. Deliberately not a hard error — the app never verifies these
+ * itself before Save (docs/PROJECT-KNOWLEDGE §3's "verify on use"
+ * philosophy extends to this too; Settings → Test connection is what
+ * actually checks them, see `services/keycloakAuth.ts#mintOnce`). This only
+ * catches the obvious half-filled-in mistake.
  */
-export function validateApiToken(raw: string): string | null {
-  const token = normalizeApiToken(raw);
-  if (!token) return null; // no token is a legal (if limited) configuration
-  if (!looksLikeJwt(token)) {
-    return "This does not look like a Keycloak JWT (expected three dot-separated parts).";
+export function validateCredentials(username: string, password: string): string | null {
+  const trimmedUsername = normalizeUsername(username);
+  if (!trimmedUsername && !password) return null; // neither set is a legal (if limited) configuration
+  if (!trimmedUsername || !password) {
+    return "Enter both the Keycloak username and password, or leave both blank.";
   }
   return null;
 }
 
 /**
- * The masked rendering of a token for the Settings field's default state. No
- * characters of the secret are revealed — the length is capped so a long JWT
- * does not render as an absurd wall of dots, which also stops the mask from
- * leaking the exact token length.
+ * The masked rendering of a secret for the Settings field's default state. No
+ * characters are revealed — the length is capped so a long password does not
+ * render as an absurd wall of dots, which also stops the mask from leaking
+ * the exact secret length.
  */
-export function maskToken(token: string | null | undefined, dot = "•"): string {
-  if (!token) return "";
-  return dot.repeat(Math.min(token.length, 24));
+export function maskSecret(secret: string | null | undefined, dot = "•"): string {
+  if (!secret) return "";
+  return dot.repeat(Math.min(secret.length, 24));
 }
 
-/** Non-secret facts about the stored token, for the Settings display. */
-export interface TokenSummary {
+/** Non-secret facts about the stored password, for the Settings display. */
+export interface PasswordSummary {
   present: boolean;
-  /** Masked rendering (never the token itself). */
+  /** Masked rendering (never the password itself). */
   masked: string;
-  /** Whether it has a JWT's shape. */
-  jwtShaped: boolean;
 }
 
-export function summarizeToken(token: string | null | undefined): TokenSummary {
-  const value = token ?? "";
+export function summarizePassword(password: string | null | undefined): PasswordSummary {
+  const value = password ?? "";
   return {
     present: value.length > 0,
-    masked: maskToken(value),
-    jwtShaped: value.length > 0 && looksLikeJwt(value),
+    masked: maskSecret(value),
   };
 }
 
 // ─── whole-config validation ─────────────────────────────────────────────────
 
 /** Field-keyed validation messages. A key is absent when that field is fine. */
-export type ConfigErrors = Partial<Record<keyof AppConfig | "apiToken", string>>;
+export type ConfigErrors = Partial<Record<keyof AppConfig | "kcPassword", string>>;
 
 /**
  * Validate the editable config. Splits **errors** (block Save) from **warnings**
@@ -267,8 +284,8 @@ export interface ConfigValidation {
 }
 
 export function validateConfig(
-  config: Pick<AppConfig, "backendBaseUrl" | "apiPrefix">,
-  apiToken?: string | null,
+  config: Pick<AppConfig, "backendBaseUrl" | "apiPrefix" | "keycloakUrl" | "kcUsername">,
+  kcPassword?: string | null,
 ): ConfigValidation {
   const errors: ConfigErrors = {};
   const warnings: ConfigErrors = {};
@@ -279,8 +296,11 @@ export function validateConfig(
   const prefixError = validateApiPrefix(config.apiPrefix);
   if (prefixError) errors.apiPrefix = prefixError;
 
-  const tokenWarning = validateApiToken(apiToken ?? "");
-  if (tokenWarning) warnings.apiToken = tokenWarning;
+  const keycloakUrlError = validateKeycloakUrl(config.keycloakUrl);
+  if (keycloakUrlError) errors.keycloakUrl = keycloakUrlError;
+
+  const credentialsWarning = validateCredentials(config.kcUsername, kcPassword ?? "");
+  if (credentialsWarning) warnings.kcPassword = credentialsWarning;
 
   return {
     errors,
@@ -296,5 +316,7 @@ export function normalizeConfig(config: AppConfig): AppConfig {
     ...config,
     backendBaseUrl: normalizeBaseUrl(config.backendBaseUrl),
     apiPrefix: normalizeApiPrefix(config.apiPrefix),
+    keycloakUrl: normalizeBaseUrl(config.keycloakUrl),
+    kcUsername: normalizeUsername(config.kcUsername),
   };
 }

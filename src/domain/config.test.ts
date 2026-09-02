@@ -8,17 +8,14 @@ import {
   validateBaseUrl,
   normalizeApiPrefix,
   validateApiPrefix,
-  normalizeApiToken,
-  looksLikeJwt,
-  validateApiToken,
-  maskToken,
-  summarizeToken,
+  validateKeycloakUrl,
+  normalizeUsername,
+  validateCredentials,
+  maskSecret,
+  summarizePassword,
   validateConfig,
   normalizeConfig,
 } from "./config";
-
-/** A shape-valid (not real) JWT: three base64url segments. */
-const JWT = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJuYmNnIn0.c2lnbmF0dXJl";
 
 describe("isConfigured", () => {
   it("needs both roots and a base URL", () => {
@@ -120,121 +117,98 @@ describe("api prefix", () => {
   });
 });
 
-describe("normalizeApiToken", () => {
-  it("passes a bare token through", () => {
-    expect(normalizeApiToken(JWT)).toBe(JWT);
-    expect(normalizeApiToken(`  ${JWT}  `)).toBe(JWT);
+describe("validateKeycloakUrl", () => {
+  it("accepts a dev and a prod-shaped host", () => {
+    expect(validateKeycloakUrl("http://localhost:8082")).toBeNull();
+    expect(validateKeycloakUrl("https://auth.nbcg.me")).toBeNull();
   });
 
-  it("unwraps the Keycloak JSON envelope the docs' curl prints", () => {
-    const envelope = JSON.stringify({
-      access_token: JWT,
-      expires_in: 300,
-      token_type: "Bearer",
-    });
-    expect(normalizeApiToken(envelope)).toBe(JWT);
+  it("requires a value and a scheme", () => {
+    expect(validateKeycloakUrl("")).toMatch(/Enter the Keycloak host/);
+    expect(validateKeycloakUrl("localhost")).toMatch(/include the scheme/i);
   });
 
-  it("leaves a JSON blob without access_token alone (as a literal)", () => {
-    expect(normalizeApiToken('{"error":"invalid_grant"}')).toBe(
-      '{"error":"invalid_grant"}',
-    );
-  });
-
-  it("strips surrounding quotes and a Bearer prefix", () => {
-    expect(normalizeApiToken(`"${JWT}"`)).toBe(JWT);
-    expect(normalizeApiToken(`'${JWT}'`)).toBe(JWT);
-    expect(normalizeApiToken(`Bearer ${JWT}`)).toBe(JWT);
-    expect(normalizeApiToken(`bearer ${JWT}`)).toBe(JWT);
-    expect(normalizeApiToken(`"Bearer ${JWT}"`)).toBe(JWT);
-  });
-
-  it("removes whitespace a wrapped paste introduces", () => {
-    expect(normalizeApiToken("eyJhbGci\n  OiJSUzI1NiJ9.eyJ.c2ln")).toBe(
-      "eyJhbGciOiJSUzI1NiJ9.eyJ.c2ln",
-    );
-  });
-
-  it("maps blank input to an empty string", () => {
-    expect(normalizeApiToken("")).toBe("");
-    expect(normalizeApiToken("   \n ")).toBe("");
+  it("rejects a query string or fragment", () => {
+    expect(validateKeycloakUrl("http://localhost:8082?x=1")).toMatch(/query string/);
   });
 });
 
-describe("looksLikeJwt / validateApiToken", () => {
-  it("recognises three base64url segments", () => {
-    expect(looksLikeJwt(JWT)).toBe(true);
-    expect(looksLikeJwt("a.b")).toBe(false);
-    expect(looksLikeJwt("a.b.c.d")).toBe(false);
-    expect(looksLikeJwt("a.b.c!")).toBe(false);
-    expect(looksLikeJwt("")).toBe(false);
-  });
-
-  it("warns but does not error on an odd-looking token", () => {
-    expect(validateApiToken(JWT)).toBeNull();
-    // Empty is legal — the app never verifies the token itself.
-    expect(validateApiToken("")).toBeNull();
-    expect(validateApiToken("not-a-jwt")).toMatch(/does not look like/);
-  });
-
-  it("validates the normalised form, so a Bearer paste is not flagged", () => {
-    expect(validateApiToken(`Bearer ${JWT}`)).toBeNull();
+describe("normalizeUsername", () => {
+  it("trims whitespace", () => {
+    expect(normalizeUsername("  alice  ")).toBe("alice");
   });
 });
 
-describe("maskToken / summarizeToken", () => {
+describe("validateCredentials", () => {
+  it("is fine with both filled in, or both blank", () => {
+    expect(validateCredentials("alice", "secret")).toBeNull();
+    expect(validateCredentials("", "")).toBeNull();
+  });
+
+  it("flags exactly one of the two being filled in", () => {
+    expect(validateCredentials("alice", "")).toMatch(/Enter both/);
+    expect(validateCredentials("", "secret")).toMatch(/Enter both/);
+  });
+});
+
+describe("maskSecret / summarizePassword", () => {
   it("reveals no characters of the secret", () => {
-    const masked = maskToken(JWT);
+    const masked = maskSecret("hunter2");
     expect(masked).toMatch(/^•+$/);
-    expect(masked).not.toContain("ey");
+    expect(masked).not.toContain("hunter");
   });
 
   it("caps the mask so it does not leak the length", () => {
-    expect(maskToken("a".repeat(500)).length).toBe(24);
-    expect(maskToken("abc").length).toBe(3);
+    expect(maskSecret("a".repeat(500)).length).toBe(24);
+    expect(maskSecret("abc").length).toBe(3);
   });
 
-  it("renders nothing for an absent token", () => {
-    expect(maskToken(null)).toBe("");
-    expect(maskToken(undefined)).toBe("");
-    expect(maskToken("")).toBe("");
+  it("renders nothing for an absent password", () => {
+    expect(maskSecret(null)).toBe("");
+    expect(maskSecret(undefined)).toBe("");
+    expect(maskSecret("")).toBe("");
   });
 
-  it("summarises presence and shape without exposing the token", () => {
-    expect(summarizeToken(JWT)).toEqual({
+  it("summarises presence without exposing the password", () => {
+    expect(summarizePassword("hunter2")).toEqual({
       present: true,
-      masked: maskToken(JWT),
-      jwtShaped: true,
+      masked: maskSecret("hunter2"),
     });
-    expect(summarizeToken(null)).toEqual({
-      present: false,
-      masked: "",
-      jwtShaped: false,
-    });
-    expect(summarizeToken("nope").jwtShaped).toBe(false);
+    expect(summarizePassword(null)).toEqual({ present: false, masked: "" });
   });
 });
 
 describe("validateConfig", () => {
-  const base = { backendBaseUrl: "https://api.nbcg.me", apiPrefix: "/api" };
+  const base = {
+    backendBaseUrl: "https://api.nbcg.me",
+    apiPrefix: "/api",
+    keycloakUrl: "http://localhost:8082",
+    kcUsername: "",
+  };
 
-  it("is valid with a good URL and no token", () => {
+  it("is valid with a good URL and no credentials", () => {
     const result = validateConfig(base, null);
     expect(result.valid).toBe(true);
     expect(result.errors).toEqual({});
     expect(result.warnings).toEqual({});
   });
 
-  it("reports a bad URL as a blocking error", () => {
-    const result = validateConfig({ ...base, backendBaseUrl: "nope" }, JWT);
+  it("reports a bad backend URL as a blocking error", () => {
+    const result = validateConfig({ ...base, backendBaseUrl: "nope" }, "secret");
     expect(result.valid).toBe(false);
     expect(result.errors.backendBaseUrl).toBeTruthy();
   });
 
-  it("reports an odd token as a non-blocking warning", () => {
-    const result = validateConfig(base, "garbage");
+  it("reports a bad Keycloak URL as a blocking error", () => {
+    const result = validateConfig({ ...base, keycloakUrl: "nope" }, null);
+    expect(result.valid).toBe(false);
+    expect(result.errors.keycloakUrl).toBeTruthy();
+  });
+
+  it("reports a half-filled-in username/password as a non-blocking warning", () => {
+    const result = validateConfig({ ...base, kcUsername: "alice" }, "");
     expect(result.valid).toBe(true);
-    expect(result.warnings.apiToken).toBeTruthy();
+    expect(result.warnings.kcPassword).toBeTruthy();
   });
 
   it("reports a bad prefix", () => {
