@@ -43,11 +43,17 @@ command/event contract (`src/ipc/`, Jernej↔Arch), the REST API
 
 ## 3. Decisions that shape the integration
 
-- **No login / no identity.** One workstation, one operator. Auth is a **static
-  Keycloak bearer token** stored in app config, sent as `Authorization: Bearer`
-  on every call. There is **no per-user login and no identity/verify endpoint**,
-  and none is needed — a bad token simply fails the first real write with
-  `401`/`403` ("verify on use"). If multi-user login is ever wanted, add it then.
+- **No login / no identity.** One workstation, one operator. Auth is a
+  **Keycloak access token**, sent as `Authorization: Bearer` on every call —
+  minted and silently refreshed by the app itself from a stored username/
+  password (`services/keycloakAuth.ts`, 2026-09-02), not a token the operator
+  mints by hand and pastes in. There is **no per-user login and no identity/
+  verify endpoint**, and none is needed — Settings → Test connection does
+  validate the credentials directly now (a one-off mint), so a bad password
+  is caught there rather than only on the first real write's `401`/`403`
+  ("verify on use" still applies to scope/permission problems, which no
+  token probe can catch ahead of time). If multi-user login is ever wanted,
+  add it then.
 - **Backend is the source of truth.** Write-through (backend → then local
   `metadata.json` + SQLite). Never read authoritative data *from* the archive
   for items that exist on the backend.
@@ -76,7 +82,10 @@ strips unknown body props.
 - Keycloak **RS256 JWT** via `Authorization: Bearer <token>` (JWKS from
   `${KEYCLOAK_URL}/realms/${KEYCLOAK_REALM}`; audience = `KEYCLOAK_CLIENT_ID`,
   default `nbcg-api`). A cookie `nbcg_at` is accepted **only** on the file
-  `download` GET.
+  `download` GET. On the desktop app's side, this token is now minted/
+  refreshed automatically (`services/keycloakAuth.ts`, password grant against
+  the `nbcg-web` client) — the backend's own validation here is unaffected,
+  it's still just a bearer JWT to it.
 - Two global guards: **`OptionalJwtGuard`** (validates a token if present but
   **never rejects** — missing/invalid/expired → anonymous) then **`ScopesGuard`**
   (enforces `@RequireScopes`; anonymous → `401`, insufficient → `403`).

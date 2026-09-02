@@ -22,7 +22,7 @@ the backend actually does — several requested items had already shipped.
 
 | Capability | Endpoint (**verified**) | Status |
 |---|---|---|
-| **Auth** — static Keycloak bearer token sent on every call; verified by the backend at the point of use (`401`/`403`) | *(header `Authorization: Bearer`)* | ✅ no endpoint needed |
+| **Auth** — Keycloak bearer token sent on every call (minted/refreshed by the app itself since 2026-09-02, `services/keycloakAuth.ts`); verified by the backend at the point of use (`401`/`403`) | *(header `Authorization: Bearer`)* | ✅ no endpoint needed |
 | **Metadata schema** — main + child field defs incl. parent-inheritable / issue-identifying flags | `GET /api/schema/record?level=main\|child` | ✅ **flags already present** (`parentInheritable`, `issueIdentifying`, `levels`); no `label` |
 | **COBISS preview** — fetch + parse by CG-ID, no persist | `GET /api/import/cobiss/preview/:cobissId` | ✅ implemented — **path differs from the one these docs used to cite** |
 | **External full-text ingest** — store archive OCR text, skip Tika | `POST /api/files/upload/:id` (multipart `extractedTexts` map, `doOCR=false`) + `PUT /api/files/:fileId/text` to reset | ✅ implemented |
@@ -43,7 +43,7 @@ the backend actually does — several requested items had already shipped.
 
 ## Tasks
 
-- [x] **Auth is a static bearer token — no identity/verify endpoint.** The app
+- [x] **Auth is a bearer token, verified on use — no identity/verify endpoint.** The app
       is single-workstation, single-user (no login), so there is nothing to
       "verify" a caller against; the token is authenticated by the backend on the
       first real write (`401`/`403`). Settings → Test connection is a plain
@@ -202,7 +202,7 @@ gap; no task was filed. The one thing that matters for us is recorded in
   verified contract lives in [`PROJECT-KNOWLEDGE.md`](../PROJECT-KNOWLEDGE.md) §4
   and in code at `src/services/api/dto.ts`.
 - The schema-flags additions are agreed and filed. (No identity endpoint — auth
-  is a static token, verified on use.)
+  is a bearer token, verified on use.)
 
 ## Progress — logic lane
 

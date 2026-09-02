@@ -179,11 +179,14 @@ straight to `visibilityStatus` — no backend change needed.
 
 ## Auth
 
-**For now: a static API token issued from Keycloak**, stored in app config and
-sent as the `Authorization: Bearer` header on every request. It just needs the
-right `nbcg-api` roles. Per-librarian interactive login (for attribution) can
-replace it later; the `nbcg-worker` service-account also exists for unattended
-use. See [decisions](03-open-questions.md).
+**A Keycloak access token**, sent as the `Authorization: Bearer` header on
+every request. The account just needs the right `nbcg-api` roles. As of
+2026-09-02 the app mints and silently refreshes this itself
+(`services/keycloakAuth.ts`, password grant against `nbcg-web`) from a
+username/password stored in Settings — it is no longer a manually-pasted
+static token. Per-librarian interactive login (for attribution) can replace
+it later; the `nbcg-worker` service-account also exists for unattended use.
+See [decisions](03-open-questions.md).
 
 ## Frontend state & offline
 

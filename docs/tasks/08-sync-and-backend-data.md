@@ -21,7 +21,8 @@ Backend is the single source of truth, so sync never pushes.
 - [x] **Auto-sync scheduler**: run automatically every 6 h; the manual **Sync
       now** runs on demand; reflect running state (spinner, disabled button).
 - [x] **On-launch fetch**: query the backend so the archive opens with current
-      catalog state (auth: static Keycloak bearer token from config).
+      catalog state (auth: Keycloak bearer token, minted/refreshed
+      automatically from the configured credentials).
 - [x] **Search UI**: browse/search backend records & drafts (`GET /api/search`,
       `GET /api/search/:id/children`) with filters, from inside the archive.
 - [x] **Match search results to local folders** by connected `backendId`; show

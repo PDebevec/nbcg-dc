@@ -123,14 +123,14 @@ Start with [00-project-overview](../00-project-overview.md) →
 > endpoint (inheritable/issue flags **present**), COBISS preview, external
 > full-text ingest, replace-file, optimistic concurrency (**`expectedVersion`
 > present**), attachment roles, and visibility all exist. **No identity/verify
-> endpoint** is needed (single-user, static token — verified on use). See the
+> endpoint** is needed (single-user, bearer token — verified on use). See the
 > verified contract in [`PROJECT-KNOWLEDGE.md`](../PROJECT-KNOWLEDGE.md).
 
 ## Suggested phasing
 
 - **Phase 0 — Foundations:** Epic 01; Epic 09 kickoff (confirm the
   `nbcg/todo/backend-archive-*` changes, esp. the schema endpoint + external
-  full-text ingest). Auth is a static token — no identity endpoint.
+  full-text ingest). Auth is a bearer token, verified on use — no identity endpoint.
 - **Phase 1 — Arrivals & batches:** Epics 02, 03. See the arrivals table with
   derived state; create/open batches.
 - **Phase 2 — Processing (works offline):** Epic 06 — the PDF / OCR /

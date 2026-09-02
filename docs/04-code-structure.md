@@ -161,7 +161,7 @@ connection is in Jernej's lane.
 
 > **Decision — backend HTTP is in TypeScript, not Rust.** This keeps every
 > backend-connection concern in Jernej's lane and out of the Rust core. Trade-off:
-> the static Keycloak token passes through the webview (acceptable — it already
+> the Keycloak access token passes through the webview (acceptable — it already
 > lives in app config). If the token must never leave Rust, expose a single
 > `ipc.backend.request()` command instead — but that moves backend code into the
 > Arch lane, which we don't want. Revisit only if security requires it.

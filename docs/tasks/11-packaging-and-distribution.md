@@ -11,15 +11,19 @@ so there is nothing to set up by hand.
       macOS/Linux only if needed.
 - [ ] **Bundle Python** per the chosen strategy (Epic 06): sidecar runtime +
       deps (PaddleOCR, Pillow, pdf2image/poppler, OpenCV) OR document a system
-      install — sidecar strongly preferred for non-technical staff.
+      install — sidecar strongly preferred for non-technical staff. Design
+      write-up (recommended distribution, version constraint discovered
+      2026-09-01, Tauri-free-core wiring): [python-runtime-bundling.md](python-runtime-bundling.md).
 - [ ] Handle **OCR model assets** (PaddleOCR downloads models on first run):
       pre-bundle or manage a first-run download with progress.
 - [ ] Configure **Tauri bundling** ([tauri.conf.json](../../src-tauri/tauri.conf.json)):
       app identity, icons, Windows installer (MSI/NSIS), signing if available.
 - [ ] **Auto-update** strategy (Tauri updater) so fixes reach staff easily.
 - [ ] **First-run setup** flow: point the app at the `/unprocessed` and
-      `/processed` roots, the backend URL, and the static KC token; validate
-      connectivity via Test connection (Epic 10).
+      `/processed` roots, the backend URL, and the Keycloak URL/username/
+      password (2026-09-02: no longer a manually-minted token — see
+      `services/keycloakAuth.ts`); validate connectivity + credentials via
+      Test connection (Epic 10).
 - [ ] Smoke-test the packaged build on a clean Windows machine (no dev tools, no
       Python preinstalled).
 
@@ -32,9 +36,9 @@ the pieces it needs already exist from Epics 01 and 10:
 | First-run needs | Already built |
 |---|---|
 | "Not configured yet" detection | `domain/config.isConfigured()` → `useSettings.configured` |
-| Roots + base URL + token entry, with validation | `stores/useSettings` (draft/save/revert), `domain/config.validateConfig` |
+| Roots + base URL + Keycloak URL/username/password entry, with validation | `stores/useSettings` (draft/save/revert), `domain/config.validateConfig` |
 | Folder picking + "is this a real folder?" | `services/config.pickDirectory` / `probeRoot` (`RootValidity`, incl. `unknown` when there is no filesystem to probe) |
-| Test connection | `services/api/health.checkConnection` → classified `ok` / `not-nbcg-api` / `server-error` / `unreachable` |
+| Test connection (reachability + credentials) | `services/api/health.checkConnection` → classified `ok` / `not-nbcg-api` / `server-error` / `unreachable`; `keycloakAuth.mintOnce` for the credentials half |
 | Installed app version for the Settings footer | `services/config.getAppVersion()` |
 
 So first-run is a **GUI assembly job** over existing logic, not new logic.
@@ -46,9 +50,9 @@ because they only bite in a packaged build, which is this epic):
   compiled-in constant, so the Settings version line drifts from the installed
   bundle and reports the wrong version after an update. No error, just a wrong
   number.
-- **The `config_*_secret` commands** — without them the Keycloak token falls back
-  to webview `localStorage` **in plain text**. That fallback exists for the `vite`
-  dev session; shipping it would put a live credential on disk unencrypted.
+- **The `config_*_secret` commands** — without them the Keycloak password falls
+  back to webview `localStorage` **in plain text**. That fallback exists for the
+  `vite` dev session; shipping it would put a live credential on disk unencrypted.
 
 Also still required from Epic 01: register `tauri-plugin-http` and allow-list the
 backend host, or every backend call is denied at runtime.

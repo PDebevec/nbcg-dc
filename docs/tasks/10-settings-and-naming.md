@@ -19,26 +19,34 @@ lives in [Epic 01](01-app-shell.md); this epic is the screen + the naming rules.
       `browseForRoot(key)` (picks into the **draft**, not the saved config).
       **`.vue` ◻** the two rows + Browse buttons + status pills.
       **`.rs` ◻** `fs_path_exists`, `fs_pick_directory`.
-- [x] **Backend connection**: **API base URL** (default `https://api.nbcg.me`)
-      and **API access token** — stored as a secret, **masked by default** with
-      **Show/Hide** and **Paste**.
-      — **`.ts` ✅** `normalizeBaseUrl` / `validateBaseUrl` / `normalizeApiPrefix` /
-      `validateApiPrefix` / `validateConfig` / `normalizeConfig`, and
-      `normalizeApiToken` / `looksLikeJwt` / `maskToken` / `summarizeToken` in
-      `domain/config`; the draft/save buffer in `stores/useSettings`.
-      **`.vue` ◻** the fields, the Show/Hide toggle, Paste, and the error/warning
-      text (bind `validation.errors` / `.warnings` and `tokenDisplay.masked` —
-      never the raw token).
+- [x] **Backend connection**: **API base URL** (default `https://api.nbcg.me`),
+      **Keycloak URL**, and **Keycloak username/password** — the password
+      stored as a secret, **masked by default** with **Show/Hide**.
+      — **`.ts`/`.vue` ✅ (2026-09-02, superseded the original spec)** the
+      original "paste a token, Show/Hide + Paste" design is gone — Settings
+      now takes a Keycloak username + password and the app mints/refreshes
+      the actual bearer token itself (`services/keycloakAuth.ts`), so there
+      is no token to paste at all. `normalizeBaseUrl` / `validateBaseUrl` /
+      `normalizeApiPrefix` / `validateApiPrefix` / `validateKeycloakUrl` /
+      `normalizeUsername` / `validateCredentials` / `maskSecret` /
+      `summarizePassword` / `validateConfig` / `normalizeConfig` in
+      `domain/config`; the draft/save buffer in `stores/useSettings`
+      (`kcUsername` is a plain draft field like `backendBaseUrl`; only the
+      password gets the secret/masked treatment). `SettingsView.vue` +
+      `useSettingsScreen.ts` have the three fields, the password Show/Hide,
+      and error/warning text (`validation.errors`/`.warnings`,
+      `passwordDisplay.masked` — never the raw password).
 - [x] **Test connection**: a reachability ping (`GET /api/health`) — show
       Reachable / Unreachable for the configured base URL. **No identity/verify**
       and no email/access-level: the app is single-workstation, single-user (no
-      login), and the static token is authenticated by the backend on the first
-      real write (`401`/`403`). (Add identity display only if multi-user login is
-      ever introduced.)
-      — **`.ts` ✅** `checkConnection` now classifies the outcome
+      login). (Add identity display only if multi-user login is ever introduced.)
+      — **`.ts`/`.vue` ✅** `checkConnection` classifies the outcome
       (`ReachabilityReason`) and `useSettings.testConnection()` probes the
-      **draft** via a throwaway client. Still reachability-only — no token probe.
-      **`.vue` ◻** the button + result line.
+      **draft** via a throwaway client. **2026-09-02: the "no token probe" gap
+      below is closed** — when a username/password are filled in, the same
+      call also does a one-off Keycloak mint (`keycloakAuth.mintOnce`) and
+      reports success/failure right in the Settings screen, alongside the
+      reachability result.
 - [x] **Theme**: Light / Dark / **System**.
       — **`.ts` ✅** persisted `ThemePreference` + `useSettings.setTheme` (applies
       immediately, and mirrors into a dirty draft). **`.vue`/`.css` ◻** the
@@ -132,14 +140,14 @@ All three were found by probing the live backend, and each changed the code:
   primitives, and keeping them in `files` would have made the import circular).
 - **`domain/config.ts`** — grew the validation/masking vocabulary:
   `RootValidity` (with a fourth `unknown` state — see below) / `RootStatus`,
-  base-URL and prefix normalisation + validation, and token handling.
-  `normalizeApiToken` unwraps the **whole Keycloak JSON envelope**, because the
-  `curl` in [the overview](../00-project-overview.md) prints
-  `{"access_token":"…","expires_in":300,…}` and pasting that verbatim is at least
-  as likely as pasting the bare token; it also strips quotes and a `Bearer `
-  prefix. `validateConfig` splits **errors** (block Save — only a malformed URL
-  qualifies) from **warnings** (an odd-looking token is shown, not blocked, since
-  the app never verifies the token itself).
+  base-URL and prefix normalisation + validation, and Keycloak URL/credential
+  handling. (Originally this section covered `normalizeApiToken`, unwrapping a
+  pasted whole Keycloak JSON envelope — obsolete since 2026-09-02, when the
+  operator stopped pasting a token at all; see `validateCredentials` /
+  `maskSecret` / `summarizePassword` instead.) `validateConfig` splits
+  **errors** (block Save — a malformed URL) from **warnings** (a half-filled-in
+  username/password is shown, not blocked, since Test connection — not Save —
+  is what actually verifies them).
 - **`domain/connection.ts`** — `ReachabilityReason` (`ok` / `not-nbcg-api` /
   `server-error` / `unreachable`), `status` on `ReachabilityResult`, and
   `isConfigurationFault()` so Settings can point at the field rather than showing
@@ -182,9 +190,11 @@ answer, and `isRootUsable()` treats it as usable so a dev run is not blocked.
 ### Owed by GUI (`.vue` / `.css`)
 
 The whole **Settings screen**, both tabs. Configure: the two folder rows (path +
-Browse… + status pill), the base-URL field with its inline error, the token field
-**masked by default** with Show/Hide + Paste, Test connection (button, spinner,
-result line), the theme control, Refresh metadata schema (button + per-level
+Browse… + status pill), the base-URL field with its inline error, the Keycloak
+URL/username/password fields (password **masked by default** with Show/Hide —
+built 2026-09-02, superseding the original single-token-field spec), Test
+connection (button, spinner, reachability + credentials result lines), the
+theme control, Refresh metadata schema (button + per-level
 cache line), the app-version line, and **Save / Revert** wired to `canSave` /
 `dirty` — including an unsaved-changes prompt when navigating away. Data: the
 read-only convention, the multi-asset and multi-page notes, and the live preview
@@ -257,12 +267,15 @@ running client never disagrees with `config`.*
 
 ### Not yet built (noted)
 
-- **No token probe.** Test connection stays reachability-only, per this epic's
-  spec. `GET /api/items/stats` is the one scoped GET that would reveal a bad
-  token at Settings time instead of at the first upload — worth revisiting if
-  operators hit `401`s during upload, but it needs
-  `records:view:hidden` + `drafts:view:hidden`, so a `403` there would have to be
-  reported as "token valid, scopes narrow" rather than a failure.
+- ~~**No token probe.**~~ **Closed 2026-09-02.** Test connection now also does
+  a one-off Keycloak login against the entered username/password
+  (`keycloakAuth.mintOnce`), so a wrong password surfaces at Settings time.
+  `GET /api/items/stats` (the scoped-GET idea below) would go further —
+  proving the account's actual *scopes*, not just that it can log in — and is
+  still open if operators hit `401`s/`403`s during upload despite a
+  successful credentials check: it needs `records:view:hidden` +
+  `drafts:view:hidden`, so a `403` there would have to be reported as
+  "credentials valid, scopes narrow" rather than a failure.
 - **No folder-name validation.** The convention assumes folder names are correct
   and unique at scan time; nothing warns about spaces, diacritics, or collisions.
   Deliberate for now (docs/03), but it is where the naming assumption will break

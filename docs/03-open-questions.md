@@ -51,9 +51,12 @@
   (`nbcg/todo/backend-archive-metadata-schema-endpoint.md`); on upload send only
   current-schema fields.
 
-- **Auth mechanism** — For now, a **static API token issued from Keycloak**,
-  configured in the app and sent as the bearer token. (Per-user login can come
-  later; the token just needs the right `nbcg-api` roles.)
+- **Auth mechanism** — A **Keycloak access token** sent as the bearer token,
+  minted/refreshed automatically by the app from a stored username/password
+  (`services/keycloakAuth.ts`, 2026-09-02 — password grant against `nbcg-web`;
+  no longer a manually-pasted static token). The account just needs the right
+  `nbcg-api` roles. Per-user login can come later. Production's Keycloak
+  hostname is still TBD (`AppConfig.keycloakUrl` defaults to the dev host).
 
 - **Folder lifecycle / "reposition"** — Two folders: **`/unprocessed`** and
   **`/processed`**. New scans land in `/unprocessed`; the archive lists those
@@ -135,14 +138,17 @@
   (required in `CreateItemDto`) — no backend change; the app just sends
   `visibilityStatus`.
 
-- **No identity/verify endpoint — auth is a static token, verified on use.**
+- **No identity/verify endpoint — auth is a Keycloak token, verified on use.**
   The app is single-workstation, single-user (no login), so there is no caller
-  to identify. The static Keycloak bearer token is authenticated by the backend
-  at the point of use (a bad token fails the first real write with `401`/`403`).
-  Settings → Test connection is therefore just a reachability ping
-  (`GET /api/health`); it does **not** show email/access level. (The backend has
-  no `/api/me` or `/api/auth/verify` route, and none is needed. Revisit only if
-  per-user login is ever added — then an identity endpoint + display can follow.)
+  to identify. The bearer token (now minted/refreshed automatically by the app,
+  see the "Auth mechanism" item above) is authenticated by the backend at the
+  point of use (a bad token fails the first real write with `401`/`403`).
+  Settings → Test connection does a reachability ping (`GET /api/health`) **and**
+  a one-off Keycloak login against the entered username/password, so a wrong
+  password now surfaces right there — it still does **not** show email/access
+  level. (The backend has no `/api/me` or `/api/auth/verify` route, and none is
+  needed. Revisit only if per-user login is ever added — then an identity
+  endpoint + display can follow.)
 
 ## Still open
 

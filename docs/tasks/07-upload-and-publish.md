@@ -15,7 +15,7 @@ re-upload after re-processing.
       ("not processed to the end — confirm you don't need full text, or go
       extract it") but allow continue.
 - [x] **Write-gating**: there is no pre-check of write access (single-user,
-      static token, no identity endpoint). If the token lacks the required
+      no identity endpoint). If the account lacks the required
       `*:manage` scope, the create/upload call returns `403` — catch it and
       surface a clear message ("token lacks write access") rather than a raw
       error.

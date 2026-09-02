@@ -165,7 +165,7 @@ prompt, the parent picker, the per-field source picker, provenance tags, and the
 ### Owed by Arch (`.rs`) / backend (`nbcg`)
 
 **Nothing.** No IPC surface beyond the batch persistence Epic 03 already declared,
-and no endpoint changes — `import:execute` on the static token is all the COBISS
+and no endpoint changes — `import:execute` on the account is all the COBISS
 preview needs.
 
 ## Acceptance

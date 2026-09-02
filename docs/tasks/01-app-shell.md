@@ -29,7 +29,7 @@ bracketed tags mark what each lane still owes.
       **badge** = count of unfinished batches (needs `useBatches`, Epic 03).
 - [x] **Connection footer** — **[logic ✓]** backend **reachability** only
       (`stores/useConnection`, `services/api/health` → `GET /api/health`); no
-      token/identity check (single-user, static token — see decisions).
+      token/identity check (single-user, verify-on-use auth — see decisions).
       **[GUI]** `ConnectionFooter.vue` binding `useConnection` (`state`, `host`,
       `lastResult.message`).
 - [x] **Screen shell** — **[logic ✓]** router swaps Overview / Batches /
@@ -45,15 +45,18 @@ bracketed tags mark what each lane still owes.
       regenerate `ipc/bindings.ts` (see Handoff).
 - [x] **App configuration (persisted)** — **[logic ✓]** `AppConfig`
       (`domain/config`), `services/config` (secure-store adapter + dev
-      localStorage fallback), `useSettings`. Roots, base URL, **static Keycloak
-      token (secret)**, cached schema, theme. **[Arch]** the `core/config`
-      secure store behind `config_*` commands. **[GUI]** the Settings screen
-      (Epic 10).
+      localStorage fallback), `useSettings`. Roots, base URL, **Keycloak URL +
+      username** (plain) **+ password (secret)**, cached schema, theme.
+      **[Arch]** the `core/config` secure store behind `config_*` commands.
+      **[GUI]** the Settings screen (Epic 10).
 - [x] **Global concerns** — **[logic ✓]** `lib/logger`, `stores/useToasts`,
       theme preference persisted in config. **[GUI]** `Toast.vue`, loading
       states, and applying the theme (Light/Dark/**System**) to the DOM.
-- [x] **Auth** — **[logic ✓]** the configured static KC token is sent as
-      `Authorization: Bearer` on every backend call (`services/api/client`).
+- [x] **Auth** — **[logic ✓]** a Keycloak access token, minted/refreshed
+      automatically from the stored username/password
+      (`services/keycloakAuth.ts`, 2026-09-02), is sent as `Authorization:
+      Bearer` on every backend call (`services/api/client`) — no more manual
+      token minting/pasting.
 
 ## Logic lane — what was built (Jernej)
 
@@ -124,10 +127,11 @@ was reviewed adversarially (correctness, contract-fidelity, lane boundaries).
 
 ### Backend (`nbcg`) — nothing required
 - **No identity/verify endpoint is needed.** The app is single-workstation,
-  single-user (no login); the static Keycloak token is authenticated by the
-  backend on the first real write (`401`/`403`). Test connection is just a
-  reachability ping (`GET /api/health`). (If per-user login is ever added, an
-  identity endpoint + display can follow then.)
+  single-user (no login); the bearer token is authenticated by the backend on
+  the first real write (`401`/`403`). Test connection does a reachability
+  ping (`GET /api/health`) plus a one-off Keycloak credentials check
+  (2026-09-02). (If per-user login is ever added, an identity endpoint +
+  display can follow then.)
 - Only confirm the **base URL**: the backend serves under global prefix `/api`,
   so the client uses `<backendBaseUrl><apiPrefix>` (default `https://api.nbcg.me`
   + `/api`). Confirm whether the public host already includes `/api`, and adjust

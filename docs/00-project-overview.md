@@ -81,18 +81,21 @@ so the full URL is `<backendBaseUrl>` + `/api` + `<path>`, e.g.
 backend on 2026-08-07); keep `apiPrefix` at its `/api` default unless a reverse
 proxy rewrites it.
 
-**Auth** is a static Keycloak bearer token in app config — no login, no identity
-endpoint (see [PROJECT-KNOWLEDGE §3](PROJECT-KNOWLEDGE.md)). To mint one against
-the local realm:
+**Auth** is a Keycloak bearer token — no login, no identity endpoint (see
+[PROJECT-KNOWLEDGE §3](PROJECT-KNOWLEDGE.md)). Settings takes a Keycloak
+**username + password** and the app mints/refreshes the token itself
+(`services/keycloakAuth.ts`, 2026-09-02) — nothing to curl or re-paste by
+hand anymore. The equivalent manual mint, useful for debugging outside the
+app:
 
 ```bash
-curl -s -d 'client_id=nbcg-api' -d 'grant_type=password' \
+curl -s -d 'client_id=nbcg-web' -d 'grant_type=password' \
      -d 'username=<user>' -d 'password=<password>' \
      http://localhost:8082/realms/nbcg/protocol/openid-connect/token
 ```
 
-> The token needs **view** scopes, not just `records:manage`/`drafts:manage`.
-> `*:manage` implies view so a normal token is fine, but a write-only token
+> The account needs **view** scopes, not just `records:manage`/`drafts:manage`.
+> `*:manage` implies view so a normal account is fine, but a write-only one
 > makes every uploaded item read back as `404` — which breaks sync. See
 > [Epic 08](tasks/08-sync-and-backend-data.md).
 
