@@ -72,6 +72,7 @@ export const Commands = {
   indexScan: "index_scan",
   indexList: "index_list",
   indexRebuild: "index_rebuild",
+  indexRebuildImpact: "index_rebuild_impact",
   indexRecordUpload: "index_record_upload",
   indexRecordSync: "index_record_sync",
   indexSetHidden: "index_set_hidden",
@@ -167,6 +168,20 @@ export interface IndexedItemDto {
    * it for `PATCH expectedVersion`. One source of truth.
    */
   missStreak?: number | null;
+}
+
+/**
+ * One item an `index.rebuild()` would downgrade from "uploaded" to "not
+ * uploaded" if it ran right now — because a fresh scan can no longer
+ * corroborate the backend connection the index currently has on record,
+ * whether the folder's `metadata.json` mirror lost the backend id or the
+ * folder itself is gone. Returned by `index.rebuildImpact()` so the operator
+ * can be warned before committing to `rebuild()`, which has no undo.
+ */
+export interface RebuildDowngradeDto {
+  id: string;
+  folderName: string;
+  backendId: string;
 }
 
 /**
@@ -438,6 +453,11 @@ export const ipc = {
     /** Reconstruct the SQLite index from folders (`metadata.json` + derived-file
      * presence) when it is missing/corrupt, then return items. */
     rebuild: () => call<IndexedItemDto[]>(Commands.indexRebuild),
+    /** Read-only dry-run of `rebuild()`: which currently-uploaded items would
+     * lose that state if it ran right now. Call before `rebuild()` to warn the
+     * operator — see {@link RebuildDowngradeDto}. */
+    rebuildImpact: () =>
+      call<RebuildDowngradeDto[]>(Commands.indexRebuildImpact),
     /** Record a successful upload on an item's index row (Epic 07 write-through):
      * set `backendId` + published state, flip `uploaded` on, clear `reupload`,
      * mark the `upload` stage done. Returns the updated row. */

@@ -321,6 +321,20 @@ pub struct UploadRecordDto {
     pub visibility_status: VisibilityStatus,
 }
 
+/// One item a `rebuild` would downgrade from "uploaded" to "not uploaded" if
+/// it ran right now — because a fresh scan can no longer corroborate the
+/// backend connection the index currently has on record, whether its folder's
+/// `metadata.json` mirror lost the backend id or the folder itself is gone.
+/// Returned by `rebuild_impact` so the operator can be warned before
+/// committing to `rebuild`, which has no undo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RebuildDowngradeDto {
+    pub id: String,
+    pub folder_name: String,
+    pub backend_id: String,
+}
+
 /// Refreshed backend facts to fold onto an item's row after a **sync read**
 /// (Epic 08).
 ///

@@ -345,6 +345,7 @@ export function useOverview() {
     refresh: store.refresh,
     rebuild: store.rebuild,
     rebuildIndex,
+    checkRebuildImpact: store.checkRebuildImpact,
     init,
     dispose,
   };

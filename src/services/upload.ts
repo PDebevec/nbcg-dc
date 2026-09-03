@@ -408,7 +408,7 @@ export async function uploadItem(
       } catch (err) {
         // A create-collision (409) means a record with this (deterministic
         // COBISS) id already exists — reuse it instead of ever creating a second.
-        const recovered = await recoverCreateCollision(item, ctx, err, deps);
+        const recovered = await recoverCreateCollision(item, ctx, pruned, err, deps);
         if (recovered) return recovered;
         throw err;
       }
@@ -511,10 +511,19 @@ export async function uploadItem(
  * surface a `duplicate` outcome. We do NOT blind-PATCH it: we have no version for
  * a record we did not create; Epic 08 sync reconciles its metadata. Returns null
  * when the error is not a recoverable collision (the caller rethrows).
+ *
+ * Writes through both halves (mirror + index), same as the create/replace paths
+ * — `pruned` is a best-effort mirror value (not what the existing record
+ * actually holds, since we didn't create it), but Epic 08 sync overwrites it
+ * with the real metadata on its next pass, so it's self-correcting rather than
+ * a lasting inaccuracy. Leaving the mirror unwritten here (as before) left the
+ * exact "index says uploaded, mirror absent" state that makes an item a
+ * landmine for the next index rebuild.
  */
 async function recoverCreateCollision(
   item: Item,
   ctx: UploadItemContext,
+  pruned: RecordMetadataInput,
   err: unknown,
   deps: UploadDeps,
 ): Promise<ItemUploadResult | null> {
@@ -522,11 +531,12 @@ async function recoverCreateCollision(
   const existingId = await deps.resolveExistingBackendId(item).catch(() => null);
   if (!existingId) return null;
   try {
-    await deps.recordUpload(item.id, {
+    await writeThrough(item, deps, {
       backendId: existingId,
       version: null,
       targetState: ctx.targetState,
-      visibilityStatus: ctx.visibility,
+      visibility: ctx.visibility,
+      metadata: pruned as RecordMetadata,
     });
   } catch (recErr) {
     logger.warn("upload", `Linked ${item.id} to existing ${existingId} but failed to persist.`, recErr);

@@ -106,6 +106,7 @@ pub fn run() {
             commands::index::index_scan,
             commands::index::index_list,
             commands::index::index_rebuild,
+            commands::index::index_rebuild_impact,
             commands::index::index_record_upload,
             commands::index::index_record_sync,
             commands::index::index_set_hidden,

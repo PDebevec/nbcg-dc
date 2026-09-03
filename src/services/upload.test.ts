@@ -247,6 +247,17 @@ describe("uploadItem — create", () => {
       targetState: "RECORD",
       visibilityStatus: "PUBLIC",
     });
+    // Write-through must cover the mirror too, not just the index row — a
+    // recovered collision that skips the mirror leaves the same "index says
+    // uploaded, mirror absent" state that makes an item a landmine for the
+    // next index rebuild.
+    expect(deps.writeMirror).toHaveBeenCalledTimes(1);
+    expect((deps.writeMirror as any).mock.calls[0][1]).toMatchObject({
+      backendId: "rec_existing",
+      version: null,
+      targetState: "RECORD",
+      visibilityStatus: "PUBLIC",
+    });
   });
 
   it("reports duplicate (no double-create) when the existing id can't be resolved", async () => {
@@ -258,6 +269,9 @@ describe("uploadItem — create", () => {
     });
     const res = await uploadItem(makeItem(), CTX, deps);
     expect(res.status).toBe("duplicate");
+    // Nothing to link, so nothing to write.
+    expect(deps.writeMirror).not.toHaveBeenCalled();
+    expect(deps.recordUpload).not.toHaveBeenCalled();
   });
 });
 

@@ -25,11 +25,12 @@ import {
   filterMatchesState,
   isSelectableFilter,
 } from "@domain/overview";
-import type { FolderPeekDto } from "@ipc/bindings";
+import type { FolderPeekDto, RebuildDowngradeDto } from "@ipc/bindings";
 import {
   listIndex,
   scanIndex,
   rebuildIndex,
+  rebuildImpact,
   revealItem,
   setItemHidden,
   peekFolder,
@@ -186,6 +187,14 @@ export const useItemsStore = defineStore("items", () => {
     return runLoad(rebuildIndex);
   }
 
+  /** Dry-run `rebuild`: which currently-uploaded items would lose that state
+   * if it ran right now. Read-only — does not touch `items`/`loading`/`error`.
+   * Left for the caller (the Overview composable/view) to catch and decide
+   * how to handle a failure, since it gates whether rebuild is even offered. */
+  function checkRebuildImpact(): Promise<RebuildDowngradeDto[]> {
+    return rebuildImpact();
+  }
+
   /** Replace one item in the list (reassigns the array so computeds re-run).
    * Used by the processing run store to reflect live per-stage transitions
    * (`job://stage-changed`) between authoritative index refreshes; a no-op for
@@ -327,6 +336,7 @@ export const useItemsStore = defineStore("items", () => {
     load,
     refresh,
     rebuild,
+    checkRebuildImpact,
     reveal,
     toggleShowHidden,
     setHidden,

@@ -15,6 +15,7 @@
         { "url": "http://localhost:*" },
         { "url": "http://127.0.0.1:*" },
         { "url": "http://172.21.221.80:*" },
+        { "url": "http://10.10.12.1:*" },
         { "url": "https://api.nbcg.me/*" },
         { "url": "https://*.cobiss.net/*" }
       ]

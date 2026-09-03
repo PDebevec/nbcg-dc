@@ -18,8 +18,8 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use crate::core::fs::DiscoveredFolder;
 use crate::dto::{
-    IndexedAssetDto, IndexedItemDto, IndexedStageDto, ItemLevel, ItemType, ScanRoot, StageName,
-    StageStatus, SyncRecordDto, UploadRecordDto, VisibilityStatus,
+    IndexedAssetDto, IndexedItemDto, IndexedStageDto, ItemLevel, ItemType, RebuildDowngradeDto,
+    ScanRoot, StageName, StageStatus, SyncRecordDto, UploadRecordDto, VisibilityStatus,
 };
 use crate::error::{AppError, Result};
 
@@ -426,6 +426,48 @@ pub fn rebuild(conn: &Connection, discovered: &[DiscoveredFolder]) -> Result<()>
     }
 
     Ok(())
+}
+
+/// Dry-run [`rebuild`]: which currently-`uploaded` rows would lose that state
+/// if `rebuild` ran against `discovered` right now. Read-only — makes no
+/// writes. See [`RebuildDowngradeDto`] for why a row is flagged.
+pub fn rebuild_impact(
+    conn: &Connection,
+    discovered: &[DiscoveredFolder],
+) -> Result<Vec<RebuildDowngradeDto>> {
+    let by_id: HashMap<&str, Option<&str>> = discovered
+        .iter()
+        .map(|f| (f.id.as_str(), f.backend_id.as_deref()))
+        .collect();
+
+    let mut stmt =
+        conn.prepare("SELECT id, folder_name, backend_id FROM items WHERE uploaded = 1")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Option<String>>(2)?,
+        ))
+    })?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        let (id, folder_name, backend_id) = row?;
+        // Survives rebuild unscathed only when the fresh scan still finds
+        // this exact folder AND its mirror still carries a backend id —
+        // covering both ways `rebuild` can downgrade a row: a present but
+        // mirror-less folder (`Some(None)`) and a folder that has vanished
+        // from the scan entirely (`None`) both fail this check.
+        let would_survive = matches!(by_id.get(id.as_str()), Some(Some(_)));
+        if !would_survive {
+            out.push(RebuildDowngradeDto {
+                id,
+                folder_name,
+                backend_id: backend_id.unwrap_or_default(),
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// Write through a successful backend create/replace (Epic 07).

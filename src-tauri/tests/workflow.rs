@@ -264,6 +264,50 @@ fn the_index_can_be_rebuilt_from_the_folders_alone() {
 }
 
 #[test]
+fn rebuild_after_a_lost_mirror_downgrades_an_uploaded_item() {
+    let fx = Fixture::new();
+
+    // Built the way `services/upload.ts` actually builds an uploaded item —
+    // record_upload, then write_metadata — not a fixture with a mirror
+    // pre-seeded before the item ever existed in the index.
+    let dir = make_item_dir(&fx.unprocessed, "NJEGOS", &[("NJEGOS.pdf", "web")]);
+    let db = fx.open_db();
+    fx.rescan(&db);
+    let njegos = fs::item_id_for("NJEGOS");
+
+    db.transaction(|tx| {
+        items::record_upload(
+            tx,
+            &njegos,
+            &UploadRecordDto {
+                backend_id: "rec-001".into(),
+                version: Some(1),
+                target_state: ItemType::Record,
+                visibility_status: VisibilityStatus::Public,
+            },
+        )
+    })
+    .unwrap();
+    fs::write_metadata(&dir, &metadata_mirror(Some("rec-001"), "Gorski vijenac")).unwrap();
+    assert!(db.with(|c| items::get(c, &njegos)).unwrap().uploaded);
+
+    // The mirror goes missing — root cause not reproduced here, only the
+    // effect: whatever the reason, a rebuild run against a folder in this
+    // state is dangerous.
+    std::fs::remove_file(dir.join(fs::METADATA_FILENAME)).unwrap();
+
+    let found = fs::scan_roots(Some(&fx.unprocessed), Some(&fx.processed)).unwrap();
+    db.transaction(|tx| items::rebuild(tx, &found)).unwrap();
+
+    let after = db.with(|c| items::get(c, &njegos)).unwrap();
+    assert!(
+        !after.uploaded,
+        "losing the mirror silently downgraded a real upload"
+    );
+    assert!(after.backend_id.is_none());
+}
+
+#[test]
 fn the_index_survives_being_closed_and_reopened() {
     let fx = Fixture::new();
     make_item_dir(&fx.unprocessed, "NJEGOS", &[("1.jpg", "a")]);

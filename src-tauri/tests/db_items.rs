@@ -562,6 +562,152 @@ fn rebuild_leaves_an_unconnected_item_unuploaded() {
 }
 
 #[test]
+fn rebuild_silently_downgrades_an_uploaded_item_when_its_mirror_is_missing() {
+    // Documents a real incident: `rebuild`'s contract (its own doc comment,
+    // items.rs ~388-390) derives `uploaded` purely from the freshly-scanned
+    // folder's backend_id — never from the DB row it's about to delete. If a
+    // mirror is absent at rebuild time, a genuinely-uploaded item is silently
+    // wiped, even though the row said `uploaded = 1` a moment ago. This test
+    // documents that behaviour still exists; `rebuild_impact` (below) is the
+    // guard that stops it from happening to the operator unwarned.
+    let db = Db::open_in_memory().unwrap();
+    let f = folder("BOOK", ScanRoot::Unprocessed);
+    db.with(|c| items::reconcile(c, std::slice::from_ref(&f)))
+        .unwrap();
+    db.with(|c| {
+        items::record_upload(
+            c,
+            &f.id,
+            &UploadRecordDto {
+                backend_id: "rec-9".into(),
+                version: Some(1),
+                target_state: ItemType::Record,
+                visibility_status: VisibilityStatus::Public,
+            },
+        )
+    })
+    .unwrap();
+    assert!(db.with(|c| items::get(c, &f.id)).unwrap().uploaded);
+
+    // Rebuild runs against a fresh scan of the same folder whose mirror is (for
+    // whatever reason) absent again — `folder()` carries no backend_id.
+    db.with(|c| items::rebuild(c, std::slice::from_ref(&f)))
+        .unwrap();
+
+    let after = db.with(|c| items::get(c, &f.id)).unwrap();
+    assert!(
+        !after.uploaded,
+        "this is the incident this change guards against — rebuild wiped a real upload"
+    );
+    assert!(after.backend_id.is_none());
+}
+
+// ─── rebuild_impact ─────────────────────────────────────────────────────────
+
+#[test]
+fn rebuild_impact_flags_an_item_whose_mirror_went_missing() {
+    let f = folder("BOOK", ScanRoot::Unprocessed);
+    let db = db_with(std::slice::from_ref(&f));
+    db.with(|c| {
+        items::record_upload(
+            c,
+            &f.id,
+            &UploadRecordDto {
+                backend_id: "rec-9".into(),
+                version: Some(1),
+                target_state: ItemType::Record,
+                visibility_status: VisibilityStatus::Public,
+            },
+        )
+    })
+    .unwrap();
+
+    // Rescanned as `folder()` would come back if the mirror is now gone — no
+    // backend_id.
+    let rescanned = folder("BOOK", ScanRoot::Unprocessed);
+    let impact = db
+        .with(|c| items::rebuild_impact(c, std::slice::from_ref(&rescanned)))
+        .unwrap();
+
+    assert_eq!(impact.len(), 1);
+    assert_eq!(impact[0].id, f.id);
+    assert_eq!(impact[0].folder_name, "BOOK");
+    assert_eq!(impact[0].backend_id, "rec-9");
+
+    // Must be a pure read — the row itself is untouched.
+    assert!(db.with(|c| items::get(c, &f.id)).unwrap().uploaded);
+}
+
+#[test]
+fn rebuild_impact_does_not_flag_a_folder_that_was_never_uploaded() {
+    let f = folder("BOOK", ScanRoot::Unprocessed);
+    let db = db_with(std::slice::from_ref(&f));
+    // never record_upload'd
+
+    let impact = db
+        .with(|c| items::rebuild_impact(c, std::slice::from_ref(&f)))
+        .unwrap();
+    assert!(
+        impact.is_empty(),
+        "a folder that was never uploaded must never be flagged"
+    );
+}
+
+#[test]
+fn rebuild_impact_does_not_flag_an_item_whose_mirror_still_agrees() {
+    let f = folder("BOOK", ScanRoot::Unprocessed);
+    let db = db_with(std::slice::from_ref(&f));
+    db.with(|c| {
+        items::record_upload(
+            c,
+            &f.id,
+            &UploadRecordDto {
+                backend_id: "rec-9".into(),
+                version: Some(1),
+                target_state: ItemType::Record,
+                visibility_status: VisibilityStatus::Public,
+            },
+        )
+    })
+    .unwrap();
+
+    let mut still_connected = f.clone();
+    still_connected.backend_id = Some("rec-9".into());
+    let impact = db
+        .with(|c| items::rebuild_impact(c, std::slice::from_ref(&still_connected)))
+        .unwrap();
+    assert!(impact.is_empty());
+}
+
+#[test]
+fn rebuild_impact_flags_an_uploaded_item_whose_folder_is_gone() {
+    let f = folder("BOOK", ScanRoot::Unprocessed);
+    let db = db_with(std::slice::from_ref(&f));
+    db.with(|c| {
+        items::record_upload(
+            c,
+            &f.id,
+            &UploadRecordDto {
+                backend_id: "rec-9".into(),
+                version: Some(1),
+                target_state: ItemType::Record,
+                visibility_status: VisibilityStatus::Public,
+            },
+        )
+    })
+    .unwrap();
+
+    // The folder is entirely absent from this scan (moved/deleted outside
+    // the app) — `rebuild` would drop the row altogether, which is an even
+    // more total loss than a missing mirror, so this must be flagged too.
+    let impact = db.with(|c| items::rebuild_impact(c, &[])).unwrap();
+
+    assert_eq!(impact.len(), 1);
+    assert_eq!(impact[0].id, f.id);
+    assert_eq!(impact[0].backend_id, "rec-9");
+}
+
+#[test]
 fn rebuild_reproduces_the_same_ids_so_batches_still_resolve() {
     let db = Db::open_in_memory().unwrap();
     let f = folder("BOOK", ScanRoot::Unprocessed);

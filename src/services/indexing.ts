@@ -23,6 +23,7 @@ import {
   type FolderPeekDto,
   type IndexedItemDto,
   type IndexedStageDto,
+  type RebuildDowngradeDto,
   type SyncRecordDto,
 } from "@ipc/bindings";
 import { onFsChanged } from "@ipc/events";
@@ -121,6 +122,14 @@ export async function rebuildIndex(): Promise<Item[]> {
   if (!isTauri()) return [];
   const dtos = await ipc.index.rebuild();
   return dtos.map(toItem);
+}
+
+/** Read-only dry-run of {@link rebuildIndex}: which currently-uploaded items
+ * would lose that state if a rebuild ran right now. Call before offering the
+ * rebuild confirm so the operator can be warned. Empty outside Tauri. */
+export function rebuildImpact(): Promise<RebuildDowngradeDto[]> {
+  if (!isTauri()) return Promise.resolve([]);
+  return ipc.index.rebuildImpact();
 }
 
 /** Read an item's `metadata.json` mirror (null if absent, or outside Tauri). */

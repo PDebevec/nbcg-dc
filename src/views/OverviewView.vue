@@ -29,6 +29,7 @@ const {
   openAsBatch,
   createBatch,
   rebuildIndex,
+  checkRebuildImpact,
   toggleShowHidden,
   hideRow,
   unhideRow,
@@ -40,10 +41,36 @@ const rebuilding = ref(false);
 
 async function onRebuild(): Promise<void> {
   if (rebuilding.value) return;
-  const ok = window.confirm(
-    "Rebuild the local index from the folders?\n\nThis re-reads every item folder and picks up derived files already present (web PDF, thumbnail, OCR text) as completed stages. Batches are kept.",
-  );
-  if (!ok) return;
+
+  // Check what a rebuild would cost *before* asking to confirm — rebuild
+  // derives `uploaded` purely from what each folder's mirror carries right
+  // now, never from the row it's about to overwrite, so an item the index
+  // currently shows as uploaded can be silently downgraded if its mirror is
+  // missing or its folder is gone. Fail closed: if we can't tell, don't offer
+  // a rebuild that might be more destructive than the operator expects.
+  let impact: Awaited<ReturnType<typeof checkRebuildImpact>>;
+  try {
+    impact = await checkRebuildImpact();
+  } catch {
+    window.alert(
+      "Couldn't check what a rebuild would affect, so it was cancelled. Try again.",
+    );
+    return;
+  }
+
+  let message =
+    "Rebuild the local index from the folders?\n\nThis re-reads every item folder and picks up derived files already present (web PDF, thumbnail, OCR text) as completed stages. Batches are kept.";
+  if (impact.length > 0) {
+    const names = impact
+      .map((i) => `  • ${i.folderName} (backend id ${i.backendId})`)
+      .join("\n");
+    message +=
+      `\n\n⚠ WARNING: ${impact.length} item${impact.length === 1 ? "" : "s"} currently marked Uploaded will lose ` +
+      `their backend connection, because their metadata.json mirror is missing or their folder is gone:\n\n${names}` +
+      `\n\nThis is NOT reversible by Rebuild. Continue anyway?`;
+  }
+  if (!window.confirm(message)) return;
+
   rebuilding.value = true;
   try {
     await rebuildIndex();

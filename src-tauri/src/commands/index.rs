@@ -3,7 +3,7 @@
 use tauri::State;
 
 use crate::core::{db, fs as corefs};
-use crate::dto::{IndexedItemDto, SyncRecordDto, UploadRecordDto};
+use crate::dto::{IndexedItemDto, RebuildDowngradeDto, SyncRecordDto, UploadRecordDto};
 use crate::error::Result;
 
 use super::AppState;
@@ -40,6 +40,16 @@ pub fn index_rebuild(state: State<'_, AppState>) -> Result<Vec<IndexedItemDto>> 
         .transaction(|tx| db::items::rebuild(tx, &discovered))?;
 
     state.db.with(db::items::list)
+}
+
+/// Dry-run `index_rebuild`: which currently-uploaded items would lose that
+/// state, without changing anything. Meant to be called before `index_rebuild`
+/// so the operator can be warned — see [`db::items::rebuild_impact`].
+#[tauri::command]
+pub fn index_rebuild_impact(state: State<'_, AppState>) -> Result<Vec<RebuildDowngradeDto>> {
+    let (unprocessed, processed) = state.roots()?;
+    let discovered = corefs::scan_roots(unprocessed.as_deref(), processed.as_deref())?;
+    state.db.with(|c| db::items::rebuild_impact(c, &discovered))
 }
 
 /// Record a successful upload on an item's row.
