@@ -7,6 +7,7 @@ different web preview depending on which branch produced it. A second copy of
 these constants is exactly how that drifts.
 """
 
+from collections.abc import Iterable
 from pathlib import Path
 
 from PIL import Image
@@ -65,31 +66,44 @@ def build_pdf(
     """
     if log:
         log.info("  Building PDF (%d page(s)) -> %s", len(image_paths), out_path.name)
-    images = []
-    resolution = dpi
-    for i, path in enumerate(image_paths):
-        img = load_rgb(path)
-        if not downscale and i == 0:
-            resolution = get_tif_dpi(img)
-        if downscale:
-            img = resize_for_web(img)
-        images.append(img)
+    if not image_paths:
+        raise ValueError(f"cannot build {out_path.name}: no page images given")
 
-    first, rest = images[0], images[1:]
+    # Pages are produced one at a time and handed to Pillow as a generator.
+    # Building the list first is the obvious way to write this and costs
+    # roughly 4 MB per web-sized page - about 1.7 GB for a 391-page book, all
+    # of it resident before a single byte is written. Measured on 60 pages:
+    # +415 MB as a list against +7.4 MB streamed, for a byte-identical PDF.
+    #
+    # Nothing is closed explicitly any more. Pillow writes each page as it
+    # pulls it, so the previous one is unreferenced the moment the generator
+    # advances and is freed there - which is exactly what keeps the footprint
+    # flat. Closing them here would need the whole list back.
+    first = load_rgb(image_paths[0])
+    # The archival PDF takes its resolution from the first page's own DPI, so
+    # that has to be read before the save begins.
+    resolution = dpi if downscale else get_tif_dpi(first)
+    if downscale:
+        first = resize_for_web(first)
+
+    def rest():
+        for path in image_paths[1:]:
+            img = load_rgb(path)
+            yield resize_for_web(img) if downscale else img
+
     first.save(
         out_path,
         save_all=True,
-        append_images=rest,
+        append_images=rest(),
         resolution=resolution[0],
         quality=quality,
         optimize=downscale,
     )
-    for img in images:
-        img.close()
+    first.close()
 
 
 def build_pdf_from_images(
-    images: list[Image.Image],
+    images: Iterable[Image.Image],
     out_path: Path,
     *,
     quality: int = WEB_JPEG_QUALITY,
@@ -103,12 +117,21 @@ def build_pdf_from_images(
     Callers own the images and close them; nothing here mutates them beyond the
     downscale, which returns a new image when it applies.
     """
-    pages = [resize_for_web(img) for img in images]
-    first, rest = pages[0], pages[1:]
+    # Streamed, for the same reason as `build_pdf` above: a caller handing in
+    # a generator of rendered pages must not have it flattened back into a
+    # list here, which is what a comprehension would do.
+    stream = (resize_for_web(img) for img in images)
+    try:
+        first = next(stream)
+    except StopIteration:
+        raise ValueError(
+            f"cannot build {out_path.name}: no page images given"
+        ) from None
+
     first.save(
         out_path,
         save_all=True,
-        append_images=rest,
+        append_images=stream,
         resolution=dpi[0],
         quality=quality,
         optimize=True,

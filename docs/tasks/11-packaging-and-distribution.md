@@ -10,10 +10,18 @@ so there is nothing to set up by hand.
 - [ ] ⛔ Confirm **target OS** = Windows only (open question #1); scope
       macOS/Linux only if needed.
 - [ ] **Bundle Python** per the chosen strategy (Epic 06): sidecar runtime +
-      deps (PaddleOCR, Pillow, pdf2image/poppler, OpenCV) OR document a system
-      install — sidecar strongly preferred for non-technical staff. Design
-      write-up (recommended distribution, version constraint discovered
-      2026-09-01, Tauri-free-core wiring): [python-runtime-bundling.md](python-runtime-bundling.md).
+      deps (PaddleOCR, Pillow, OpenCV — no longer poppler, see below) —
+      sidecar strongly preferred for non-technical staff. Design write-up
+      (recommended distribution, version constraint discovered 2026-09-01,
+      Tauri-free-core wiring): [python-runtime-bundling.md](python-runtime-bundling.md).
+      **Implemented 2026-09-04**: `scripts/vendor-python.ps1`,
+      `core::python::PythonRuntime`, and the `tauri.conf.json` resource
+      wiring exist and are exercised by `cargo tauri dev` end to end (see
+      the design doc's own update note for what changed, including that
+      Poppler bundling turned out to be unnecessary — `ocr.py` moved to
+      `pypdfium2`). Checkbox left open: the real proof — a signed installer
+      on a genuinely clean machine, no VC++ Redistributable risk included
+      (flagged, not yet addressed) — hasn't happened.
 - [ ] Handle **OCR model assets** (PaddleOCR downloads models on first run):
       pre-bundle or manage a first-run download with progress.
 - [ ] Configure **Tauri bundling** ([tauri.conf.json](../../src-tauri/tauri.conf.json)):

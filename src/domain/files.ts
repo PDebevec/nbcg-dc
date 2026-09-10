@@ -35,6 +35,18 @@ export type AssetKind =
   | "archival-pdf"
   /** `<name>.pdf` (or any non-archive PDF) — the web PDF. Uploaded (`role=WEB`). */
   | "web-pdf"
+  /**
+   * A PDF the *operator* supplied, filed under `source/` by the supplied-pdf
+   * stage so the folder never holds two. Kept local, never uploaded — it is
+   * the pristine original the web PDF is derived *from*.
+   *
+   * It exists as its own kind so a processed supplied-pdf item stays
+   * recognisable. Scanning is otherwise non-recursive, so once the original is
+   * filed it disappears from view, and a folder holding page images alongside
+   * it would then re-classify as `page-images` and rebuild the PDF from the
+   * images instead of from the original.
+   */
+  | "source-pdf"
   /** A page/standalone raster image — a thumbnail candidate; uploaded. */
   | "image"
   /** `<name>_thumb.png`, or an image literally named `thumbnail` — auto-primary. */
@@ -62,10 +74,18 @@ const TIFF_EXTS = new Set(["tif", "tiff"]);
  * Classify a discovered file by its name. `folderName` is accepted for future
  * folder-relative rules; classification currently depends only on the filename.
  */
-export function classifyAsset(filename: string, _folderName?: string): AssetKind {
+export function classifyAsset(
+  filename: string,
+  _folderName?: string,
+  path?: string,
+): AssetKind {
   const ext = extensionOf(filename);
   const base = baseNameOf(filename).toLowerCase();
 
+  // A PDF under the item's own `source/` is the operator's filed original,
+  // whatever it is called. Decided from the path, not the name, because the
+  // name is theirs to choose — `Писма из Лиона_(310).pdf` is a real example.
+  if (ext === "pdf" && isFiledOriginal(path, _folderName)) return "source-pdf";
   if (TIFF_EXTS.has(ext)) return "source-tiff";
   if (ext === "txt") return "ocr-text";
   if (ext === "json") return "metadata-json";
@@ -84,7 +104,36 @@ export function discoverAsset(
   folderName?: string,
   sizeBytes?: number | null,
 ): DiscoveredAsset {
-  return { filename, path, kind: classifyAsset(filename, folderName), sizeBytes };
+  return {
+    filename,
+    path,
+    kind: classifyAsset(filename, folderName, path),
+    sizeBytes,
+  };
+}
+
+/** Mirrors `core::fs::SOURCE_SUBFOLDER`. Matched on either separator so it
+ * works for the Windows paths the scanner actually reports. */
+const SOURCE_SUBFOLDER = "source";
+
+/**
+ * Is this file the item's filed original, i.e. at `<itemFolder>/source/<file>`?
+ *
+ * Checks the grandparent too, not just the parent. An item folder that is
+ * itself *named* `source` would otherwise have its own ordinary PDFs read as
+ * filed originals — the parent alone cannot tell the two apart. Without a
+ * `folderName` to anchor against there is no way to be sure, so the answer is
+ * no: mis-reading a real web PDF as a filed original would drop it from the
+ * upload set entirely, which is far worse than missing the optimisation.
+ */
+function isFiledOriginal(path?: string, folderName?: string): boolean {
+  if (path == null || folderName == null) return false;
+  const parts = path.split(/[\/]/).filter(Boolean);
+  return (
+    parts.length >= 3 &&
+    parts[parts.length - 2] === SOURCE_SUBFOLDER &&
+    parts[parts.length - 3] === folderName
+  );
 }
 
 /** The web PDFs in a folder (a folder may hold several — all upload as `WEB`). */

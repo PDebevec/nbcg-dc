@@ -7,6 +7,22 @@
 > isn't enough to build from. Written 2026-09-01, prompted by a real local
 > `ModuleNotFoundError: No module named 'numpy'` — see "What this session
 > found" below, all of it verified against the machine and PyPI, not assumed.
+>
+> **Implemented 2026-09-04** — `core::python::PythonRuntime`,
+> `scripts/vendor-python.ps1`, and the `tauri.conf.json` resource wiring
+> described below now exist, in that shape. Two corrections found while
+> building it, not present in the original design: **Poppler bundling
+> turned out to be unnecessary** — a same-session fix moved `ocr.py`'s PDF
+> rasterization to `pypdfium2` (self-contained, no system dependency), so
+> item 4 below and the Poppler parts of "Vendoring step"/"Tauri
+> wiring"/"Manual Poppler setup" are obsolete, left in place struck-through
+> rather than deleted for the history. And **python-build-standalone's
+> Windows builds need the Microsoft Visual C++ Redistributable**
+> (`vcruntime140.dll`), which the distribution doesn't include — not
+> mentioned anywhere below; `core::python::spawn_and_wait_with_env` now
+> detects the resulting Windows error 126 and surfaces a clear message, but
+> actually bundling the redistributable into the eventual installer is
+> still real, unstarted work for whoever does Epic 11's installer packaging.
 
 ## Problem statement
 
@@ -74,12 +90,14 @@ install:
      works with the full stack on Windows today — the vendoring strategy
      below isn't picking an untested version number, it's picking the one
      already proven to resolve on this exact machine.
-4. **Poppler remains untouched, deliberately.** `pdf2image` needs Poppler's
+4. ~~**Poppler remains untouched, deliberately.** `pdf2image` needs Poppler's
    binaries on `PATH` for real PDF→image conversion; that's a system binary,
    not pip-installable (`py/requirements.txt:24-28`, `py/README.md:36-38`).
    Left as a manual step here rather than editing this machine's `PATH` —
    see "Manual Poppler setup," a few sections down, for the exact steps
-   whenever someone wants a live OCR run locally.
+   whenever someone wants a live OCR run locally.~~ **Obsolete as of
+   2026-09-04** — `ocr.py` no longer uses `pdf2image`/Poppler at all (moved
+   to `pypdfium2`). See the update note at the top of this doc.
 
 None of this blocks writing the bundling design below — if anything it
 sharpens it: the design needs an explicit Python-version pin (≤3.13, subject
@@ -132,11 +150,19 @@ A build script — e.g. `scripts/vendor-python.ps1` — that:
 
 1. Downloads the pinned `python-build-standalone` 3.13 Windows release into
    `src-tauri/binaries/python/`.
-2. Runs `<vendored>\python.exe -m pip install -r py\requirements.txt
-   --target <vendored>\Lib\site-packages`.
-3. Downloads a portable Poppler-for-Windows release (the same one
+2. Runs `<vendored>\python.exe -m pip install -r py\requirements.txt` —
+   installing *through* the vendored interpreter puts packages in its own
+   site-packages directly, no `--target` needed.
+3. ~~Downloads a portable Poppler-for-Windows release (the same one
    `py/requirements.txt:26-27` already points a human at) into
-   `src-tauri/binaries/poppler/`.
+   `src-tauri/binaries/poppler/`.~~ **Obsolete** — see the top-of-doc update
+   note; `ocr.py` no longer needs Poppler.
+
+Implementation note: use an explicit path to Windows' own `System32\tar.exe`
+to extract the archive, not a bare `tar` call — on a machine with Git for
+Windows installed, its bundled Unix `tar` can resolve first on `PATH` and
+misparses a leading `C:` as a remote-host spec rather than a drive letter.
+Hit this for real while building `scripts/vendor-python.ps1`.
 
 Hooked into `beforeBuildCommand` (or a dedicated release step once CI
 exists — see below), and **never committed to git**: `paddlepaddle` alone is
@@ -149,18 +175,27 @@ belong in git).
 ### Tauri wiring
 
 `tauri.conf.json`'s `bundle.resources` ships `src-tauri/binaries/python/` +
-`src-tauri/binaries/poppler/` + `py/` inside the installer (today's
-`bundle` block has none of `resources`/`externalBin` set — this is new).
-`commands/jobs.rs` resolves `app.path().resource_dir()` at startup and
-builds the runtime override described above: interpreter =
-`<resource_dir>/binaries/python/python.exe`, extra `PATH` entry =
-`<resource_dir>/binaries/poppler/bin`. The Poppler `PATH` entry is added to
-the **spawned child process's** environment only (`Command::envs`, already
-how `spawn_and_wait` builds its `Command`) — never the user's persistent
-system `PATH`. That's a deliberate improvement over what dev setup asks a
-person to do by hand today, and it's the reason this session didn't edit
-this machine's `PATH` for Poppler either — the shipped app should need
-neither a bundled-Python PATH entry nor a Poppler one.
+`py/` inside the installer (today's `bundle` block has none of
+`resources`/`externalBin` set — this is new). `lib.rs`'s `.setup()` resolves
+`app.path().resource_dir()` at startup and builds the runtime override
+described above via `PythonRuntime::detect`: interpreter =
+`<resource_dir>/binaries/python/python.exe`, `script_dir` =
+`<resource_dir>/py`. ~~extra `PATH` entry = `<resource_dir>/binaries/poppler/bin`.
+The Poppler `PATH` entry is added to the **spawned child process's**
+environment only~~ — obsolete (no Poppler), but `PythonRuntime.extra_path`
+keeps the mechanism (child-process-only `PATH` prepend, never the user's
+persistent one) in case a future dependency needs it.
+
+**Gotcha found implementing this, not in the original design**: a
+`bundle.resources` entry pointing at a directory that doesn't exist yet
+fails an ordinary `cargo build`/`tauri dev`, not just real bundling —
+`tauri-build`'s config validation runs on every build. Since
+`src-tauri/binaries/` only gets real content from `scripts/vendor-python.ps1`
+(which nobody runs for plain Rust/frontend development), the directory
+needs to exist and be committed even though its *contents* aren't — a
+`src-tauri/binaries/.gitkeep` placeholder, with `.gitignore` set to
+`src-tauri/binaries/*` + `!src-tauri/binaries/.gitkeep`, not a bare
+`src-tauri/binaries/` ignore line.
 
 ### OCR model assets
 
@@ -180,11 +215,15 @@ meantime) has to run the vendoring step first. Since nothing automated
 exists yet, this is worth deciding alongside — not necessarily before —
 the rest of this epic.
 
-### Manual Poppler setup (for a live OCR run before any of this exists)
+### ~~Manual Poppler setup (for a live OCR run before any of this exists)~~
 
-Unrelated to the bundling design above, but the concrete steps for anyone
+**Obsolete as of 2026-09-04** — `ocr.py` no longer uses Poppler for
+anything; PDF rasterization moved to `pypdfium2`. Left below, struck, for
+the history — the steps themselves no longer apply to anything in this repo.
+
+~~Unrelated to the bundling design above, but the concrete steps for anyone
 who wants `ocr.py` to actually run against a PDF today, per
-`py/requirements.txt:24-28`:
+`py/requirements.txt:24-28`:~~
 
 1. Download a Windows Poppler build — the community releases at
    <https://github.com/oschwartz10612/poppler-windows> (the same link
@@ -206,13 +245,24 @@ Epic 11's own existing acceptance bullet
 *"A signed (if possible) Windows installer produces a working app on a
 clean machine with no manual Python setup... the full loop — batch →
 PDF/thumbnail/OCR → metadata → upload — works in the packaged build."* A
-clean VM with no Python, no Poppler, and no PaddlePaddle-compatible
-interpreter preinstalled is the actual proof, not a dev machine that
-happens to already have most of the stack (like this one did).
+clean VM with no Python and no PaddlePaddle-compatible interpreter
+preinstalled is the actual proof (Poppler no longer applies — see the
+top-of-doc update note), not a dev machine that happens to already have
+most of the stack (like this one did). Still genuinely unverified: a real
+`tauri build`'s bundling actually placing `binaries/python/` + `py/` where
+`resource_dir()` resolves in a truly *installed* app (only exercised here
+via `cargo tauri dev`, where the vendored resources aren't physically
+copied), and the VC++-Redistributable-missing failure path on a machine
+that actually lacks it.
 
 ## Out of scope for this doc
 
-Everything above is design. None of it is implemented — no
-`scripts/vendor-python.ps1`, no `tauri.conf.json` resources/`externalBin`
-entries, no `core::python` interpreter-override parameter, no
-`src-tauri/binaries/` `.gitignore` entry. That's Epic 11 execution.
+**Update, 2026-09-04: this section is now historical.** `scripts/vendor-python.ps1`,
+the `tauri.conf.json` `resources` entries, the `core::python`
+interpreter-override parameter, and the `src-tauri/binaries/` `.gitignore`
+entry all exist now, in the shape described above (see the top-of-doc
+update note for what changed from the original design). Still genuinely
+out of scope, unstarted: installer code-signing, MSI/NSIS packaging
+details, auto-update, a first-run setup UI, the OCR-model-asset
+pre-bundle-vs-download decision, and CI/reproducible builds (no CI exists
+in this repo at all) — all separate Epic 11 checklist items.

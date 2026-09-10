@@ -17,6 +17,7 @@ use std::sync::Mutex;
 use crate::core::db::Db;
 use crate::core::fs::watcher::FsWatcher;
 use crate::core::jobs::JobRunLock;
+use crate::core::python;
 use crate::error::Result;
 
 /// Everything the commands need, held as Tauri managed state.
@@ -29,6 +30,13 @@ pub struct AppState {
     /// The native single-run lock (Epic 06) — one batch processing at a time,
     /// per workstation. See `core::jobs::try_acquire`.
     pub job_run: Mutex<JobRunLock>,
+    /// The vendored Python interpreter + script tree (Epic 11 packaging),
+    /// resolved once at startup from `app.path().resource_dir()`. `None` in
+    /// an ordinary dev run (resources are only physically present after a
+    /// real `tauri build`) or when vendoring was skipped — every job run
+    /// then falls back to `core::jobs::run_batch`'s default: bare
+    /// `python`/`py` on `PATH`, unchanged from before this field existed.
+    pub python_runtime: Option<python::PythonRuntime>,
 }
 
 impl AppState {

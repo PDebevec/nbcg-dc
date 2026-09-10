@@ -28,6 +28,38 @@ use crate::error::{AppError, Result};
 /// The mirror file inside each item folder.
 pub const METADATA_FILENAME: &str = "metadata.json";
 
+/// Where the supplied-pdf stage files the operator's own PDF, so a folder
+/// never ends up holding two (`core::jobs::resolve_supplied_source`). Lives
+/// here because it is on-disk *layout*, which this module owns and the
+/// scanner has to know about - scanning is otherwise non-recursive, and a
+/// filed original would simply vanish from view the moment it was filed.
+pub const SOURCE_SUBFOLDER: &str = "source";
+
+/// The PDFs sitting in a folder's `source/` subfolder, if any.
+///
+/// Reported as ordinary observed files, like everything else here - this
+/// module deliberately makes no claim about what they *mean* (see the module
+/// docs); `domain/files` decides that from the path. Errors are swallowed to
+/// an empty list on purpose: a missing or unreadable `source/` is the normal
+/// case for most items, not a scan failure.
+fn filed_source_pdfs(folder: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(folder.join(SOURCE_SUBFOLDER)) else {
+        return Vec::new();
+    };
+    let mut found: Vec<PathBuf> = entries
+        .flatten()
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension()
+                .and_then(|x| x.to_str())
+                .is_some_and(|x| x.eq_ignore_ascii_case("pdf"))
+        })
+        .collect();
+    found.sort();
+    found
+}
+
 /// Which derived outputs exist in a folder. Used only to reconstruct stage
 /// status during a rebuild.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -257,6 +289,25 @@ pub fn describe_folder(folder: &Path, root: ScanRoot) -> Result<DiscoveredFolder
             path: entry.path().to_string_lossy().into_owned(),
             size_bytes: entry.metadata().ok().map(|m| m.len() as i64),
             filename,
+        });
+    }
+
+    // The operator's own PDF, filed under `source/` by the supplied-pdf stage
+    // so the folder never holds two. Discovery is otherwise non-recursive, so
+    // without this the original goes invisible the moment it is filed - and a
+    // supplied-pdf item whose folder also holds page images would then look
+    // like a page-images item on its next run and rebuild from the images
+    // instead of from the pristine original. Reported under its own kind, so
+    // every existing kind-filter (upload sets, thumbnail candidates) ignores
+    // it exactly as it ignores anything it does not recognise.
+    for path in filed_source_pdfs(folder) {
+        assets.push(IndexedAssetDto {
+            filename: path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            size_bytes: path.metadata().ok().map(|m| m.len() as i64),
+            path: path.to_string_lossy().into_owned(),
         });
     }
 

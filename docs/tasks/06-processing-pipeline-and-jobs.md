@@ -13,13 +13,46 @@
 > (`std::thread::scope`) runs up to `maxConcurrentItems` items at once, each
 > through its own `pdf` → `thumbnail` → `ocr` stages in order, with OCR
 > additionally gated batch-wide by `maxConcurrentOcr` (a hand-rolled
-> `Semaphore`) since PaddleOCR is the heavy stage. Both caps default to a
-> conservative guess (3 / 1) and are tunable **only** by hand-editing
-> `config.json` (`PersistedConfig.maxConcurrentItems`/`maxConcurrentOcr`) —
-> open question #3's real volume data still doesn't exist, so this ships a
-> first-slice default rather than a measured one; see
+> `Semaphore`) since PaddleOCR is the heavy stage. Both caps are tunable
+> **only** by hand-editing `config.json`
+> (`PersistedConfig.maxConcurrentItems`/`maxConcurrentOcr`); see
 > `src-tauri/src/core/jobs/mod.rs`'s `JobLimits`. What's actually still open
 > here is the thumbnail grid picker.
+>
+> **Concurrency is measured now, not guessed — 2026-09-10.** The OCR cap was
+> a hardcoded `1`, which left most of a workstation idle during the one stage
+> that takes hours. It now derives from `available_parallelism()` as
+> `(cores / 4).clamp(1, 4)`. Measured on 22 logical cores, effective seconds
+> per page across the whole cohort: **1 process → 19.00s, 4 → 7.17s, 8 →
+> 7.00s.** It scales to about four and then flattens, so the clamp is where
+> the curve stops paying — 8 processes bought under 3% for double the memory
+> (~0.5 GB each). Per-process tuning is exhausted in the other direction:
+> `py/ocr.py` records a thread sweep where *more* threads per process measured
+> strictly slower (20.0s at 1 thread, 27.6s at 16), so a big machine is used
+> by running more items at once, not fatter ones. `maxConcurrentItems` is now
+> also floored at the OCR cap — an OCR permit with no item slot to run in does
+> nothing. Open question #3's *volume* data is still missing (how many pages a
+> typical record has), which is what decides whether an overnight batch of a
+> hundred records is reachable at all.
+>
+> **Superseded the same day: OCR parallelises *inside* an item now, and
+> `maxConcurrentOcr` is back to 1.** A batch of one book got one process using
+> two cores of twenty-two, because the item-level cap only ever parallelised
+> *across* items. `py/ocr.py` now spreads one item's pages across worker
+> processes sized from the machine (`nbcg_pipeline/workers.py` — 11 on a
+> 22-core box, bounded by cores/2, RAM at ~0.5 GB per worker, and an 8-page
+> floor so short items are not sliced). Measured on 24 real pages:
+> **22m27s single-process against 5m18s parallel, 4.2x** — with only 3 workers
+> and a competing job, so it understates. The two caps must not multiply
+> (4 items x 11 workers = 44 processes on 22 cores), so one item at a time now
+> uses the whole machine. Other stages are unaffected: `maxConcurrentItems`
+> still runs several items' PDF/thumbnail work at once.
+>
+> **Known flaky test**, pre-existing and unrelated:
+> `core::jobs::tests::semaphore_never_exceeds_its_permit_count` asserts
+> `high_water == 2`, i.e. that two threads *actually overlapped*. That is a
+> scheduling assumption and fails on a loaded machine. The invariant in its
+> name (never *exceeds*) always holds; only the "did reach" half is fragile.
 
 Goal: run the five-stage pipeline per batch (with live progress and robust error
 handling) and drive the **Processing** half of the Processing & Upload tab.
@@ -298,11 +331,67 @@ in the folder:
       `item.stages` as given, with no independent notion of "done" to
       re-derive from, so there was nothing to build here beyond trusting the
       request (per the same single-source-of-truth principle as page order).
-- [x] Concurrency/memory limits — a first-slice default, not measured on real
-      volumes (open question #3 is still open on the *number*, just no longer
-      blocking).
-      — **`.rs` ✅, 2026-09-01:** `core::jobs::JobLimits` (3 concurrent items /
-      1 concurrent OCR, hand-edit `config.json` to change — no GUI control).
+- [x] Concurrency/memory limits.
+      — **`.rs` ✅, 2026-09-01:** `core::jobs::JobLimits` (hand-edit
+      `config.json` to change — no GUI control).
+      — **Measured and made machine-adaptive, 2026-09-10:** the OCR cap is
+      derived from the core count rather than fixed at 1 (see the banner above
+      for the numbers). This is the throughput lever — per-process threading
+      goes the wrong way, so concurrency is the only thing that uses a large
+      workstation.
+
+## Open — Processing tab, per-step view (next task, 2026-09-10)
+
+Not started. Specified here so it survives a fresh session.
+
+**What the operator asked for:** keep the progress bar, make it more precise,
+and let it **expand into one row per step** with room for errors and anything
+else a librarian needs. Not the Overview's table — the per-item card layout
+holds error text, pre-upload gates and upload results inline, and a table has
+nowhere to put them.
+
+**The defect that makes this urgent.** A supplied-pdf item with loose page
+images (`Pisma iz Liona`) showed:
+
+```
+thumbnail → running
+pdf       → done
+thumbnail → pending      <- never done
+```
+
+…and then, at upload, only *"Not fully processed yet (thumbnail)."*
+
+Nothing failed. `settle_web_stages` deliberately holds the thumbnail stage at
+`Pending` when `item.thumbnail_needs_choice` — the operator has to pick a
+primary thumbnail, and 53 loose JPGs are 53 equal candidates. The message that
+would say so, `"Choose a primary thumbnail before uploading"`, exists as an
+upload **gate** — but `useProcessing.gatesFor` opens with:
+
+```ts
+if (status !== "done" || uploaded.value) return [];
+```
+
+Gates only render once the item is **done**, and the item cannot be done
+*because* the thumbnail is pending. So the one sentence explaining what the
+operator must do is suppressed at exactly the moment it is needed. **This is
+the thing to fix**: a step held for a human decision must say which decision,
+and offer it.
+
+(It self-heals in practice — once `<name>_thumb.png` exists it classifies as
+kind `thumbnail`, `autoThumbnail` returns it, and the next Start settles the
+stage `Done`. So the operator's escape today is "press Start again", which
+nothing tells them either.)
+
+**Design notes for whoever picks this up**
+- Per-stage state already exists: `stagePipStatus` (`domain/item`) and
+  `StagePips.vue`/`StatePill.vue` are reusable.
+- Per-stage re-run already exists end-to-end and is **not** exposed in this
+  tab: `useProcessing.reprocess(batchId, itemId, stages)` takes an explicit
+  `RunnableStage[]` and is wired to `jobs_reprocess`. "Re-run from any step"
+  needs UI only, not new plumbing.
+- Distinguish the three reasons a stage is not `done`: not reached yet,
+  failed (show the error), and **held for a human decision** (show the
+  decision). Today all three read as the same grey "pending".
 
 ## Progress — logic lane (`.ts`) pass, 2026-08-05
 

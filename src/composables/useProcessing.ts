@@ -31,7 +31,7 @@ import {
   singleRunBlockedMessage,
   type Batch,
 } from "@domain/batch";
-import { firstStageError, type Item } from "@domain/item";
+import { firstStageError, webPdfIsOurs, type Item } from "@domain/item";
 import { planPipeline } from "@domain/pipeline";
 import { planItemUpload, type UploadBlocker, type UploadWarning } from "@domain/upload";
 import { procFromProcessing, seedProcFromItems } from "@services/pipeline";
@@ -116,7 +116,7 @@ function blockerCopy(b: UploadBlocker): string {
 }
 
 function describeAssets(item: Item): string {
-  const plan = planPipeline(item.assets, item.folderName);
+  const plan = planPipeline(item.assets, item.folderName, "auto", webPdfIsOurs(item.stages));
   const tiffs = item.assets.filter((a) => a.kind === "source-tiff").length;
   const images = item.assets.filter((a) => a.kind === "image").length;
   const pdfs = item.assets.filter((a) => a.kind === "web-pdf").length;

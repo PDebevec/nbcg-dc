@@ -67,12 +67,46 @@ pub fn run() {
             std::fs::create_dir_all(&config_dir)?;
             std::fs::create_dir_all(&data_dir)?;
 
+            // Two sources for the vendored interpreter, tried in an order
+            // that depends on the build profile:
+            //
+            // - Debug: the repo's own tree first. Tauri copies
+            //   `bundle.resources` next to the dev binary only when its build
+            //   script runs, so `resource_dir()` there is a *snapshot* —
+            //   preferring it would serve whatever `py/` looked like at the
+            //   last build, and would hide a freshly vendored interpreter
+            //   behind the stale `.gitkeep` placeholder captured before it.
+            // - Release: the bundled resources first, so a release build made
+            //   on this machine still exercises the real installed-app path
+            //   instead of silently reaching back into the repo.
+            //
+            // Both probes require the interpreter to really be on disk, and
+            // `detect_dev`'s paths are compile-time ones that exist only on
+            // the machine that built the binary — so an installed app resolves
+            // through `resource_dir()` either way, and with nothing vendored
+            // at all this stays `None`: bare system `python`/`py`, as before.
+            //
+            // `.ok()`, not `?`: a `resource_dir()` resolution failure degrades
+            // to that same fallback rather than aborting startup.
+            let bundled = || {
+                app.path()
+                    .resource_dir()
+                    .ok()
+                    .and_then(|dir| core::python::PythonRuntime::detect(&dir))
+            };
+            let python_runtime = if cfg!(debug_assertions) {
+                core::python::PythonRuntime::detect_dev().or_else(bundled)
+            } else {
+                bundled().or_else(core::python::PythonRuntime::detect_dev)
+            };
+
             let db = Db::open(&data_dir.join(INDEX_FILENAME))?;
             let state = AppState {
                 db,
                 config_dir,
                 watcher: FsWatcher::new(),
                 job_run: std::sync::Mutex::new(Default::default()),
+                python_runtime,
             };
 
             // Start watching whatever is already configured. A first run has no

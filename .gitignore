@@ -29,5 +29,14 @@ __pycache__/
 .venv/
 venv/
 
+# Vendored Python runtime + packages (Epic 11 packaging), fetched at build
+# time by scripts/vendor-python.ps1 - never committed (paddlepaddle alone is
+# hundreds of MB). .gitkeep keeps the directory itself present so Tauri's
+# bundle.resources path check doesn't fail on an ordinary `cargo build`/
+# `tauri dev` before anyone has run the vendoring script. See
+# docs/tasks/python-runtime-bundling.md.
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+
 arh/
 processed/

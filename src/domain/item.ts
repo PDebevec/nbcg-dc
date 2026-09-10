@@ -217,6 +217,23 @@ export type StagePipStatus = StageStatus | "re-upload";
 
 /** Resolve the *display* status of one stage's pip, folding the re-upload flag
  * into the upload stage. */
+/**
+ * True when the index records that the pipeline built this item's own web PDF.
+ *
+ * The signal that stops an item being re-classified from its own output: once
+ * `<folderName>.pdf` is ours, `domain/pipeline.classifyInput` must not count it
+ * as an input PDF, or a processed folder of page images looks like a
+ * supplied-PDF item on every later scan and OCR re-reads the pipeline's own
+ * downscale instead of the original scans.
+ *
+ * Strictly `done`, not `stageSatisfied`: `skipped` means the stage did not
+ * apply to this item at all, so nothing was built and there is nothing to
+ * discount.
+ */
+export function webPdfIsOurs(stages: ItemStages): boolean {
+  return stages.pdf.status === "done";
+}
+
 export function stagePipStatus(item: Item, stage: StageName): StagePipStatus {
   if (stage === "upload" && item.flags.reupload && isPublished(item)) {
     return "re-upload";

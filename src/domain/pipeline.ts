@@ -98,21 +98,83 @@ export function sourceTiffs(assets: DiscoveredAsset[]): DiscoveredAsset[] {
 }
 
 /**
+ * The web PDFs that count as *input* — every one the pipeline did not write
+ * itself.
+ *
+ * Only classification filters these out. `uploadGroups` and friends must still
+ * see the derived web PDF: it is the file that actually gets uploaded.
+ */
+function inputPdfs(
+  assets: DiscoveredAsset[],
+  context: ClassifyContext,
+): DiscoveredAsset[] {
+  const pdfs = webPdfAssets(assets);
+  if (!context.webPdfIsOurs || !context.folderName) return pdfs;
+  const ours = webPdfName(context.folderName).toLowerCase();
+  return pdfs.filter((a) => a.filename.toLowerCase() !== ours);
+}
+
+/**
+ * What the index already knows about an item, for {@link classifyInput}.
+ *
+ * Optional, and omitting it reproduces the old behaviour exactly — so a caller
+ * that genuinely has no item yet (a first scan) is unaffected.
+ */
+export interface ClassifyContext {
+  /**
+   * The item's derived-output naming base, i.e. its folder name.
+   */
+  folderName?: string;
+  /**
+   * True when the index records that **we** built this item's web PDF — the
+   * `pdf` stage having completed for it before.
+   *
+   * Without this, an item is re-classified from its own output: the pipeline
+   * writes `<folderName>.pdf`, and every later scan then sees a folder with a
+   * PDF in it and calls it a supplied-PDF item. A 391-page book whose scans
+   * are sitting right there gets its OCR run against the pipeline's own
+   * 1600px downscale instead, and the `--pages` fast path — built precisely to
+   * read the originals — can never fire again.
+   *
+   * Deliberately taken from recorded state rather than inferred from the
+   * filename: a supplied PDF that happens to be named after its folder must
+   * not be mistaken for ours and silently rebuilt from the page images.
+   */
+  webPdfIsOurs?: boolean;
+}
+
+/**
  * Classify a folder's discovered assets into an {@link InputShape}. Keys off the
  * presence of TIFFs, then web PDFs (count), then images — see the type's doc for
  * the precedence and the reason for each branch.
+ *
+ * Files the pipeline itself produced are **not** input: see
+ * {@link ClassifyContext.webPdfIsOurs}.
  */
 export function classifyInput(
   assets: DiscoveredAsset[],
   kind: ContentKind = "auto",
+  context: ClassifyContext = {},
 ): InputShape {
   const tiffs = sourceTiffs(assets);
-  const pdfs = webPdfAssets(assets);
+  const allPdfs = webPdfAssets(assets);
+  const pdfs = inputPdfs(assets, context);
   const images = thumbnailCandidates(assets);
   if (tiffs.length > 0) return "tiffs";
+  // A filed original outranks everything below: the item was already decided
+  // to be a supplied-PDF one, and the pristine PDF it derives from is still
+  // on disk under `source/`. Re-deciding it from the page images beside it
+  // would rebuild the web PDF out of a downscale of itself.
+  if (assets.some((a) => a.kind === "source-pdf")) return "supplied-pdf";
   if (pdfs.length > 1) return "multiple-pdfs";
   if (pdfs.length === 1) return "supplied-pdf";
-  if (images.length === 0) return "empty";
+  // Discounting our own output must never make an item look *empty*. A folder
+  // whose web PDF is the only thing in it is a real, complete item — an
+  // already-processed supplied-pdf whose original was filed away, say — and
+  // calling it empty marks every finished stage inapplicable and reports the
+  // item as unprocessed. Discounting is only safe while something else is
+  // left to classify from.
+  if (images.length === 0) return allPdfs.length > 0 ? "supplied-pdf" : "empty";
 
   // Images only. Are they a book's pages, or a standalone graphical work?
   if (kind === "book") return "page-images";
@@ -127,8 +189,9 @@ export function classifyInput(
 export function pageImages(
   assets: DiscoveredAsset[],
   kind: ContentKind = "auto",
+  context: ClassifyContext = {},
 ): DiscoveredAsset[] {
-  if (classifyInput(assets, kind) !== "page-images") return [];
+  if (classifyInput(assets, kind, context) !== "page-images") return [];
   const images = thumbnailCandidates(assets).filter(
     (a) => !isVariantFilename(a.filename),
   );
@@ -363,16 +426,20 @@ export function planPipeline(
   assets: DiscoveredAsset[],
   folderName: string,
   kind: ContentKind = "auto",
+  webPdfIsOurs = false,
 ): PipelinePlan {
-  const inputShape = classifyInput(assets, kind);
+  const context: ClassifyContext = { folderName, webPdfIsOurs };
+  const inputShape = classifyInput(assets, kind, context);
   const stages = applicableStages(inputShape);
-  const pages = pageImages(assets, kind);
+  const pages = pageImages(assets, kind, context);
   const warnings: string[] = [];
 
   // A folder holding BOTH a PDF and a numbered page run is ambiguous — is the
-  // PDF a source or an already-built output? Undecided (docs/05 open question
-  // #4), so the PDF still wins, but the ignored pages are reported instead of
-  // vanishing.
+  // PDF a source or an already-built output? Only genuinely ambiguous for a
+  // PDF we did *not* write: once the index records the `pdf` stage as ours,
+  // `classifyInput` stops counting it as input (docs/05 open question #4 —
+  // resolved for the re-run case, still open for the first run, which is what
+  // this warning is for).
   if (inputShape === "supplied-pdf" || inputShape === "multiple-pdfs") {
     const images = thumbnailCandidates(assets).filter(
       (a) => !isVariantFilename(a.filename),

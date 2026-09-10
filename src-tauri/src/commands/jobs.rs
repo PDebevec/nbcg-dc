@@ -53,9 +53,14 @@ fn start_or_reprocess(
     // that) both fall through to `JobLimits`'s own defaults.
     let limits =
         jobs::JobLimits::from_config(config::load(&state.config_dir).ok().flatten().as_ref());
-    let result = jobs::run_batch(&state.db, &request, &guard, limits, |event| {
-        emit_job_event(&app, event)
-    });
+    let result = jobs::run_batch_with_runtime(
+        &state.db,
+        &request,
+        &guard,
+        limits,
+        state.python_runtime.as_ref(),
+        |event| emit_job_event(&app, event),
+    );
     drop(guard);
     result
 }

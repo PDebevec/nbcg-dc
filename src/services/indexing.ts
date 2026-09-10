@@ -32,6 +32,7 @@ import { discoverAsset, type DiscoveredAsset } from "@domain/files";
 import {
   STAGE_NAMES,
   emptyStages,
+  webPdfIsOurs,
   type Item,
   type ItemStages,
   type StageName,
@@ -74,7 +75,10 @@ function toAssets(dto: IndexedItemDto): DiscoveredAsset[] {
  */
 export function toItem(dto: IndexedItemDto): Item {
   const assets = toAssets(dto);
-  const plan = planPipeline(assets, dto.folderName);
+  // Stages first: whether the `pdf` stage is already recorded as ours decides
+  // whether this folder's own `<folderName>.pdf` counts as input at all.
+  const stages = toStages(dto.stages);
+  const plan = planPipeline(assets, dto.folderName, "auto", webPdfIsOurs(stages));
   return {
     id: dto.id,
     folderName: dto.folderName,
@@ -84,7 +88,7 @@ export function toItem(dto: IndexedItemDto): Item {
     root: dto.root,
     level: dto.level ?? "main",
     assets,
-    stages: markNonApplicableSkipped(toStages(dto.stages), plan),
+    stages: markNonApplicableSkipped(stages, plan),
     flags: {
       uploaded: dto.uploaded,
       reupload: dto.reupload,

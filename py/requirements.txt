@@ -5,24 +5,33 @@
 
 Pillow>=12.3.0
 
-# --- PDF sources only (pdf_derive.py) ---
-# Google's PDFium, for rasterising a supplied PDF's pages. Chosen over the
+# --- PDF sources (pdf_derive.py, and ocr.py's PDF-rasterization fallback) ---
+# Google's PDFium, for rasterising a PDF's pages. Chosen over the
 # alternatives on licensing and packaging: BSD/Apache with self-contained
-# wheels, so no system dependency to install (unlike pdf2image's poppler,
-# below) and no AGPL obligation on the app that links it (unlike PyMuPDF).
+# wheels, so no system dependency to install (unlike pdf2image's poppler)
+# and no AGPL obligation on the app that links it (unlike PyMuPDF).
 pypdfium2>=5.13.0
 
 # --- OCR only (ocr.py) ---
-# Not yet version-verified on Windows - pin exact versions once ocr.py has
-# actually been run end-to-end here.
-paddleocr
-paddlepaddle
-pdf2image
-numpy
-opencv-python
+# Pinned exactly, and this is not housekeeping - leaving these open cost a
+# real, large regression. `ocr.py` names the *detector* model but let the
+# recognizer default, and paddleocr 3.7.0 introduced PP-OCRv6 and re-routed
+# every Latin-script language from `latin_PP-OCRv5_mobile_rec` to the far
+# heavier `PP-OCRv6_medium_rec` (paddleocr/_pipelines/ocr.py, _PPOCRV6_LANGS).
+# Nothing in this repo changed - `git log` shows ocr.py's engine setup is
+# byte-identical to the initial commit - but a fresh `pip install` silently
+# swapped the model underneath it and OCR got dramatically slower.
+#
+# ocr.py now pins every model name explicitly, so this can't recur silently;
+# these pins are the second line of defence. Re-verify with
+# py/tools/bench_ocr.py before raising any of them.
+paddleocr==3.7.0
+paddlepaddle==3.3.1
+numpy==2.3.5
+opencv-python==5.0.0.93
 
-# pdf2image also needs poppler on PATH - this is a system dependency pip
-# cannot install:
-#   Windows: download poppler binaries and add the extracted `bin/` folder
-#            to PATH (see https://github.com/oschwartz10612/poppler-windows).
-#   Linux:   apt-get install poppler-utils
+# Embedding the recognized text into the PDF as an invisible, searchable
+# layer (nbcg_pipeline/pdf_text.py). Both pure pip installs, no system
+# dependency, both BSD-licensed - same reasoning as pypdfium2 above.
+reportlab>=4.0
+pypdf>=5.0

@@ -18,7 +18,29 @@ use common::*;
 use nbcg_dc_lib::core::db::{items, Db};
 use nbcg_dc_lib::core::fs::item_id_for;
 use nbcg_dc_lib::core::jobs::{self, JobEvent, JobLimits, JobRunLock};
+use nbcg_dc_lib::core::python::PythonRuntime;
 use nbcg_dc_lib::dto::*;
+
+/// Run a batch the way the *app* does: through this checkout's vendored
+/// interpreter when there is one, and only otherwise through bare `python` on
+/// `PATH`.
+///
+/// Without this the suite silently depends on PATH order, and that is not
+/// hypothetical - on a machine whose first `python` was a bare install with no
+/// Pillow, ten tests here failed at `web.py`'s import line. The failure looks
+/// exactly like a code regression until you check *which* interpreter ran,
+/// which is a bad hour to hand anyone. `detect_dev` returns `None` on a
+/// checkout that has not been vendored, so behaviour there is unchanged.
+fn run_batch_here(
+    db: &Db,
+    request: &BatchRunRequest,
+    guard: &jobs::JobRunGuard<'_>,
+    limits: JobLimits,
+    emit: impl FnMut(JobEvent),
+) -> nbcg_dc_lib::error::Result<()> {
+    let runtime = PythonRuntime::detect_dev();
+    jobs::run_batch_with_runtime(db, request, guard, limits, runtime.as_ref(), emit)
+}
 
 /// Every pre-existing test here asserts on exact event order / `batch_complete`
 /// placement, written back when the runner was strictly sequential. Force
@@ -45,11 +67,23 @@ const TINY_JPG_2: &[u8] = include_bytes!("fixtures/tiny2.jpg");
 /// whether an output came from half a spread or the whole one.
 const SPREAD_JPG: &[u8] = include_bytes!("fixtures/spread.jpg");
 
+/// The interpreter these tests shell out to for fixtures and verification.
+///
+/// The same one `run_batch_here` gives the runner, deliberately: fixtures
+/// built by one Python and asserted against code driven by another is a
+/// failure mode that reads like a code bug. Falls back to bare `python` on a
+/// checkout that has not vendored a runtime.
+fn test_python() -> String {
+    PythonRuntime::detect_dev()
+        .map(|rt| rt.interpreter.display().to_string())
+        .unwrap_or_else(|| "python".to_string())
+}
+
 /// Rust has no image-decoding crate in this project either, so read a
 /// thumbnail pixel back via the same Python/Pillow this whole pipeline
 /// already depends on - test-only, not part of the runner itself.
 fn png_pixel_red(png_path: &Path, x: u32, y: u32) -> u8 {
-    let output = std::process::Command::new("python")
+    let output = std::process::Command::new(test_python())
         .arg("-c")
         .arg(format!(
             "from PIL import Image; img = Image.open(r'{}').convert('RGB'); print(img.getpixel(({x}, {y}))[0])",
@@ -83,7 +117,7 @@ fn write_pdf(path: &Path, colors: &[(u8, u8, u8)]) {
          pages[0].save(r'{}', save_all=True, append_images=pages[1:], resolution=300)\n",
         path.display(),
     );
-    let output = std::process::Command::new("python")
+    let output = std::process::Command::new(test_python())
         .arg("-c")
         .arg(code)
         .output()
@@ -194,7 +228,7 @@ fn page_images_pdf_and_thumbnail_run_for_real() {
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
+    run_batch_here(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
 
     // Real outputs on disk, correctly named, no archival PDF for a flat-JPG item.
@@ -227,6 +261,75 @@ fn page_images_pdf_and_thumbnail_run_for_real() {
     assert!(!done[0].batch_complete);
     assert!(done[1].item_id.is_none());
     assert!(done[1].batch_complete);
+}
+
+/// Epic 11's vendored-runtime override (`core::python::PythonRuntime`),
+/// exercised for real against whatever Python 3.13 happens to be on this
+/// machine — read from an env var rather than hardcoded, so this degrades
+/// to a skip anywhere else instead of failing. Proves
+/// `run_batch_with_runtime`'s `Some(runtime)` path drives a real subprocess
+/// correctly, the same way every other test in this file already proves
+/// the `None` path does. Scoped to pdf/thumbnail (Pillow only), not OCR, so
+/// it doesn't also depend on whatever happens to be pip-installed into that
+/// particular interpreter. `#[ignore]`d: not part of the default suite.
+#[test]
+#[ignore = "needs NBCG_TEST_PYTHON313 pointed at a real Python 3.13+ interpreter"]
+fn page_images_pdf_and_thumbnail_run_for_real_under_a_vendored_runtime() {
+    let Ok(interpreter) = std::env::var("NBCG_TEST_PYTHON313") else {
+        eprintln!("skipping: NBCG_TEST_PYTHON313 not set");
+        return;
+    };
+
+    let root = tempfile::TempDir::new().unwrap();
+    let dir = root.path().join("BOOK");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("1.jpg"), TINY_JPG).unwrap();
+    std::fs::write(dir.join("2.jpg"), TINY_JPG).unwrap();
+
+    let db = Db::open_in_memory().unwrap();
+    let item_id = reconciled_item(&db, "BOOK", &dir);
+
+    let request = BatchRunRequest {
+        batch_id: "batch-1".to_string(),
+        mode: JobRunMode::Run,
+        items: vec![page_images_item(
+            &item_id,
+            &dir,
+            "BOOK",
+            vec![RunnableStage::Pdf, RunnableStage::Thumbnail],
+            vec!["1.jpg", "2.jpg"],
+        )],
+    };
+
+    // The repo's own py/ tree, not a simulated vendored bundle - this test
+    // proves the interpreter-override + PATH plumbing works end to end, not
+    // a real vendored resource_dir layout (that needs a real `tauri build`,
+    // out of scope here - see python-runtime-bundling.md's own gap list).
+    let script_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../py");
+    let runtime = nbcg_dc_lib::core::python::PythonRuntime {
+        interpreter: interpreter.into(),
+        script_dir,
+        extra_path: Vec::new(),
+    };
+
+    let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
+    let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
+    let mut events = Vec::new();
+    jobs::run_batch_with_runtime(&db, &request, &guard, SEQUENTIAL, Some(&runtime), |e| {
+        events.push(e)
+    })
+    .unwrap();
+    drop(guard);
+
+    assert!(dir.join("BOOK.pdf").is_file());
+    assert!(dir.join("BOOK_thumb.png").is_file());
+
+    let stored = db.with(|c| items::get(c, &item_id)).unwrap();
+    assert_eq!(stored.stages[&StageName::Pdf].status, StageStatus::Done);
+    assert_eq!(
+        stored.stages[&StageName::Thumbnail].status,
+        StageStatus::Done
+    );
 }
 
 #[test]
@@ -272,7 +375,7 @@ fn page_images_shape_is_not_misclassified_as_paired_by_web_pys_own_folder_sniffi
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
+    run_batch_here(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
 
     let stored = db.with(|c| items::get(c, &item_id)).unwrap();
@@ -325,7 +428,7 @@ fn spread_thumbnail_right_side_red(split_spreads: bool) -> u8 {
 
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
-    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |_| {}).unwrap();
+    run_batch_here(&db, &request, &guard, SEQUENTIAL, |_| {}).unwrap();
     drop(guard);
 
     let stored = db.with(|c| items::get(c, &item_id)).unwrap();
@@ -405,7 +508,7 @@ fn split_spreads_keeps_the_operators_thumbnail_pick_unsplit() {
 
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
-    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |_| {}).unwrap();
+    run_batch_here(&db, &request, &guard, SEQUENTIAL, |_| {}).unwrap();
     drop(guard);
 
     let stored = db.with(|c| items::get(c, &item_id)).unwrap();
@@ -462,7 +565,7 @@ fn split_spreads_on_a_tiffs_item_fails_clearly_instead_of_being_ignored() {
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
+    run_batch_here(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
 
     let stored = db.with(|c| items::get(c, &item_id)).unwrap();
@@ -494,7 +597,7 @@ fn run_one(db: &Db, item: ItemRunRequest) -> Vec<JobEvent> {
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
+    run_batch_here(db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
     events
 }
@@ -769,7 +872,7 @@ fn thumbnail_needs_choice_withholds_done_and_leaves_it_pending() {
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
+    run_batch_here(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
 
     // web.py still produced a candidate thumbnail on disk...
@@ -825,7 +928,7 @@ fn images_only_thumbnail_only_never_builds_a_pdf() {
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
+    run_batch_here(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
 
     assert!(dir.join("MAP_thumb.png").is_file());
@@ -880,7 +983,7 @@ fn images_only_honours_the_tagged_thumbnail_over_the_natural_first_image() {
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
+    run_batch_here(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
 
     let stored = db.with(|c| items::get(c, &item_id)).unwrap();
@@ -921,7 +1024,7 @@ fn ocr_without_a_pdf_fails_on_the_precondition_and_never_spawns_python() {
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
+    run_batch_here(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
 
     let stored = db.with(|c| items::get(c, &item_id)).unwrap();
@@ -991,7 +1094,7 @@ fn a_shape_with_nothing_to_run_fails_that_item_but_the_batch_continues() {
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
+    run_batch_here(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
 
     let stored_a = db.with(|c| items::get(c, &id_a)).unwrap();
@@ -1032,7 +1135,7 @@ fn an_empty_batch_still_emits_a_terminal_done_event() {
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
+    run_batch_here(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
 
     let done = done_events(&events);
@@ -1108,7 +1211,7 @@ fn a_cancel_before_the_run_leaves_every_stage_pending_not_queued() {
     jobs::request_cancel(&lock, &request.batch_id);
 
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
+    run_batch_here(&db, &request, &guard, SEQUENTIAL, |e| events.push(e)).unwrap();
     drop(guard);
 
     let stored = db.with(|c| items::get(c, &item_id)).unwrap();
@@ -1164,7 +1267,7 @@ fn a_cancel_mid_run_settles_the_interrupted_stage_pending_not_failed() {
     let cancel = guard.cancel_token();
 
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| {
+    run_batch_here(&db, &request, &guard, SEQUENTIAL, |e| {
         if let JobEvent::StageChanged(p) = &e {
             if p.status == StageStatus::Running {
                 cancel.cancel();
@@ -1249,7 +1352,7 @@ fn a_cancel_mid_run_settles_ocr_pending_too_not_a_stale_precondition_failure() {
     let cancel = guard.cancel_token();
 
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |e| {
+    run_batch_here(&db, &request, &guard, SEQUENTIAL, |e| {
         if let JobEvent::StageChanged(p) = &e {
             if p.status == StageStatus::Running {
                 cancel.cancel();
@@ -1342,7 +1445,7 @@ fn concurrent_items_all_complete_and_the_batch_terminal_event_fires_once_last() 
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
     let mut events = Vec::new();
-    jobs::run_batch(&db, &request, &guard, JobLimits::from_config(None), |e| {
+    run_batch_here(&db, &request, &guard, JobLimits::from_config(None), |e| {
         events.push(e);
     })
     .unwrap();
@@ -1427,7 +1530,7 @@ fn reprocessing_the_pdf_stage_marks_a_full_reupload_when_already_uploaded() {
     };
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
-    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |_| {}).unwrap();
+    run_batch_here(&db, &request, &guard, SEQUENTIAL, |_| {}).unwrap();
     drop(guard);
 
     let stored = db.with(|c| items::get(c, &item_id)).unwrap();
@@ -1472,7 +1575,7 @@ fn multiple_pdfs_pdf_verify_alone_does_not_spuriously_mark_reupload() {
     };
     let lock: Mutex<JobRunLock> = Mutex::new(Default::default());
     let guard = jobs::try_acquire(&lock, &request.batch_id).unwrap();
-    jobs::run_batch(&db, &request, &guard, SEQUENTIAL, |_| {}).unwrap();
+    run_batch_here(&db, &request, &guard, SEQUENTIAL, |_| {}).unwrap();
     drop(guard);
 
     let stored = db.with(|c| items::get(c, &item_id)).unwrap();

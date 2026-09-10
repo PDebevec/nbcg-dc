@@ -1,0 +1,8 @@
+# Tauri dev-mode file watcher exclusions (gitignore syntax).
+#
+# binaries/ is the vendored Python runtime (scripts/vendor-python.ps1,
+# docs/tasks/python-runtime-bundling.md) - hundreds of files, and its own
+# __pycache__ churns every time a script actually runs. Without this, the
+# dev watcher treats that churn as a source change and rebuild-restarts the
+# whole app in a loop - observed for real, not hypothetical.
+binaries/

@@ -52,6 +52,28 @@ example yet of what a finished item looks like on disk.
    (`310` is not the page count — there are 52 pages). Unclear whether it is a
    source or an already-built product.
 
+   > **Half-resolved, 2026-09-10.** The ambiguity is real only for a PDF the
+   > pipeline did *not* write. It used to apply to every processed item too:
+   > building `<folderName>.pdf` made the folder look like a supplied-PDF item
+   > on every later scan, so a 391-page book had its OCR run against the
+   > pipeline's own 1600px downscale while the originals sat beside it, and the
+   > `--pages` fast path could never fire again.
+   >
+   > `classifyInput` now discounts the web PDF when the index records the `pdf`
+   > stage as **ours** (`domain/item.webPdfIsOurs`) — recorded state, not the
+   > filename, so an operator's PDF that happens to match its folder name is
+   > never mistaken for ours and rebuilt from page images. The supplied
+   > original stays visible after being filed under `source/`: `core::fs`
+   > reports it and `domain/files` classifies it `source-pdf`, which outranks
+   > everything below it. Two guards fell out of getting this wrong first:
+   > discounting must not make a folder holding only its own web PDF look
+   > *empty* (that marks every finished stage inapplicable), and a folder
+   > merely *named* `source` must not have its own PDFs read as filed.
+   >
+   > **Still open** for the genuine first-run case — a folder holding an
+   > operator's PDF *and* a page run. The PDF still wins there, and
+   > `planPipeline` still warns about the ignored pages.
+
 ## Impact on `domain/pipeline`
 
 Ran the real planner (`planPipeline` + `classifyInput`) over the four folders as

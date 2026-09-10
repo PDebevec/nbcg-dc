@@ -35,6 +35,7 @@ import {
   withRunning,
   type Batch,
 } from "@domain/batch";
+import { webPdfIsOurs } from "@domain/item";
 import type { Item, StageOutcome } from "@domain/item";
 import {
   failedRunnableStages,
@@ -79,7 +80,7 @@ export function buildItemRunRequest(
   opts: BuildRunOptions,
 ): ItemRunRequest | null {
   const kind = opts.contentKinds?.[item.id] ?? "auto";
-  const plan = planPipeline(item.assets, item.folderName, kind);
+  const plan = planPipeline(item.assets, item.folderName, kind, webPdfIsOurs(item.stages));
   const stages = stagesToRun(item.stages, plan, {
     force: opts.force,
     only: opts.only ?? null,
@@ -245,7 +246,7 @@ export function procFromProcessing(
   // The kind must match the one the run used: it changes which stages are
   // applicable, so reading status under "auto" for an item the operator forced
   // to `graphical` would judge completeness against the wrong stage set.
-  const plan = planPipeline(item.assets, item.folderName, kind);
+  const plan = planPipeline(item.assets, item.folderName, kind, webPdfIsOurs(item.stages));
   if (processingComplete(item.stages, plan)) return ItemRunStatus.Done;
   if (failedRunnableStages(item.stages, plan).length > 0) return ItemRunStatus.Failed;
   return ItemRunStatus.Idle;

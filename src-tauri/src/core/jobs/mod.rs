@@ -202,10 +202,46 @@ pub struct JobLimits {
 
 impl JobLimits {
     const DEFAULT_MAX_CONCURRENT_ITEMS: usize = 3;
-    const DEFAULT_MAX_CONCURRENT_OCR: usize = 1;
     /// A fat-finger guard against a hand-edited config.json forking the
     /// workstation into dozens of processes — not a product decision.
     const HARD_CEILING: usize = 8;
+
+    /// Concurrent OCR processes, derived from the machine rather than fixed.
+    ///
+    /// This used to be a hardcoded `1`, which left most of a workstation idle
+    /// during the one stage that actually takes hours. Per-process tuning is
+    /// exhausted — `py/ocr.py` documents the thread sweep, where *more*
+    /// threads per process measured strictly slower — so the only remaining
+    /// way to use a big machine is to run more items at once.
+    ///
+    /// Measured (22 logical cores, three real pages per process, effective
+    /// seconds per page across the whole cohort):
+    ///
+    /// | concurrent OCR | 1     | 4     | 8     |
+    /// |----------------|-------|-------|-------|
+    /// | s/page          | 19.00 | 7.17  | 7.00  |
+    ///
+    /// So it scales to about 4 and then flattens: 8 processes bought under 3%
+    /// over 4 while doubling the memory.
+    ///
+    /// **This is now 1, and that is not a regression.** `py/ocr.py` spreads a
+    /// single item's pages across worker processes itself
+    /// (`nbcg_pipeline.workers`), sized from the same machine — 11 workers on
+    /// this 22-core box. Running several such items at once would multiply
+    /// the two caps together: 4 items x 11 workers is 44 recognition
+    /// processes on 22 cores, which thrashes and would exhaust memory at
+    /// ~0.5 GB each.
+    ///
+    /// One item at a time, using the whole machine, is both simpler and
+    /// better for the operator: a book finishes in a fraction of the time
+    /// instead of four books all crawling. Measured on 24 real pages,
+    /// 22m27s single-process against 5m18s parallel — and that with only 3
+    /// workers and a competing job. The other stages are unaffected;
+    /// `max_concurrent_items` still runs several items' PDF/thumbnail work
+    /// concurrently, and only OCR is gated to one.
+    fn default_max_concurrent_ocr() -> usize {
+        1
+    }
 
     pub fn from_config(config: Option<&PersistedConfig>) -> Self {
         let pick = |value: Option<u32>, default: usize| -> usize {
@@ -215,15 +251,20 @@ impl JobLimits {
                 .unwrap_or(default)
                 .min(Self::HARD_CEILING)
         };
+        let ocr = pick(
+            config.and_then(|c| c.max_concurrent_ocr),
+            Self::default_max_concurrent_ocr(),
+        );
         Self {
+            // An OCR permit is useless without an item slot to run it in, so
+            // the item cap can never sit below the OCR cap — otherwise raising
+            // OCR concurrency on a big machine would silently do nothing.
             max_concurrent_items: pick(
                 config.and_then(|c| c.max_concurrent_items),
                 Self::DEFAULT_MAX_CONCURRENT_ITEMS,
-            ),
-            max_concurrent_ocr: pick(
-                config.and_then(|c| c.max_concurrent_ocr),
-                Self::DEFAULT_MAX_CONCURRENT_OCR,
-            ),
+            )
+            .max(ocr),
+            max_concurrent_ocr: ocr,
         }
     }
 }
@@ -395,6 +436,7 @@ fn prepare_web_source(
     pages: Option<&[String]>,
     request: &BatchRunRequest,
     emit: &mut impl FnMut(JobEvent),
+    runtime: Option<&python::PythonRuntime>,
     cancel: &CancelToken,
 ) -> Result<WebSource> {
     if !item.split_spreads {
@@ -439,7 +481,7 @@ fn prepare_web_source(
     );
 
     let split_dir = staging.join("pages");
-    let split = python::run_split_spreads(folder, &split_dir, pages, cancel)?;
+    let split = python::run_split_spreads(folder, &split_dir, pages, runtime, cancel)?;
 
     Ok(WebSource {
         folder: split_dir,
@@ -471,6 +513,7 @@ fn run_web_stage(
     thumbnail_only: bool,
     outcome: &mut ItemOutcome,
     emit: &mut impl FnMut(JobEvent),
+    runtime: Option<&python::PythonRuntime>,
     cancel: &CancelToken,
 ) -> Result<()> {
     let resolved: Vec<StageName> = [
@@ -505,19 +548,21 @@ fn run_web_stage(
     std::fs::create_dir_all(&staging)?;
 
     let pages = (!item.page_images.is_empty()).then_some(item.page_images.as_slice());
-    let run_result = prepare_web_source(item, folder, &staging, pages, request, emit, cancel)
-        .and_then(|source| {
-            python::run_web(
-                &source.folder,
-                &staging,
-                web_mode(item.input_shape),
-                &item.folder_name,
-                source.pages.as_deref(),
-                thumbnail_only,
-                source.thumbnail.as_deref(),
-                cancel,
-            )
-        });
+    let run_result =
+        prepare_web_source(item, folder, &staging, pages, request, emit, runtime, cancel)
+            .and_then(|source| {
+                python::run_web(
+                    &source.folder,
+                    &staging,
+                    web_mode(item.input_shape),
+                    &item.folder_name,
+                    source.pages.as_deref(),
+                    thumbnail_only,
+                    source.thumbnail.as_deref(),
+                    runtime,
+                    cancel,
+                )
+            });
     let finalize_result = match &run_result {
         Ok(summary) => finalize_outputs(folder, &staging, &summary.outputs),
         Err(_) => Ok(()),
@@ -552,6 +597,82 @@ fn ocr_bases(item: &ItemRunRequest) -> Vec<String> {
     }
 }
 
+/// The original source images OCR should read directly, as absolute paths,
+/// instead of rasterizing the web PDF — or `None` to fall back to that
+/// rasterization (`ocr.py` does it internally via pypdfium2, no poppler).
+///
+/// Only ever resolved for `PageImages` — the shape every real scanner
+/// folder is (this module's own doc comment) — since that is the only
+/// shape with source images sitting in the folder at all:
+/// `SuppliedPdf`/`MultiplePdfs` have none (a supplied PDF *is* the source),
+/// and the legacy jpg/tif `Tiffs` pairing is unused in the real corpus, not
+/// worth threading its separate `jpg/` source through.
+///
+/// `split_spreads` items need the *split* pages, not the flat originals
+/// (each spread becomes two PDF pages) — `run_web_stage`'s own split
+/// staging is already deleted by the time OCR runs (it can run at a
+/// different time entirely, via per-stage Rerun/Reprocess), so this reruns
+/// `split_spreads.py` fresh into OCR's own staging dir. It's Pillow-only
+/// and fast, so re-running it is not a meaningful cost — and it's the only
+/// way to get the exact page list without coupling the `pdf`/`ocr` stages'
+/// lifetimes together.
+///
+/// Without `split_spreads` and with no authoritative `page_images` list
+/// (the `.ts` lane didn't send one), this deliberately does not fall back
+/// to re-scanning the folder itself — that would be exactly the "script
+/// re-derives what `.ts` already decided" mistake this codebase has caught
+/// and fixed elsewhere. `None` is the safe default: identical to today's
+/// behavior for that edge case.
+fn resolve_ocr_pages(
+    item: &ItemRunRequest,
+    folder: &Path,
+    staging: &Path,
+    runtime: Option<&python::PythonRuntime>,
+    cancel: &CancelToken,
+) -> Result<Option<Vec<String>>> {
+    if item.input_shape != InputShape::PageImages {
+        return Ok(None);
+    }
+
+    if item.split_spreads {
+        let pages = (!item.page_images.is_empty()).then_some(item.page_images.as_slice());
+        let split_dir = staging.join("ocr_pages");
+        let split = python::run_split_spreads(folder, &split_dir, pages, runtime, cancel)?;
+        return Ok(Some(
+            split
+                .pages
+                .iter()
+                .map(|name| split_dir.join(name).to_string_lossy().into_owned())
+                .collect(),
+        ));
+    }
+
+    if !item.page_images.is_empty() {
+        return Ok(Some(
+            item.page_images
+                .iter()
+                .map(|name| folder.join(name).to_string_lossy().into_owned())
+                .collect(),
+        ));
+    }
+
+    Ok(None)
+}
+
+/// Resolve `ocr.py`'s reported staged-output filename and finalize it into
+/// `folder` under that same name — shared by `.txt` and (when present) the
+/// embedded-text `.pdf`, since both are just "a staged file `ocr.py` named
+/// after the input, atomically moved into place."
+fn finalize_ocr_output(staged_path: &str, folder: &Path, label: &str) -> Result<()> {
+    let staged = Path::new(staged_path);
+    match staged.file_name() {
+        Some(name) => finalize_staged_output(staged, &folder.join(name)),
+        None => Err(AppError::Other(format!(
+            "ocr.py reported {label} with no filename: {staged_path}"
+        ))),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_ocr_stage(
     db: &Db,
@@ -559,6 +680,7 @@ fn run_ocr_stage(
     item: &ItemRunRequest,
     outcome: &mut ItemOutcome,
     emit: &mut impl FnMut(JobEvent),
+    runtime: Option<&python::PythonRuntime>,
     cancel: &CancelToken,
     ocr_gate: &Semaphore,
 ) -> Result<()> {
@@ -619,33 +741,49 @@ fn run_ocr_stage(
 
     let mut run_result = Ok(());
     let mut finalize_result = Ok(());
-    for base in &bases {
-        emit_progress(
-            request,
-            item,
-            RunnableStage::Ocr,
-            &format!("running ocr.py for {base}"),
-            emit,
-        );
-        match python::run_ocr(&folder.join(format!("{base}.pdf")), &staging, cancel) {
-            Ok(summary) => {
-                let staged_txt = Path::new(&summary.output_text);
-                finalize_result = match staged_txt.file_name() {
-                    Some(name) => finalize_staged_output(staged_txt, &folder.join(name)),
-                    None => Err(AppError::Other(format!(
-                        "ocr.py reported an output_text path with no filename: {}",
-                        summary.output_text
-                    ))),
-                };
-                if finalize_result.is_err() {
-                    break;
+    let mut pdf_embedded = false;
+
+    match resolve_ocr_pages(item, folder, &staging, runtime, cancel) {
+        Ok(ocr_pages) => {
+            for base in &bases {
+                emit_progress(
+                    request,
+                    item,
+                    RunnableStage::Ocr,
+                    &format!("running ocr.py for {base}"),
+                    emit,
+                );
+                match python::run_ocr(
+                    &folder.join(format!("{base}.pdf")),
+                    &staging,
+                    ocr_pages.as_deref(),
+                    runtime,
+                    cancel,
+                ) {
+                    Ok(summary) => {
+                        finalize_result =
+                            finalize_ocr_output(&summary.output_text, folder, "an output_text path");
+                        if finalize_result.is_ok() {
+                            if let Some(output_pdf) = &summary.output_pdf {
+                                finalize_result =
+                                    finalize_ocr_output(output_pdf, folder, "an output_pdf path");
+                                if finalize_result.is_ok() {
+                                    pdf_embedded = true;
+                                }
+                            }
+                        }
+                        if finalize_result.is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        run_result = Err(e);
+                        break;
+                    }
                 }
             }
-            Err(e) => {
-                run_result = Err(e);
-                break;
-            }
         }
+        Err(e) => run_result = Err(e),
     }
     let _ = std::fs::remove_dir_all(&staging);
 
@@ -661,6 +799,14 @@ fn run_ocr_stage(
                 emit,
             )?;
             outcome.text_changed = true;
+            // Embedding rewrites the PDF's own bytes, so a run that actually
+            // embedded needs a `Full` reupload (blob included), not `TextOnly`
+            // (`reupload_kind_for` below) — otherwise the embedded PDF would
+            // sit correctly on local disk forever, but its invisible text
+            // layer would never reach the uploaded/public copy.
+            if pdf_embedded {
+                outcome.content_changed = true;
+            }
         }
         (Ok(_), Err(e)) | (Err(e), _) if e.is_cancelled() => {
             // A cancel is not a failure: leave the stage `Pending` so
@@ -711,7 +857,9 @@ fn finalize_outputs(folder: &Path, staging: &Path, outputs: &[String]) -> Result
 /// scan: it would silently change shape, and the full-size original would be
 /// uploaded as a web asset. `core::fs::describe_folder` lists files without
 /// recursing, so one subfolder is enough to keep the count at one.
-const SOURCE_SUBFOLDER: &str = "source";
+// Owned by `core::fs` - the scanner has to know this layout too, so that a
+// filed original stays visible to classification instead of vanishing.
+use crate::core::fs::SOURCE_SUBFOLDER;
 
 fn pdfs_in(dir: &Path) -> Result<Vec<PathBuf>> {
     if !dir.is_dir() {
@@ -806,6 +954,7 @@ fn run_supplied_pdf_stage(
     wants_thumb: bool,
     outcome: &mut ItemOutcome,
     emit: &mut impl FnMut(JobEvent),
+    runtime: Option<&python::PythonRuntime>,
     cancel: &CancelToken,
 ) -> Result<()> {
     let resolved: Vec<StageName> = [
@@ -841,7 +990,7 @@ fn run_supplied_pdf_stage(
     let run_result = resolve_supplied_source(folder, &item.folder_name).and_then(|source| {
         // Only the thumbnail was asked for - rendering every page of a
         // 300-page document to throw it away would dominate the runtime.
-        python::run_pdf_derive(&source, &staging, &item.folder_name, !wants_pdf, cancel)
+        python::run_pdf_derive(&source, &staging, &item.folder_name, !wants_pdf, runtime, cancel)
     });
     let finalize_result = match &run_result {
         Ok(summary) => finalize_outputs(folder, &staging, &summary.outputs),
@@ -874,6 +1023,7 @@ fn run_multiple_pdfs(
     stages: &[RunnableStage],
     outcome: &mut ItemOutcome,
     emit: &mut impl FnMut(JobEvent),
+    runtime: Option<&python::PythonRuntime>,
     cancel: &CancelToken,
     ocr_gate: &Semaphore,
 ) -> Result<()> {
@@ -919,10 +1069,10 @@ fn run_multiple_pdfs(
                 }
             }
             RunnableStage::Thumbnail => {
-                run_multi_pdf_thumbnail(db, request, item, &bases, outcome, emit, cancel)?;
+                run_multi_pdf_thumbnail(db, request, item, &bases, outcome, emit, runtime, cancel)?;
             }
             RunnableStage::Ocr => {
-                run_ocr_stage(db, request, item, outcome, emit, cancel, ocr_gate)?;
+                run_ocr_stage(db, request, item, outcome, emit, runtime, cancel, ocr_gate)?;
             }
         }
     }
@@ -943,6 +1093,7 @@ fn run_multi_pdf_thumbnail(
     bases: &[String],
     outcome: &mut ItemOutcome,
     emit: &mut impl FnMut(JobEvent),
+    runtime: Option<&python::PythonRuntime>,
     cancel: &CancelToken,
 ) -> Result<()> {
     set_stage_status(
@@ -969,7 +1120,7 @@ fn run_multi_pdf_thumbnail(
             emit,
         );
         let source = folder.join(format!("{base}.pdf"));
-        result = python::run_pdf_derive(&source, &staging, base, true, cancel)
+        result = python::run_pdf_derive(&source, &staging, base, true, runtime, cancel)
             .and_then(|summary| finalize_outputs(folder, &staging, &summary.outputs));
         if result.is_err() {
             break;
@@ -991,6 +1142,7 @@ fn run_multi_pdf_thumbnail(
                 Some(&picks),
                 true,
                 Some(pick),
+                runtime,
                 cancel,
             )
             .and_then(|summary| finalize_outputs(folder, &staging, &summary.outputs));
@@ -1078,6 +1230,7 @@ fn run_supplied_pdf(
     stages: &[RunnableStage],
     outcome: &mut ItemOutcome,
     emit: &mut impl FnMut(JobEvent),
+    runtime: Option<&python::PythonRuntime>,
     cancel: &CancelToken,
     ocr_gate: &Semaphore,
 ) -> Result<()> {
@@ -1093,11 +1246,12 @@ fn run_supplied_pdf(
             wants_thumb,
             outcome,
             emit,
+            runtime,
             cancel,
         )?;
     }
     if stages.contains(&RunnableStage::Ocr) {
-        run_ocr_stage(db, request, item, outcome, emit, cancel, ocr_gate)?;
+        run_ocr_stage(db, request, item, outcome, emit, runtime, cancel, ocr_gate)?;
     }
     Ok(())
 }
@@ -1110,6 +1264,7 @@ fn run_pdf_thumbnail_ocr(
     stages: &[RunnableStage],
     outcome: &mut ItemOutcome,
     emit: &mut impl FnMut(JobEvent),
+    runtime: Option<&python::PythonRuntime>,
     cancel: &CancelToken,
     ocr_gate: &Semaphore,
 ) -> Result<()> {
@@ -1127,15 +1282,17 @@ fn run_pdf_thumbnail_ocr(
             false,
             outcome,
             emit,
+            runtime,
             cancel,
         )?;
     }
     if wants_ocr {
-        run_ocr_stage(db, request, item, outcome, emit, cancel, ocr_gate)?;
+        run_ocr_stage(db, request, item, outcome, emit, runtime, cancel, ocr_gate)?;
     }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_images_only(
     db: &Db,
     request: &BatchRunRequest,
@@ -1143,12 +1300,15 @@ fn run_images_only(
     stages: &[RunnableStage],
     outcome: &mut ItemOutcome,
     emit: &mut impl FnMut(JobEvent),
+    runtime: Option<&python::PythonRuntime>,
     cancel: &CancelToken,
 ) -> Result<()> {
     for &stage in stages {
         match stage {
             RunnableStage::Thumbnail => {
-                run_web_stage(db, request, item, false, true, true, outcome, emit, cancel)?;
+                run_web_stage(
+                    db, request, item, false, true, true, outcome, emit, runtime, cancel,
+                )?;
             }
             RunnableStage::Pdf | RunnableStage::Ocr => {
                 // No PDF for a standalone graphical work, so no OCR either -
@@ -1196,6 +1356,7 @@ fn run_item(
     request: &BatchRunRequest,
     item: &ItemRunRequest,
     emit: &mut impl FnMut(JobEvent),
+    runtime: Option<&python::PythonRuntime>,
     cancel: &CancelToken,
     ocr_gate: &Semaphore,
 ) -> Result<ItemOutcome> {
@@ -1214,12 +1375,13 @@ fn run_item(
                 &stages,
                 &mut outcome,
                 emit,
+                runtime,
                 cancel,
                 ocr_gate,
             )?;
         }
         InputShape::ImagesOnly => {
-            run_images_only(db, request, item, &stages, &mut outcome, emit, cancel)?;
+            run_images_only(db, request, item, &stages, &mut outcome, emit, runtime, cancel)?;
         }
         InputShape::SuppliedPdf => {
             run_supplied_pdf(
@@ -1229,6 +1391,7 @@ fn run_item(
                 &stages,
                 &mut outcome,
                 emit,
+                runtime,
                 cancel,
                 ocr_gate,
             )?;
@@ -1241,6 +1404,7 @@ fn run_item(
                 &stages,
                 &mut outcome,
                 emit,
+                runtime,
                 cancel,
                 ocr_gate,
             )?;
@@ -1339,10 +1503,11 @@ fn run_one_item(
     request: &BatchRunRequest,
     item: &ItemRunRequest,
     emit: &mut impl FnMut(JobEvent),
+    runtime: Option<&python::PythonRuntime>,
     cancel: &CancelToken,
     ocr_gate: &Semaphore,
 ) -> Result<()> {
-    let outcome = run_item(db, request, item, emit, cancel, ocr_gate)?;
+    let outcome = run_item(db, request, item, emit, runtime, cancel, ocr_gate)?;
 
     if cancel.is_cancelled() {
         // The cancel landed mid-item: its own settle points already left
@@ -1403,11 +1568,37 @@ fn run_one_item(
 /// separate synthetic event (`item_id: None`), emitted exactly once after
 /// every worker has finished — the same shape the cancellation and
 /// empty-batch paths already used, just now also used on normal completion.
+///
+/// Runs with no [`python::PythonRuntime`] override — bare `python`/`py` on
+/// `PATH`, exactly this function's behavior before Epic 11's bundling
+/// existed. Frozen at this exact 5-argument signature deliberately: it's
+/// called with it 18 times across `src-tauri/tests/core_jobs.rs`, and Rust
+/// has no default parameters, so widening it directly would force-edit
+/// every one of those. See [`run_batch_with_runtime`] for the real
+/// implementation and the vendored-runtime path `commands::jobs` uses.
 pub fn run_batch(
     db: &Db,
     request: &BatchRunRequest,
     guard: &JobRunGuard<'_>,
     limits: JobLimits,
+    emit: impl FnMut(JobEvent),
+) -> Result<()> {
+    run_batch_with_runtime(db, request, guard, limits, None, emit)
+}
+
+/// [`run_batch`], with an optional vendored [`python::PythonRuntime`]
+/// override — `Some` when Epic 11's bundled Python is present
+/// (`commands::jobs::start_or_reprocess` passes `state.python_runtime`),
+/// `None` for every existing caller/test (today's exact bare-`PATH`
+/// behavior). See `run_batch`'s own doc comment for the full concurrency
+/// model — identical here, just with `runtime` threaded down to every
+/// `python::run_*` call via `run_one_item`/`run_item`.
+pub fn run_batch_with_runtime(
+    db: &Db,
+    request: &BatchRunRequest,
+    guard: &JobRunGuard<'_>,
+    limits: JobLimits,
+    runtime: Option<&python::PythonRuntime>,
     mut emit: impl FnMut(JobEvent),
 ) -> Result<()> {
     if request.items.is_empty() {
@@ -1482,6 +1673,7 @@ pub fn run_batch(
                         request,
                         item,
                         &mut emit_worker,
+                        runtime,
                         &cancel_token,
                         ocr_gate_ref,
                     ) {
@@ -1594,13 +1786,21 @@ mod tests {
     #[test]
     fn job_limits_from_config_defaults_and_clamps() {
         let defaults = JobLimits::from_config(None);
-        assert_eq!(
-            defaults.max_concurrent_items,
-            JobLimits::DEFAULT_MAX_CONCURRENT_ITEMS
+        assert!(
+            defaults.max_concurrent_items >= JobLimits::DEFAULT_MAX_CONCURRENT_ITEMS,
+            "the item cap must never drop below its own default"
         );
-        assert_eq!(
-            defaults.max_concurrent_ocr,
-            JobLimits::DEFAULT_MAX_CONCURRENT_OCR
+        // Derived from the machine now, not a constant. Assert the contract
+        // rather than a number: at least one, never more than the measured
+        // plateau of 4, and never more than the item cap can actually run.
+        assert!(
+            (1..=4).contains(&defaults.max_concurrent_ocr),
+            "derived OCR cap out of range: {}",
+            defaults.max_concurrent_ocr
+        );
+        assert!(
+            defaults.max_concurrent_items >= defaults.max_concurrent_ocr,
+            "an OCR permit is useless without an item slot to run it in"
         );
 
         let zeroed = JobLimits::from_config(Some(&PersistedConfig {
@@ -1611,10 +1811,12 @@ mod tests {
         assert_eq!(
             zeroed.max_concurrent_items,
             JobLimits::DEFAULT_MAX_CONCURRENT_ITEMS
+                .max(JobLimits::default_max_concurrent_ocr())
         );
         assert_eq!(
             zeroed.max_concurrent_ocr,
-            JobLimits::DEFAULT_MAX_CONCURRENT_OCR
+            JobLimits::default_max_concurrent_ocr(),
+            "a zeroed config falls back to the derived default, not to zero"
         );
 
         let huge = JobLimits::from_config(Some(&PersistedConfig {
@@ -1632,6 +1834,16 @@ mod tests {
         }));
         assert_eq!(reasonable.max_concurrent_items, 4);
         assert_eq!(reasonable.max_concurrent_ocr, 2);
+
+        // An explicit OCR cap above the item cap raises the item cap with it,
+        // rather than silently running fewer OCR processes than asked for.
+        let ocr_heavy = JobLimits::from_config(Some(&PersistedConfig {
+            max_concurrent_items: Some(1),
+            max_concurrent_ocr: Some(4),
+            ..Default::default()
+        }));
+        assert_eq!(ocr_heavy.max_concurrent_ocr, 4);
+        assert_eq!(ocr_heavy.max_concurrent_items, 4);
     }
 
     /// `reupload_kind_for` (Epic 07 re-upload granularity) - pinned directly

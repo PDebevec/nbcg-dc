@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { discoverAsset, type DiscoveredAsset } from "./files";
+import {
+  discoverAsset,
+  thumbnailCandidates,
+  webPdfAssets,
+  type DiscoveredAsset,
+} from "./files";
 import { emptyStages, type ItemStages, type StageName } from "./item";
 import {
   RUNNABLE_STAGES,
@@ -29,6 +34,111 @@ function stagesWith(overrides: Partial<Record<StageName, ItemStages[StageName]["
   }
   return s;
 }
+
+describe("classifyInput — not re-classifying an item from its own output", () => {
+  // The bug: the pipeline writes <folderName>.pdf, and every later scan then
+  // sees "a folder with a PDF in it" and calls the item supplied-pdf. A
+  // 391-page book whose scans sit right there then has its OCR run against
+  // the pipeline's own 1600px downscale, and the --pages fast path built to
+  // read the originals can never fire again.
+  const pages = (name: string) =>
+    folder(name, "1.jpg", "2.jpg", "3.jpg", "4.jpg", "5.jpg");
+
+  it("a first run of a page-image folder is unchanged", () => {
+    expect(classifyInput(pages("CERNAGORA"))).toBe("page-images");
+  });
+
+  it("stays page-images on a re-run, once the index says the PDF is ours", () => {
+    const assets = [
+      ...pages("CERNAGORA"),
+      ...folder("CERNAGORA", "CERNAGORA.pdf", "CERNAGORA_thumb.png"),
+    ];
+
+    expect(classifyInput(assets, "auto", {
+      folderName: "CERNAGORA",
+      webPdfIsOurs: true,
+    })).toBe("page-images");
+  });
+
+  it("without that state it still reads as supplied-pdf — the old behaviour", () => {
+    const assets = [...pages("CERNAGORA"), ...folder("CERNAGORA", "CERNAGORA.pdf")];
+
+    expect(classifyInput(assets)).toBe("supplied-pdf");
+  });
+
+  it("a PDF we did NOT build still counts as input, even alongside ours", () => {
+    // The reason this is keyed on recorded state rather than the filename: an
+    // operator's own PDF must not be discounted just because a derived one
+    // exists too.
+    const assets = [
+      ...pages("nb"),
+      ...folder("nb", "nb.pdf", "operator-supplied.pdf"),
+    ];
+
+    expect(classifyInput(assets, "auto", { folderName: "nb", webPdfIsOurs: true })).toBe(
+      "supplied-pdf",
+    );
+  });
+
+  it("a filed original under source/ keeps a processed supplied-pdf item stable", () => {
+    // Scanning is non-recursive, so once the supplied-pdf stage files the
+    // original the folder looks like bare page images. Without source/ being
+    // reported, this item would flip to page-images and rebuild its web PDF
+    // from a downscale of itself. docs/05 §9 — `Pisma iz Liona` is real.
+    const assets = [
+      ...pages("Pisma iz Liona"),
+      ...folder("Pisma iz Liona", "Pisma iz Liona.pdf"),
+      discoverAsset(
+        "Писма из Лиона_(310).pdf",
+        "/scans/Pisma iz Liona/source/Писма из Лиона_(310).pdf",
+        "Pisma iz Liona",
+      ),
+    ];
+
+    expect(classifyInput(assets, "auto", {
+      folderName: "Pisma iz Liona",
+      webPdfIsOurs: true,
+    })).toBe("supplied-pdf");
+  });
+
+  it("the filed original is not an upload candidate or a thumbnail candidate", () => {
+    const filed = discoverAsset(
+      "original.pdf",
+      "/scans/nb/source/original.pdf",
+      "nb",
+    );
+
+    expect(filed.kind).toBe("source-pdf");
+    expect(webPdfAssets([filed])).toEqual([]);
+    expect(thumbnailCandidates([filed])).toEqual([]);
+  });
+
+  it("discounting our own PDF never makes an item look empty", () => {
+    // A folder whose web PDF is the only thing left in it is a real, finished
+    // item - an already-processed supplied-pdf whose original was filed away.
+    // Calling it `empty` marks every completed stage inapplicable and reports
+    // the item as unprocessed, which is how this was caught: five existing
+    // tests went from `done` to `idle`.
+    const assets = folder("done", "done.pdf");
+
+    expect(classifyInput(assets, "auto", {
+      folderName: "done",
+      webPdfIsOurs: true,
+    })).toBe("supplied-pdf");
+  });
+
+  it("a genuinely empty folder is still empty", () => {
+    expect(classifyInput([], "auto", { folderName: "nb", webPdfIsOurs: true })).toBe(
+      "empty",
+    );
+  });
+
+  it("a root folder merely named 'source' does not make its PDFs filed", () => {
+    const asset = discoverAsset("nb.pdf", "/scans/source/nb.pdf", "source");
+
+    expect(asset.kind).toBe("web-pdf");
+  });
+});
 
 describe("classifyInput — the adaptive branch (docs/tasks/06 §Source inputs)", () => {
   it("TIFFs present → tiffs (even alongside a PDF/images)", () => {

@@ -153,29 +153,34 @@ def derive(source: Path, base: str, dest: Path, *, thumbnail_only: bool) -> Deri
 
         dest.mkdir(parents=True, exist_ok=True)
 
-        if thumbnail_only:
-            # Only page 1 is ever needed - rendering the rest of a 300-page
-            # document to throw it away would dominate the runtime.
-            log.info("Rendering page 1 of %d for the thumbnail", summary.pages)
-            pages = [render_page(document[0])]
-        else:
+        # Pages are rendered on demand and streamed into the PDF, never
+        # collected into a list. A rendered web-sized page is ~4 MB, so a
+        # 391-page document cost well over a gigabyte resident before any of
+        # it was written - fine on one test file, a memory gamble in an
+        # unattended overnight batch. `build_pdf_from_images` consumes the
+        # generator lazily (see its own comment).
+        if not thumbnail_only:
             log.info("Rendering %d page(s)", summary.pages)
-            pages = [render_page(document[i]) for i in range(summary.pages)]
+            web_pdf = dest / web_pdf_name(base)
+            log.info("  Building PDF (%d page(s)) -> %s", summary.pages, web_pdf.name)
+            build_pdf_from_images(
+                (render_page(document[i]) for i in range(summary.pages)), web_pdf
+            )
+            summary.outputs.append(web_pdf.name)
 
+        # Page 1 is rendered again rather than held back from the stream. One
+        # extra page render is nothing against a whole book, and holding a
+        # reference to the first page for the duration is exactly the thing
+        # that used to keep every page alive.
+        log.info("Rendering page 1 of %d for the thumbnail", summary.pages)
+        first = render_page(document[0])
         try:
-            if not thumbnail_only:
-                web_pdf = dest / web_pdf_name(base)
-                log.info("  Building PDF (%d page(s)) -> %s", len(pages), web_pdf.name)
-                build_pdf_from_images(pages, web_pdf)
-                summary.outputs.append(web_pdf.name)
-
             thumb = dest / thumbnail_name(base)
             log.info("  Building thumbnail from page 1 -> %s", thumb.name)
-            build_thumbnail_from_image(pages[0], thumb)
+            build_thumbnail_from_image(first, thumb)
             summary.outputs.append(thumb.name)
         finally:
-            for page in pages:
-                page.close()
+            first.close()
     finally:
         document.close()
 
