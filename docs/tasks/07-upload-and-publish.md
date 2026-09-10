@@ -137,7 +137,8 @@ run store + the composable + the tab `.vue` are intentionally deferred (see
   before assets**, so a mid-flight failure (or crash) leaves a recoverable link
   and a retry REPLACEs; and a create-409 (a deterministic COBISS id already
   exists) **reuses** the existing id (resolved via the COBISS preview) and links
-  it rather than reporting a dead end. **Retries transient** (network/timeout/5xx)
+  it rather than reporting a dead end. **Retries transient** (network/timeout/5xx — but *not* a timeout on the
+  payload-carrying calls, see the 2026-09-10 section)
   only; **trusts the write response** for the mirror (no CDC-lagged read-back);
   `extractedTexts` is scoped to the group that holds the PDFs; `doOCR` is always
   `false`. A replace with a missing local `version` refuses to write an
@@ -354,6 +355,87 @@ anyway. Test confirmed to fail without the fix (with that exact `TypeError`).
   trap is documented at the call surface (`services/api/items.transitionItems`)
   instead. **Whoever adds the first call must filter to ids currently in the
   *other* collection** — one already-transitioned id `400`s the entire batch.
+
+## Upload timed out against a live backend, 2026-09-10
+
+The first real upload against the backend failed on every large item. Not the
+connection — a **deadline**.
+
+`ApiClient` applies one flat **30 s** timeout to every request
+(`timeoutMs ?? 30_000`), armed with a `setTimeout` *before* the fetch and never
+reset while bytes are flowing. That is right for a JSON call and wrong for a
+file. The archive's derived web PDFs, measured on disk:
+
+| item | derived web PDF | rate needed to beat 30 s |
+|---|---|---|
+| `ОКТОИХ петогласник 1` | 104 MB | ~28 Mbit/s |
+| `CERNAGORA` | 66 MB | ~18 Mbit/s |
+| `CERNAGORA... 1851` | 53 MB | ~14 Mbit/s |
+| `Pisma iz Liona` | 12.8 MB | ~3.4 Mbit/s |
+
+…sustained, and covering the backend receiving the blob, writing it and
+replying. A transfer moving along perfectly well was being aborted mid-flight.
+
+**It was worse than one timeout.** `isTransient` counts a timeout as retryable
+(`ApiError.isNetworkError` includes `"timeout"`) and both transfer calls sit
+inside `withRetry` with `DEFAULT_RETRIES = 2` — so the same 104 MB went up
+three times, ~92 s, before the batch was told anything.
+
+This is the third instance of the same shape as the COBISS timeout above: a
+deadline chosen for one kind of request silently applied to a different kind.
+
+### The fix
+
+- **The deadline is derived from the payload.** `api/files.transferTimeoutMs`
+  = a 60 s base allowance (connect, plus the backend writing and replying) plus
+  the time the bytes need at a **1 Mbit/s floor**. 104 MB gets ~14 min, 12.8 MB
+  gets ~2.6 min. It is still a deadline — an overnight batch must not hang
+  forever on one dead socket — but one a healthy transfer cannot trip.
+- **The file service applies it itself**, from the blob sizes it is already
+  holding, rather than expecting every caller to remember. `extractedTexts`
+  counts toward it: a book's OCR text rides in the same multipart request and
+  is megabytes. `setFileText` gets the same treatment for the same reason.
+- **Payload-carrying calls no longer repeat a timeout.**
+  `upload.isTransientTransfer` = `isTransient` minus timeouts, used by
+  `withTransferRetry` for `uploadFiles` / `replaceFile` / `setFileText`. A
+  dropped connection is still worth another go; a timeout is not, because the
+  deadline was already sized for these exact bytes. The metadata calls keep the
+  old rule — a timeout there is cheap to repeat and might genuinely be a blip.
+
+Tests pin both halves. The payload-accounting test was checked to **fail**
+without the fix (removing the `extractedTexts` byte count makes it abort at the
+base allowance), per the habit set by the COBISS one.
+
+### Still open
+
+The derived "web" PDF for `CERNAGORA` is **66 MB against a 28 MB supplied
+original** — it is assembled from the 391 original scans, so for an item that
+shipped a PDF the "web" derivative is an *upscale*. That is a pipeline
+question (Epic 06), not an upload one, but it is why these files are large
+enough to have hit the deadline at all.
+
+## A book was publishing its page scans, 2026-09-10
+
+`uploadGroups` mapped every `image` asset to `FileRole.WEB`, so a folder's page
+scans were published alongside the PDF built from them. `Pisma iz Liona` sent
+its **52 `SP_*.jpg` scans — ~320 MB — beside a 12.8 MB PDF that already
+contains every one of those pages**, in six `WEB` requests (52 chunked at
+`MAX_FILES_PER_REQUEST`) instead of one.
+
+The reader needs the web PDF and the thumbnail. The scans are source material,
+exactly like the TIFFs and the archival master that `uploadRoleFor` already
+drops.
+
+**The rule:** when the folder holds a web PDF, the only `WEB` files are the
+PDF(s). Not a blanket "never send images" — an **images-only** item (a map, a
+poster, a graphical work) has no PDF *by design*, and there the images ARE the
+web assets (docs/tasks/06 §Source inputs). So the condition is the presence of
+a PDF, not the kind of the asset. A page image the operator picks as the
+primary still uploads, as `THUMBNAIL`.
+
+Implemented in `uploadGroups` rather than `uploadRoleFor`, which sees one asset
+at a time and cannot know whether a PDF exists. Effect on the one real item
+measured: **~333 MB in 7 requests → ~13.4 MB in 2**.
 
 ## Acceptance
 

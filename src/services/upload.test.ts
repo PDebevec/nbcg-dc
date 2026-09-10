@@ -851,3 +851,85 @@ describe("uploadBatch", () => {
     expect(out.results[0].status).toBe("forbidden");
   });
 });
+
+// ── retry policy on the calls that carry a payload ──────────────────────────
+//
+// A 105 MB web PDF that missed its deadline used to be sent three times before
+// the batch was told anything — the retry is for a flaky link, and against a
+// transfer that simply needs longer than it was given it only triples the wait.
+
+describe("transfer retries", () => {
+  it("does not repeat a file upload that timed out", async () => {
+    let calls = 0;
+    const deps = fakeDeps({
+      uploadFiles: vi.fn(async () => {
+        calls++;
+        throw apiError("timeout", 0);
+      }),
+    });
+
+    const res = await uploadItem(makeItem(), CTX, deps);
+
+    expect(res.status).toBe("error");
+    expect(calls).toBe(1);
+    expect(deps.sleep).not.toHaveBeenCalled();
+  });
+
+  it("still repeats a file upload that hit a dropped connection", async () => {
+    let calls = 0;
+    const deps = fakeDeps({
+      uploadFiles: vi.fn(async (_id: string, files: UploadFile[]) => {
+        calls++;
+        if (calls === 1) throw apiError("network", 0);
+        return files.map((f) => attachment(f.filename));
+      }),
+    });
+
+    const res = await uploadItem(makeItem(), CTX, deps);
+
+    expect(res.status).toBe("uploaded");
+    expect(deps.sleep).toHaveBeenCalledTimes(1);
+    // Three, not two: this item uploads a WEB group and a THUMBNAIL group, so
+    // there are two requests even before the retry.
+    expect(calls).toBe(3);
+  });
+
+  it("leaves the metadata calls alone — a timeout there is still worth a retry", async () => {
+    let calls = 0;
+    const deps = fakeDeps({
+      createItem: vi.fn(async () => {
+        calls++;
+        if (calls <= 1) throw apiError("timeout", 0);
+        return ENTITY;
+      }),
+    });
+
+    const res = await uploadItem(makeItem(), CTX, deps);
+
+    expect(res.status).toBe("uploaded");
+    expect(calls).toBe(2);
+  });
+
+  it("does not repeat a full-text write that timed out", async () => {
+    let calls = 0;
+    const deps = fakeDeps({
+      // Force the setFileText recovery path: the backend reports a filename
+      // that does not match what was sent, so the text is pushed by id.
+      uploadFiles: vi.fn(async (_id: string, files: UploadFile[]) =>
+        files.map((f) => attachment(`mangled-${f.filename}`)),
+      ),
+      setFileText: vi.fn(async () => {
+        calls++;
+        throw apiError("timeout", 0);
+      }),
+    });
+
+    const res = await uploadItem(makeItem(), CTX, deps);
+
+    expect(calls).toBe(1);
+    // The item still publishes — a text that could not be re-attached is a
+    // warning, not a lost upload — but it says so instead of retrying blind.
+    expect(res.status).toBe("uploaded");
+    expect(res.warnings.some((w) => w.message.includes("could not be attached"))).toBe(true);
+  });
+});

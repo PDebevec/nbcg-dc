@@ -226,6 +226,21 @@ fn walk(
         if name.starts_with('.') || SKIP_DIR_NAMES.contains(&name.as_str()) {
             continue;
         }
+        // `source/` inside an item folder is ours: `run_supplied_pdf_stage`
+        // files the operator's original PDF there once the web PDF is built
+        // (see `resolve_supplied_source`). It is not a record. Left listed, it
+        // became a candidate item of its own - `processed/Pisma iz Liona/source`
+        // showed up in the Overview as a record called "source" holding a
+        // 14 MB PDF, which could then be batched and published as a duplicate
+        // of the item it belongs to.
+        //
+        // Only inside an item, never at the root: `depth == 0` is a root child,
+        // where a folder genuinely named "source" is somebody's record and must
+        // still be listed. Same reasoning as `isFiledOriginal` anchoring on the
+        // grandparent rather than matching the name anywhere.
+        if depth > 0 && name == SOURCE_SUBFOLDER {
+            continue;
+        }
 
         let relative = if prefix.is_empty() {
             name

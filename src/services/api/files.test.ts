@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { ApiClient, type FetchLike } from "./client";
 import type { FileAttachment } from "./dto";
 import {
@@ -8,6 +8,8 @@ import {
   reextractFile,
   listFiles,
   deleteFile,
+  transferTimeoutMs,
+  TRANSFER_BASE_TIMEOUT_MS,
   type UploadFile,
 } from "./files";
 
@@ -134,5 +136,120 @@ describe("deleteFile", () => {
     await deleteFile("f1", { client });
     expect(calls[0].method).toBe("DELETE");
     expect(calls[0].url).toBe("https://api.test/api/files/f1");
+  });
+});
+
+// ── transfer deadlines ──────────────────────────────────────────────────────
+//
+// `ApiClient` puts one flat 30 s deadline on every request, armed before the
+// fetch and never reset while bytes flow. The archive's derived web PDFs are
+// 65–105 MB, so uploads that were transferring perfectly well were being
+// aborted mid-flight. The deadline is derived from the payload now.
+
+describe("transfer deadlines", () => {
+  it("scales with the payload instead of a flat thirty seconds", () => {
+    expect(transferTimeoutMs(0)).toBe(TRANSFER_BASE_TIMEOUT_MS);
+
+    // The real file that could not upload: ~105 MB.
+    const oktoih = transferTimeoutMs(105 * 1024 * 1024);
+    expect(oktoih).toBeGreaterThan(10 * 60_000);
+
+    // Monotone, and never below the base allowance.
+    expect(transferTimeoutMs(1_000)).toBeGreaterThanOrEqual(TRANSFER_BASE_TIMEOUT_MS);
+    expect(transferTimeoutMs(50e6)).toBeGreaterThan(transferTimeoutMs(5e6));
+  });
+
+  it("treats a negative or absurd size as zero rather than a deadline in the past", () => {
+    expect(transferTimeoutMs(-1)).toBe(TRANSFER_BASE_TIMEOUT_MS);
+  });
+
+  /** Run `send`, watching when (and whether) the client aborts it. */
+  async function watchAbort(
+    run: (client: ApiClient) => Promise<unknown>,
+  ): Promise<{ abortedAfter: () => boolean }> {
+    let aborted = false;
+    const fetchImpl: FetchLike = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          aborted = true;
+          reject(new Error("aborted"));
+        });
+      });
+    const client = new ApiClient({ baseUrl: "https://api.test", apiPrefix: "/api", fetchImpl });
+    void run(client).catch(() => {});
+    return { abortedAfter: () => aborted };
+  }
+
+  it("does not abort a large upload at the old thirty-second mark", async () => {
+    vi.useFakeTimers();
+    try {
+      const bytes = new Uint8Array(10 * 1024 * 1024);
+      const { abortedAfter } = await watchAbort((client) =>
+        uploadFiles("rec_1", [{ blob: new Blob([bytes]), filename: "big.pdf" }], {}, { client }),
+      );
+
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(abortedAfter()).toBe(false);
+
+      // …but it is still a deadline: a dead socket must not hang the batch.
+      await vi.advanceTimersByTimeAsync(transferTimeoutMs(bytes.byteLength));
+      expect(abortedAfter()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts the OCR text riding along in the same request", async () => {
+    vi.useFakeTimers();
+    try {
+      const text = "x".repeat(5_000_000);
+      const { abortedAfter } = await watchAbort((client) =>
+        uploadFiles(
+          "rec_1",
+          [blobFile("small.pdf")],
+          { extractedTexts: { "small.pdf": text } },
+          { client },
+        ),
+      );
+
+      // The blob is a few bytes; without counting the text this would have
+      // been aborted at the 60 s base allowance.
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(abortedAfter()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a caller override the derived deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const bytes = new Uint8Array(10 * 1024 * 1024);
+      const { abortedAfter } = await watchAbort((client) =>
+        uploadFiles("rec_1", [{ blob: new Blob([bytes]), filename: "big.pdf" }], {}, {
+          client,
+          timeoutMs: 5_000,
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(abortedAfter()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives a full-text write the same treatment", async () => {
+    vi.useFakeTimers();
+    try {
+      const { abortedAfter } = await watchAbort((client) =>
+        setFileText("f1", "x".repeat(5_000_000), { client }),
+      );
+
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(abortedAfter()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

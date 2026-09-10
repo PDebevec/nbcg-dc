@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { useProcessing } from "@composables/useProcessing";
+import { useProcessing, type ProcessingItemView } from "@composables/useProcessing";
+import type { StepState, StepView } from "@domain/steps";
+import type { RunnableStage } from "@domain/pipeline";
 import ProgressBar from "../../components/batch/ProgressBar.vue";
 
 const props = defineProps<{ batchId: string }>();
@@ -24,6 +26,7 @@ const {
   log,
   start,
   rerunItem,
+  rerunStep,
   rerunAllFailed,
   cancel,
   upload,
@@ -38,6 +41,69 @@ const statusGlyphs: Record<string, string> = {
   done: "✓",
   failed: "✗",
 };
+
+// ── expansion ───────────────────────────────────────────
+// A row that needs a person opens by itself — nobody should have to expand
+// a hundred items to find the two that are stuck. Manual clicks win either
+// way, so the two sets are kept apart rather than pre-seeding one.
+const opened = ref(new Set<string>());
+const closed = ref(new Set<string>());
+
+function isOpen(row: ProcessingItemView): boolean {
+  if (opened.value.has(row.id)) return true;
+  if (closed.value.has(row.id)) return false;
+  return row.attention !== null;
+}
+
+function toggle(row: ProcessingItemView): void {
+  const open = isOpen(row);
+  const next = { opened: new Set(opened.value), closed: new Set(closed.value) };
+  next.opened.delete(row.id);
+  next.closed.delete(row.id);
+  (open ? next.closed : next.opened).add(row.id);
+  opened.value = next.opened;
+  closed.value = next.closed;
+}
+
+const allOpen = computed(() => rows.value.length > 0 && rows.value.every(isOpen));
+
+function toggleAll(): void {
+  const open = !allOpen.value;
+  opened.value = new Set(open ? rows.value.map((r) => r.id) : []);
+  closed.value = new Set(open ? [] : rows.value.map((r) => r.id));
+}
+
+// ── step presentation ─────────────────────────────────────
+const STEP_GLYPHS: Record<StepState, string> = {
+  done: "✓",
+  running: "",
+  queued: "○",
+  failed: "✗",
+  held: "!",
+  waiting: "○",
+  skipped: "–",
+};
+
+const STEP_STATE_LABELS: Record<StepState, string> = {
+  done: "Done",
+  running: "Running",
+  queued: "Queued",
+  failed: "Failed",
+  held: "Needs you",
+  waiting: "Not run",
+  skipped: "N/A",
+};
+
+/** What the step's own button offers, given where the step got to. */
+function stepAction(step: StepView): string {
+  if (step.state === "failed") return "Try again";
+  if (step.state === "done") return "Run again";
+  return "Run step";
+}
+
+function runStep(row: ProcessingItemView, step: StepView): void {
+  void rerunStep(row.id, step.stage as RunnableStage);
+}
 </script>
 
 <template>
@@ -101,13 +167,20 @@ const statusGlyphs: Record<string, string> = {
       <div v-if="rows.length === 0" class="empty">
         No items the index knows about — rescan the folders on the Overview.
       </div>
+      <div v-else class="list-head">
+        <span class="list-title">Items</span>
+        <button class="link-btn" @click="toggleAll()">
+          {{ allOpen ? "Collapse all steps" : "Expand all steps" }}
+        </button>
+      </div>
       <div
         v-for="row in rows"
         :key="row.id"
         class="proc-row"
-        :class="{ failed: row.status === 'failed' }"
+        :class="{ failed: row.status === 'failed', open: isOpen(row) }"
       >
-        <div class="proc-main">
+        <div class="proc-main" role="button" tabindex="0" @click="toggle(row)" @keydown.enter="toggle(row)" @keydown.space.prevent="toggle(row)">
+          <span class="chevron" :class="{ open: isOpen(row) }">▸</span>
           <span class="status-chip" :class="row.status">
             <span v-if="row.status === 'running'" class="spinner dark" />
             <template v-else>{{ statusGlyphs[row.status] }}</template>
@@ -119,9 +192,68 @@ const statusGlyphs: Record<string, string> = {
           <span v-if="row.error" class="proc-error" :title="row.error">{{ row.error }}</span>
           <span v-if="row.progressLabel" class="proc-live">{{ row.progressLabel }}</span>
           <span class="proc-status" :class="row.status">{{ row.statusLabel }}</span>
-          <button v-if="row.canRerun" class="rerun-btn" @click="rerunItem(row.id)">
+          <button
+            v-if="row.canRerun"
+            class="rerun-btn"
+            @click.stop="rerunItem(row.id)"
+          >
             ↻ Rerun
           </button>
+        </div>
+
+        <!-- the row's own progress, so a long item is legible while collapsed -->
+        <div class="item-progress">
+          <ProgressBar :ratio="row.completion" :height="4" />
+          <span class="item-pct">{{ Math.round(row.completion * 100) }}%</span>
+        </div>
+
+        <!-- what needs a person, visible without expanding -->
+        <div
+          v-if="row.attention && !isOpen(row)"
+          class="attention"
+          :class="row.attention.state"
+        >
+          <span class="note-glyph">{{ row.attention.state === "failed" ? "✗" : "!" }}</span>
+          <b>{{ row.attention.label }}</b>
+          <span>— {{ row.attention.error ?? row.attention.action }}</span>
+        </div>
+
+        <!-- expanded: one row per step -->
+        <div v-if="isOpen(row)" class="steps">
+          <div
+            v-for="step in row.steps"
+            :key="step.stage"
+            class="step"
+            :class="step.state"
+          >
+            <span class="step-glyph" :class="step.state">
+              <span v-if="step.state === 'running'" class="spinner dark small" />
+              <template v-else>{{ STEP_GLYPHS[step.state] }}</template>
+            </span>
+            <span class="step-label">{{ step.label }}</span>
+            <span class="step-detail">{{ step.detail }}</span>
+            <span class="step-state" :class="step.state">
+              {{ STEP_STATE_LABELS[step.state] }}
+            </span>
+            <button
+              v-if="step.rerunnable"
+              class="step-btn"
+              :disabled="!row.canRerunStep"
+              :title="
+                row.canRerunStep
+                  ? `Run only this step — nothing else is re-processed`
+                  : 'Not while a batch is running, or after upload'
+              "
+              @click.stop="runStep(row, step)"
+            >
+              {{ stepAction(step) }}
+            </button>
+            <span v-else class="step-btn-spacer" />
+
+            <!-- the error, or the decision, in full -->
+            <div v-if="step.error" class="step-note hard">{{ step.error }}</div>
+            <div v-else-if="step.action" class="step-note soft">{{ step.action }}</div>
+          </div>
         </div>
 
         <!-- pre-upload gates -->
@@ -517,8 +649,230 @@ const statusGlyphs: Record<string, string> = {
   flex: none;
 }
 
+/* ── expandable steps ─────────────────────────────────── */
+.list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--c-border-row);
+}
+
+.list-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--c-text-faint);
+}
+
+.link-btn {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-primary);
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.proc-row.open {
+  background: var(--c-surface-input-alt);
+}
+
+.proc-row.open.failed {
+  background: var(--c-danger-row);
+}
+
+.proc-main {
+  cursor: pointer;
+}
+
+.chevron {
+  flex: none;
+  width: 12px;
+  font-size: 10px;
+  color: var(--c-text-faint);
+  transition: transform 0.15s;
+}
+
+.chevron.open {
+  transform: rotate(90deg);
+}
+
+.item-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0 0 54px;
+}
+
+.item-pct {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--c-text-faint);
+  min-width: 32px;
+  text-align: right;
+}
+
+.attention {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  margin: 8px 0 0 54px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.attention.failed {
+  color: var(--c-danger-text);
+}
+
+.attention.held {
+  color: var(--c-warn-deep);
+}
+
+.steps {
+  margin: 10px 0 2px 54px;
+  border-left: 2px solid var(--c-border-row);
+}
+
+/* Fixed track widths, not `auto`: each step row is its own grid, so `auto`
+   columns would size themselves per row and the labels would stagger down the
+   list instead of lining up. */
+.step {
+  display: grid;
+  grid-template-columns: 18px 76px 1fr 68px 92px;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  font-size: 12.5px;
+}
+
+.step + .step {
+  border-top: 1px solid var(--c-border-row);
+}
+
+.step.skipped {
+  opacity: 0.6;
+}
+
+.step-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--c-idle-dot);
+  background: var(--c-idle-bg-alt);
+}
+
+.step-glyph.done {
+  color: var(--c-success);
+  background: var(--c-success-bg);
+}
+
+.step-glyph.failed {
+  color: var(--c-danger);
+  background: var(--c-danger-bg);
+}
+
+.step-glyph.held {
+  color: var(--c-warn-deep);
+  background: var(--c-warn-bg);
+}
+
+.step-glyph.running,
+.step-glyph.queued {
+  color: var(--c-info);
+  background: var(--c-info-bg);
+}
+
+.step-label {
+  font-weight: 600;
+  color: var(--c-text-mid);
+}
+
+.step-detail {
+  color: var(--c-text-muted);
+  min-width: 0;
+}
+
+.step-state {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-text-faint);
+  white-space: nowrap;
+}
+
+.step-state.done {
+  color: var(--c-success);
+}
+
+.step-state.failed {
+  color: var(--c-danger);
+}
+
+.step-state.held {
+  color: var(--c-warn-deep);
+}
+
+.step-state.running,
+.step-state.queued {
+  color: var(--c-info);
+}
+
+.step-btn {
+  width: 100%;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 7px;
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  color: var(--c-text-mid);
+  font-weight: 600;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.step-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.step-btn-spacer {
+  display: block;
+}
+
+/* The error text / the decision, on its own line under the step it belongs
+   to — the one place a librarian can read the whole message. */
+.step-note {
+  grid-column: 2 / -1;
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  border-radius: var(--r-sm);
+  padding: 7px 9px;
+}
+
+.step-note.hard {
+  color: var(--c-danger-text);
+  background: var(--c-danger-bg);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.step-note.soft {
+  color: var(--c-warn-deep);
+  background: var(--c-warn-bg);
+}
+
 .notes {
-  margin: 8px 0 0 42px;
+  margin: 8px 0 0 54px;
   display: flex;
   flex-direction: column;
   gap: 4px;

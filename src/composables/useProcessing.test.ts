@@ -7,6 +7,7 @@ import { BatchStage, ItemRunStatus, type Batch } from "@domain/batch";
 import { PublishTarget, VisibilityStatus } from "@domain/enums";
 import type { BatchRunRequest } from "@ipc/bindings";
 import type { JobDoneEvent, JobProgressEvent, JobStageChangedEvent } from "@ipc/events";
+import type { ItemUploadResult } from "@services/upload";
 
 // This composable never touches the DOM: getCurrentInstance() is null outside
 // a mounted component, so onMounted(init) is simply skipped — no jsdom needed.
@@ -76,6 +77,7 @@ function makeBatch(itemIds: string[], over: Partial<Batch> = {}): Batch {
 
 const drive = {
   start: [] as BatchRunRequest[],
+  reprocess: [] as BatchRunRequest[],
   cancel: [] as string[],
   rejectWith: null as Error | null,
 };
@@ -97,6 +99,7 @@ vi.mock("@services/pipeline", async (importOriginal) => {
       maybeThrow();
     },
     reprocessRun: async (r: BatchRunRequest) => {
+      drive.reprocess.push(r);
       maybeThrow();
       return r;
     },
@@ -156,16 +159,17 @@ const metadataFake = {
 };
 vi.mock("@stores/useMetadata", () => ({ useMetadataStore: () => metadataFake }));
 
-vi.mock("@stores/useUpload", () => ({
-  useUploadStore: () => ({
-    activeBatchId: ref<string | null>(null),
-    progress: ref(null),
-    results: ref(new Map()),
-    error: ref<string | null>(null),
-    run: async () => true,
-    resultsFor: () => new Map(),
-  }),
-}));
+// Module-level so a test can seed an upload result and have the composable's
+// `results` computed see it (a fresh object per call could not be reached).
+const uploadFake = {
+  activeBatchId: ref<string | null>(null),
+  progress: ref(null),
+  results: ref(new Map<string, Map<string, ItemUploadResult>>()),
+  error: ref<string | null>(null),
+  run: async () => true,
+  resultsFor: () => new Map(),
+};
+vi.mock("@stores/useUpload", () => ({ useUploadStore: () => uploadFake }));
 
 // Deferred imports so the mock factories above close over already-initialised
 // fixtures (same pattern as stores/useSettings.test.ts).
@@ -184,6 +188,7 @@ function seed(batch: Batch, items: Item[]) {
 beforeEach(() => {
   setActivePinia(createPinia());
   drive.start = [];
+  drive.reprocess = [];
   drive.cancel = [];
   drive.rejectWith = null;
   watch.stage = [];
@@ -193,6 +198,7 @@ beforeEach(() => {
   itemsFake.loaded = true;
   itemsFake.refreshCalls = 0;
   metadataFake.ready = true;
+  uploadFake.results.value = new Map();
 });
 
 describe("showCancel", () => {
@@ -357,5 +363,216 @@ describe("live rows", () => {
     expect(view.rows.value[0].status).toBe("idle");
     expect(view.rows.value[0].statusLabel).toBe("Not started");
     expect(view.showStart.value).toBe(true);
+  });
+});
+
+// ── the expanded per-step view ──────────────────────────────────────────────
+//
+// Built for the operator who was told only "Not fully processed yet
+// (thumbnail)." at upload time, with no way to see which step was outstanding
+// or to run just that one.
+
+describe("per-step rows", () => {
+  it("gives every item one row per pipeline stage", () => {
+    const item = makeItem({ id: "nb", folderName: "nb", assets: [asset("nb", "nb.pdf")] });
+    seed(makeBatch(["nb"]), [item]);
+    const view = useProcessing(() => "b1");
+
+    expect(view.rows.value[0].steps.map((s) => s.stage)).toEqual([
+      "pdf",
+      "thumbnail",
+      "ocr",
+      "metadata",
+      "upload",
+    ]);
+  });
+
+  // The exact shape that stalled: the run finished, nothing failed, and the
+  // thumbnail stage sits at Pending because 53 loose images are 53 equal
+  // candidates (`settle_web_stages` holds it there on purpose).
+  it("names the step that is holding a finished-looking item, and offers to run it", () => {
+    const item = makeItem({
+      id: "liona",
+      folderName: "liona",
+      assets: [
+        asset("liona", "Pisma_iz_Liona_310.pdf"),
+        asset("liona", "01.jpg"),
+        asset("liona", "02.jpg"),
+      ],
+      stages: stagesWith({ pdf: "done", thumbnail: "pending", ocr: "done" }),
+    });
+    seed(
+      makeBatch(["liona"], {
+        stage: BatchStage.Processing,
+        proc: { liona: ItemRunStatus.Done },
+      }),
+      [item],
+    );
+    const view = useProcessing(() => "b1");
+    const row = view.rows.value[0];
+    const thumbnail = row.steps.find((s) => s.stage === "thumbnail")!;
+
+    expect(thumbnail.state).toBe("held");
+    expect(thumbnail.action).toBeTruthy();
+    expect(thumbnail.rerunnable).toBe(true);
+    expect(row.attention?.stage).toBe("thumbnail");
+  });
+
+  it("surfaces a stage failure as the step's own error, not just a row-level string", () => {
+    const item = makeItem({
+      id: "nb",
+      folderName: "nb",
+      assets: [asset("nb", "nb.pdf")],
+      stages: { ...emptyStages(), ocr: { status: "failed", error: "ocr.py failed: exit 3" } },
+    });
+    seed(
+      makeBatch(["nb"], { stage: BatchStage.Processing, proc: { nb: ItemRunStatus.Failed } }),
+      [item],
+    );
+    const view = useProcessing(() => "b1");
+    const ocr = view.rows.value[0].steps.find((s) => s.stage === "ocr")!;
+
+    expect(ocr.state).toBe("failed");
+    expect(ocr.error).toBe("ocr.py failed: exit 3");
+  });
+
+  // The sentence the operator was actually left with. `services/upload` puts
+  // only the first blocker's bare text on the result, so "Not fully processed
+  // yet (thumbnail)." arrived with no next move attached.
+  it("re-renders a blocked upload result through the GUI copy, with a next move", () => {
+    const item = makeItem({
+      id: "nb",
+      folderName: "nb",
+      assets: [asset("nb", "nb.pdf")],
+      stages: stagesWith({ pdf: "done", thumbnail: "pending", ocr: "done" }),
+    });
+    seed(
+      makeBatch(["nb"], { stage: BatchStage.Processing, proc: { nb: ItemRunStatus.Done } }),
+      [item],
+    );
+    uploadFake.results.value = new Map([
+      [
+        "b1",
+        new Map([
+          [
+            "nb",
+            {
+              itemId: "nb",
+              status: "blocked" as const,
+              backendId: null,
+              blockers: [
+                { code: "not-processed" as const, message: "Not fully processed yet (thumbnail)." },
+                { code: "metadata-invalid" as const, message: "Required metadata is incomplete or invalid." },
+              ],
+              warnings: [],
+              fieldErrors: [],
+              relationErrors: [],
+              parentStates: [],
+              message: "Not fully processed yet (thumbnail).",
+            },
+          ],
+        ]),
+      ],
+    ]);
+    const view = useProcessing(() => "b1");
+    const upload = view.rows.value[0].upload!;
+
+    expect(upload.message).toContain("thumbnail");
+    expect(upload.message).toMatch(/run just that step/i);
+    // Every gate, not only the first — two blockers meant two trips before.
+    expect(upload.fieldErrors).toHaveLength(1);
+    expect(upload.fieldErrors[0]).toMatch(/Metadata tab/);
+  });
+});
+
+describe("rerunStep", () => {
+  it("re-processes exactly the one step asked for, forced, and nothing downstream", async () => {
+    const item = makeItem({
+      id: "nb",
+      folderName: "nb",
+      assets: [asset("nb", "nb.pdf")],
+      stages: stagesWith({ pdf: "done", thumbnail: "done", ocr: "done" }),
+    });
+    seed(
+      makeBatch(["nb"], { stage: BatchStage.Processing, proc: { nb: ItemRunStatus.Done } }),
+      [item],
+    );
+    const view = useProcessing(() => "b1");
+
+    await view.rerunStep("nb", "thumbnail");
+
+    expect(drive.reprocess).toHaveLength(1);
+    expect(drive.reprocess[0].items).toHaveLength(1);
+    expect(drive.reprocess[0].items[0].itemId).toBe("nb");
+    // Not pdf, not ocr — an hours-long OCR must never be a side effect of
+    // fixing a thumbnail.
+    expect(drive.reprocess[0].items[0].stages).toEqual(["thumbnail"]);
+  });
+
+  it("does nothing while a batch is already running", async () => {
+    const item = makeItem({ id: "nb", folderName: "nb", assets: [asset("nb", "nb.pdf")] });
+    seed(makeBatch(["nb"], { running: true }), [item]);
+    const view = useProcessing(() => "b1");
+
+    expect(view.rows.value[0].canRerunStep).toBe(false);
+    await view.rerunStep("nb", "ocr");
+    expect(drive.reprocess).toHaveLength(0);
+  });
+});
+
+describe("the batch progress bar", () => {
+  it("moves while a single long item is still running, instead of sitting at zero", () => {
+    const item = makeItem({
+      id: "nb",
+      folderName: "nb",
+      assets: [asset("nb", "nb.pdf")],
+      stages: stagesWith({ pdf: "done", thumbnail: "done", ocr: "pending" }),
+    });
+    seed(makeBatch(["nb"], { stage: BatchStage.Processing }), [item]);
+    const view = useProcessing(() => "b1");
+
+    expect(view.ratio.value).toBeGreaterThan(0);
+    // …but the hours-long step is still ahead, so it must not read nearly done.
+    expect(view.ratio.value).toBeLessThan(0.25);
+  });
+
+  it("stops short of 100% when a step is still outstanding on a done-looking item", () => {
+    const held = makeItem({
+      id: "liona",
+      folderName: "liona",
+      assets: [
+        asset("liona", "Pisma_iz_Liona_310.pdf"),
+        asset("liona", "01.jpg"),
+        asset("liona", "02.jpg"),
+      ],
+      stages: stagesWith({ pdf: "done", thumbnail: "pending", ocr: "done" }),
+    });
+    seed(
+      makeBatch(["liona"], {
+        stage: BatchStage.Processing,
+        proc: { liona: ItemRunStatus.Done },
+      }),
+      [held],
+    );
+    const view = useProcessing(() => "b1");
+
+    expect(view.ratio.value).toBeLessThan(1);
+    expect(view.ratio.value).toBeGreaterThan(0.9);
+  });
+
+  it("reaches 100% when every applicable step really is done", () => {
+    const item = makeItem({
+      id: "nb",
+      folderName: "nb",
+      assets: [asset("nb", "nb.pdf"), asset("nb", "cover.jpg")],
+      stages: stagesWith({ pdf: "done", thumbnail: "done", ocr: "done" }),
+    });
+    seed(
+      makeBatch(["nb"], { stage: BatchStage.Processing, proc: { nb: ItemRunStatus.Done } }),
+      [item],
+    );
+    const view = useProcessing(() => "b1");
+
+    expect(view.ratio.value).toBe(1);
   });
 });

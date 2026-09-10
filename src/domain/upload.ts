@@ -284,6 +284,11 @@ export const MAX_FILES_PER_REQUEST = 10;
  * and it is easy to exceed — a graphical work with a dozen plates does it, and so
  * does any book the operator marks as `graphical` (`domain/pipeline.ContentKind`),
  * which for a 260-page scan would have sent 260 files in one request.
+ *
+ * **A book's page images are not published.** When the folder holds a web PDF,
+ * the only `WEB` files are the PDF(s) themselves — the page scans they were
+ * built from stay local, like the TIFFs and the archival master. See the body
+ * for why an images-only item is the exception.
  */
 export function uploadGroups(
   assets: DiscoveredAsset[],
@@ -291,10 +296,21 @@ export function uploadGroups(
   maxPerRequest: number = MAX_FILES_PER_REQUEST,
 ): UploadGroup[] {
   const primary = resolvePrimaryThumbnail(assets, primaryThumbnail);
+  // Once the folder has a web PDF, the images beside it are the SOURCE that
+  // PDF was built from, not things to publish: the reader gets the PDF and
+  // the thumbnail. `Pisma iz Liona` was sending its 52 page scans — ~320 MB
+  // of JPGs against a 12.8 MB PDF — as WEB attachments on top of the PDF that
+  // already contains every one of those pages.
+  //
+  // Only when there is no PDF do the images stay: an images-only item (a map,
+  // a poster, a graphical work) has no PDF by design, and there the images
+  // ARE the web assets (docs/tasks/06 §Source inputs).
+  const hasWebPdf = assets.some((a) => a.kind === "web-pdf");
   const byRole = new Map<FileRole, DiscoveredAsset[]>();
   for (const asset of assets) {
     const role = uploadRoleFor(asset, primary);
     if (role == null) continue;
+    if (hasWebPdf && role === FileRole.WEB && asset.kind !== "web-pdf") continue;
     const bucket = byRole.get(role);
     if (bucket) bucket.push(asset);
     else byRole.set(role, [asset]);

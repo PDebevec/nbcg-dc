@@ -260,23 +260,52 @@ function isTransient(err: unknown): boolean {
   );
 }
 
+/**
+ * The retry rule for a **file transfer**: same as {@link isTransient}, minus
+ * timeouts.
+ *
+ * A dropped connection is worth another go. A timeout is not: the deadline is
+ * already derived from the payload (`api/files.transferTimeoutMs`), so a
+ * second attempt sends the same bytes against the same clock and fails the
+ * same way — it just does it three times. That is what turned one 105 MB web
+ * PDF into ~92 seconds of re-uploading before the batch was told anything.
+ */
+function isTransientTransfer(err: unknown): boolean {
+  return isTransient(err) && !(err instanceof ApiError && err.kind === "timeout");
+}
+
 /** Run `fn`, retrying transient failures with linear backoff. */
 async function withRetry<T>(
   fn: () => Promise<T>,
   deps: UploadDeps,
-  retries = DEFAULT_RETRIES,
+  options: {
+    retries?: number;
+    /** Which failures to repeat (default {@link isTransient}). */
+    retryable?: (err: unknown) => boolean;
+  } = {},
 ): Promise<T> {
+  const retries = options.retries ?? DEFAULT_RETRIES;
+  const retryable = options.retryable ?? isTransient;
   let lastErr: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (attempt === retries || !isTransient(err)) throw err;
+      if (attempt === retries || !retryable(err)) throw err;
       await deps.sleep(RETRY_BASE_MS * (attempt + 1));
     }
   }
   throw lastErr;
+}
+
+/**
+ * {@link withRetry} for the calls that carry a payload — the file transfers and
+ * the full-text writes, i.e. exactly the ones whose deadline is derived from
+ * their own size.
+ */
+function withTransferRetry<T>(fn: () => Promise<T>, deps: UploadDeps): Promise<T> {
+  return withRetry(fn, deps, { retryable: isTransientTransfer });
 }
 
 // ─── file reading (disk → multipart) ────────────────────────────────────────
@@ -622,7 +651,7 @@ async function uploadCreateAssets(
     // avoid (see `splitEmptyTexts`).
     const groupTexts = pickTexts(extractedTexts, group.assets);
     const { supplied, emptyFilenames } = splitEmptyTexts(groupTexts);
-    const attachments = await withRetry(
+    const attachments = await withTransferRetry(
       () =>
         deps.uploadFiles(backendId, files, {
           role: group.role,
@@ -686,7 +715,7 @@ async function repairMangledText(
     if (!text) continue; // nothing to recover for this file
 
     try {
-      await withRetry(() => deps.setFileText(attachment.id, text), deps);
+      await withTransferRetry(() => deps.setFileText(attachment.id, text), deps);
       logger.info(
         "upload",
         `Re-attached the full text of "${expected}" by file id after a filename mismatch.`,
@@ -800,7 +829,7 @@ async function settleEmptyTexts(
   for (let i = 0; i < sent.length; i += 1) {
     if (!empty.has(sent[i].filename)) continue;
     try {
-      await withRetry(() => deps.setFileText(attachments[i].id, ""), deps);
+      await withTransferRetry(() => deps.setFileText(attachments[i].id, ""), deps);
     } catch (err) {
       logger.warn(
         "upload",
@@ -888,7 +917,7 @@ async function pushReplaceAssets(
         const textAsset = textByPdf.get(asset.filename);
         if (!textAsset) continue; // e.g. a thumbnail asset — nothing to push
         const text = await deps.readTextFile(textAsset.path);
-        await withRetry(() => deps.setFileText(match.id, text), deps);
+        await withTransferRetry(() => deps.setFileText(match.id, text), deps);
         continue; // no blob PUT — the whole point of "text-only"
       }
       const file = await toUploadFile(asset, deps);
@@ -896,7 +925,7 @@ async function pushReplaceAssets(
       const extractedText = textAsset
         ? await deps.readTextFile(textAsset.path)
         : undefined;
-      const replaced = await withRetry(
+      const replaced = await withTransferRetry(
         () => deps.replaceFile(match.id, file, { doOCR: false, extractedText }),
         deps,
       );
@@ -911,7 +940,7 @@ async function pushReplaceAssets(
       }
       // Same empty-entry hazard as the create path — see `splitEmptyTexts`.
       const { supplied, emptyFilenames } = splitEmptyTexts(extractedTexts);
-      const created = await withRetry(
+      const created = await withTransferRetry(
         () =>
           deps.uploadFiles(backendId, files, {
             role: group.role,

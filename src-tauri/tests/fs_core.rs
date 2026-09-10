@@ -285,6 +285,56 @@ fn scan_skips_dotfolders_and_windows_junk_folders() {
     assert_eq!(found[0].folder_name, "BOOK");
 }
 
+/// `source/` inside an item folder is where `run_supplied_pdf_stage` files the
+/// operator's original PDF. Listed as a candidate it became a record of its
+/// own — `processed/Pisma iz Liona/source` appeared in the Overview as an item
+/// called "source" holding a 14 MB PDF, ready to be batched and published as a
+/// duplicate of the very item it belongs to.
+#[test]
+fn scan_skips_the_filed_source_folder_inside_an_item() {
+    let root = TempDir::new().unwrap();
+    let book = make_item_dir(root.path(), "BOOK", &[("BOOK.pdf", "web")]);
+    std::fs::create_dir_all(book.join("source")).unwrap();
+    std::fs::write(book.join("source").join("original.pdf"), "supplied").unwrap();
+
+    let found = fs::scan_root(root.path(), ScanRoot::Unprocessed).unwrap();
+
+    assert_eq!(
+        found.iter().map(|f| f.folder_name.as_str()).collect::<Vec<_>>(),
+        vec!["BOOK"],
+    );
+}
+
+/// …but only *inside* an item. At the scan root a folder named "source" is
+/// somebody's record and must still be listed — the same reason the frontend's
+/// `isFiledOriginal` anchors on the grandparent instead of matching the name
+/// wherever it appears.
+#[test]
+fn scan_still_lists_a_root_level_folder_named_source() {
+    let root = TempDir::new().unwrap();
+    make_item_dir(root.path(), "source", &[("1.jpg", "a")]);
+
+    let found = fs::scan_root(root.path(), ScanRoot::Unprocessed).unwrap();
+
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].folder_name, "source");
+}
+
+/// A nested record is still a record: skipping `source` must not be read as
+/// "stop recursing into item folders".
+#[test]
+fn scan_still_recurses_past_a_skipped_source_folder() {
+    let root = TempDir::new().unwrap();
+    let book = make_item_dir(root.path(), "BOOK", &[]);
+    std::fs::create_dir_all(book.join("source")).unwrap();
+    std::fs::create_dir_all(book.join("VOLUME 2")).unwrap();
+
+    let found = fs::scan_root(root.path(), ScanRoot::Unprocessed).unwrap();
+
+    let names: Vec<_> = found.iter().map(|f| f.folder_name.as_str()).collect();
+    assert_eq!(names, vec!["BOOK", "VOLUME 2"]);
+}
+
 #[test]
 fn scan_respects_the_max_depth_safety_cap() {
     // A pathologically deep single-child chain — the cap is a safety valve

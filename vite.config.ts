@@ -20,7 +20,6 @@ const alias = {
 
 // https://vite.dev/config/
 export default defineConfig(() => ({
-  plugins: [vue()],
   resolve: { alias },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
@@ -41,7 +40,46 @@ export default defineConfig(() => ({
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      //
+      // …and the scan roots, which sit inside the repo on the dev machine
+      // (`arh/` unprocessed, `processed/` published) and hold gigabytes the
+      // app itself is writing, moving and locking. The same exclusions are
+      // already in `pyrightconfig.json` and `.vscode/settings.json`; the dev
+      // server never got them, so it was watching ~3 GB of scans and died
+      // with `EBUSY … watch 'processed/Pisma iz Liona/metadata.json'` the
+      // moment an upload moved a folder out from under it.
+      //
+      // Both forms per directory on purpose: `**/arh/**` matches what is
+      // inside it, `**/arh` the directory node itself.
+      ignored: [
+        "**/src-tauri/**",
+        "**/arh",
+        "**/arh/**",
+        "**/processed",
+        "**/processed/**",
+      ],
     },
   },
+
+  plugins: [
+    vue(),
+    {
+      // A watcher error must not take the dev server with it.
+      //
+      // chokidar re-emits a failed `fs.watch` as an `error` event, and an
+      // `error` with no listener is a hard Node crash — which then fails
+      // Tauri's `beforeDevCommand` and kills the whole session. Windows
+      // hands out `EBUSY` for any file something else holds open, so this is
+      // reachable whenever the app and the dev server touch the same path,
+      // exclusions or not. Log it and carry on: a missed watch costs one
+      // manual reload, not the session.
+      name: "nbcg-tolerate-watcher-errors",
+      apply: "serve" as const,
+      configureServer(server: { watcher: { on: (e: string, cb: (err: Error) => void) => void } }) {
+        server.watcher.on("error", (err: Error) => {
+          console.warn(`[vite] file watcher error (ignored): ${err.message}`);
+        });
+      },
+    },
+  ],
 }));

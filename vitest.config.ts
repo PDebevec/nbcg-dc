@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import vue from "@vitejs/plugin-vue";
 // @ts-expect-error type error without @types/node package
 import { fileURLToPath, URL } from "node:url";
 
@@ -16,6 +17,11 @@ const alias = {
 };
 
 export default defineConfig({
+  // The logic lane's tests never touch the DOM, but the Processing tab's
+  // template is real work that `vue-tsc` cannot fully check, so it is
+  // smoke-rendered through `vue/server-renderer` - which still needs .vue
+  // files compiled.
+  plugins: [vue()],
   resolve: { alias },
   test: {
     environment: "node",

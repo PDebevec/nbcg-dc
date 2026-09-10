@@ -48,6 +48,13 @@
 > uses the whole machine. Other stages are unaffected: `maxConcurrentItems`
 > still runs several items' PDF/thumbnail work at once.
 >
+> **The Processing tab shows its steps now — 2026-09-10.** The tab's per-item
+> rows expand into one row per pipeline step, each saying what it did, what
+> failed, or which human decision it is waiting on, with a Run button that
+> re-runs that one step. The batch bar is weighted by measured step cost rather
+> than counting finished items. Full write-up further down (§Processing tab,
+> per-step view).
+>
 > **Known flaky test**, pre-existing and unrelated:
 > `core::jobs::tests::semaphore_never_exceeds_its_permit_count` asserts
 > `high_water == 2`, i.e. that two threads *actually overlapped*. That is a
@@ -274,7 +281,9 @@ in the folder:
       — **`.ts` ✅** `useProcessing.rerunItem` (re-runs an item's failed stage +
       any downstream stages the failure left pending) and `rerunFailed`
       (`failedItemIds`); `settleStageAfterRun` → `ready` once every item's run is
-      `done`, else stays `processing`. **`.vue` ◻** the two controls.
+      `done`, else stays `processing`. **`.vue` ✅** both controls, plus a
+      third grain the task did not ask for and the operator did: a single
+      **step** of a single item (see the per-step view section below).
 - [x] **Atomic writes**: write each derived output to a temp file then rename, so
       a crashed/re-run step never leaves a partial that looks "done".
       — **`.rs` ✅ (Arch), 2026-08-21.** Each `web.py`/`ocr.py` call stages
@@ -320,8 +329,10 @@ in the folder:
       execution path (`core::jobs::run_batch` doesn't branch on `mode` except
       for the dirty-flag call) — rebuild works and sets the flag. Auto-detect
       of new/changed TIFFs is not implemented (no TIFF-change-detection
-      exists anywhere yet; not attempted). **`.vue` ◻** the action control +
-      the auto-detect suggestion.
+      exists anywhere yet; not attempted). **`.vue` ✅ (control), 2026-09-10:**
+      every script step in the Processing tab's expanded item carries its own
+      Run button, which is `reprocess` with a one-stage list. ◻ the
+      auto-detect suggestion.
 - [x] **Skip-if-done**: skip stages SQLite marks complete unless the user forces a
       re-run, so big batches don't needlessly re-OCR.
       — **`.ts` ✅** `stagesToRun` reduces each item to the stages that actually
@@ -340,18 +351,15 @@ in the folder:
       goes the wrong way, so concurrency is the only thing that uses a large
       workstation.
 
-## Open — Processing tab, per-step view (next task, 2026-09-10)
+## Processing tab, per-step view — landed 2026-09-10
 
-Not started. Specified here so it survives a fresh session.
+**What was asked for:** keep the progress bar, make it more precise, and let it
+expand into one row per step with room for errors and anything else a librarian
+needs — plus "rerun from any step I want, not the whole processing again".
 
-**What the operator asked for:** keep the progress bar, make it more precise,
-and let it **expand into one row per step** with room for errors and anything
-else a librarian needs. Not the Overview's table — the per-item card layout
-holds error text, pre-upload gates and upload results inline, and a table has
-nowhere to put them.
+### The defect it was really about
 
-**The defect that makes this urgent.** A supplied-pdf item with loose page
-images (`Pisma iz Liona`) showed:
+A supplied-pdf item with loose page images (`Pisma iz Liona`) showed:
 
 ```
 thumbnail → running
@@ -363,35 +371,63 @@ thumbnail → pending      <- never done
 
 Nothing failed. `settle_web_stages` deliberately holds the thumbnail stage at
 `Pending` when `item.thumbnail_needs_choice` — the operator has to pick a
-primary thumbnail, and 53 loose JPGs are 53 equal candidates. The message that
-would say so, `"Choose a primary thumbnail before uploading"`, exists as an
-upload **gate** — but `useProcessing.gatesFor` opens with:
+primary thumbnail, and 53 loose JPGs are 53 equal candidates. Diagnosing it
+turned up a second layer the original note here got slightly wrong: by the time
+the operator looks, the run has already **written** `<name>_thumb.png` (the
+script succeeded; only the *status* was held), so `needsChoice` is false again
+and the step is no longer held at all — it is simply an unrun step sitting
+behind two done ones. Neither state had any way to say so, and neither had a
+control that would run just that step.
 
-```ts
-if (status !== "done" || uploaded.value) return [];
-```
+### What landed
 
-Gates only render once the item is **done**, and the item cannot be done
-*because* the thumbnail is pending. So the one sentence explaining what the
-operator must do is suppressed at exactly the moment it is needed. **This is
-the thing to fix**: a step held for a human decision must say which decision,
-and offer it.
+- **`src/domain/steps.ts`** (new, pure) — `planSteps` returns one `StepView`
+  per stage. Its `StepState` deliberately is **not** `StageStatus`: `pending`
+  there conflates *not reached*, *failed* and *held for a human*, which is the
+  whole distinction the operator was missing. `held` carries an `action`
+  saying which decision and how to settle it (including the exact
+  `<folderName>_thumb.png` to drop in); `failed` carries the error text;
+  `skipped` explains why the step is N/A instead of rendering a blank.
+  Metadata and upload are modelled as the human steps they are.
+- **A weighted bar.** `stepProgress` counts *steps*, not items, weighted by
+  `STEP_WEIGHTS` (`ocr: 0.8`, `pdf: 0.18`, `thumbnail: 0.02`) — the measured
+  shape of the work, since OCR is minutes per page and the thumbnail is one
+  render. Counting items left a one-book batch at 0% all night; counting the
+  three steps equally would have leapt to two thirds in the first seconds.
+  The batch bar is the mean across items, so it now also **stops just short of
+  100%** when a run reported an item finished while a step is outstanding —
+  which is the first visible sign of exactly the `Pisma iz Liona` state.
+- **Per-step re-run.** Each script step has its own button →
+  `useProcessing.rerunStep(itemId, stage)` → the existing
+  `reprocess(batchId, itemId, [stage])` → `jobs_reprocess`. Deliberately that
+  step **only**, never the ones downstream: "from the PDF onwards" on a book
+  means re-running OCR, i.e. the hours-long part the operator was trying to
+  avoid. Two clicks for two steps is the right trade.
+- **Rows that need a person open by themselves** (`stepNeedingAttention` —
+  a failure first, then a held decision) and say so on the collapsed row, so a
+  hundred-item overnight batch does not have to be expanded one at a time.
+  There is an Expand-all/Collapse-all for when it does.
+- **Blocked upload results are re-rendered through the GUI copy.**
+  `services/upload` puts only the *first* blocker's bare message on the result,
+  which is literally the sentence the operator was left with. `uploadViewFor`
+  now runs every blocker through `blockerCopy` and lists them all.
 
-(It self-heals in practice — once `<name>_thumb.png` exists it classifies as
-kind `thumbnail`, `autoThumbnail` returns it, and the next Start settles the
-stage `Done`. So the operator's escape today is "press Start again", which
-nothing tells them either.)
+Tests: `src/domain/steps.test.ts` (21), new cases in
+`src/composables/useProcessing.test.ts`, and
+`src/views/batch/ProcessingTab.test.ts` — a render smoke test through
+`vue/server-renderer`. That last one needed `@vitejs/plugin-vue` adding to
+`vitest.config.ts` (the plugin was already a devDependency); it is the first
+`.vue` test in the repo and stays deliberately thin — `vue-tsc` checks the
+bindings, but it cannot tell you a row rendered nothing.
 
-**Design notes for whoever picks this up**
-- Per-stage state already exists: `stagePipStatus` (`domain/item`) and
-  `StagePips.vue`/`StatePill.vue` are reusable.
-- Per-stage re-run already exists end-to-end and is **not** exposed in this
-  tab: `useProcessing.reprocess(batchId, itemId, stages)` takes an explicit
-  `RunnableStage[]` and is wired to `jobs_reprocess`. "Re-run from any step"
-  needs UI only, not new plumbing.
-- Distinguish the three reasons a stage is not `done`: not reached yet,
-  failed (show the error), and **held for a human decision** (show the
-  decision). Today all three read as the same grey "pending".
+### Still open here
+
+- The **thumbnail grid picker** (`.vue`) and persisting the operator's pick
+  (`.ts`, with Epic 04). The held step now names the decision and gives a way
+  to settle it, which is what made the item recoverable; choosing *which* of
+  53 images is still done by putting the file in the folder.
+- **Auto-detect of new/changed TIFFs** suggesting a re-process — unchanged, not
+  implemented, no TIFF-change detection exists anywhere.
 
 ## Progress — logic lane (`.ts`) pass, 2026-08-05
 

@@ -45,6 +45,43 @@ export interface FilesServiceOptions {
    * for tests. */
   client?: ApiClient;
   signal?: AbortSignal;
+  /**
+   * Override the deadline for this transfer. Leave unset: the default is
+   * derived from the bytes being sent (see {@link transferTimeoutMs}), which
+   * is almost always what you want.
+   */
+  timeoutMs?: number;
+}
+
+/**
+ * Fixed allowance on top of the transfer itself: the connect, and the backend
+ * receiving the blob, writing it, and replying.
+ */
+export const TRANSFER_BASE_TIMEOUT_MS = 60_000;
+
+/**
+ * The floor throughput a transfer is held to — 1 Mbit/s. Below this something
+ * is genuinely wrong (a half-open connection, a stalled server) rather than
+ * merely slow, which is the only thing a deadline should be catching.
+ */
+export const MIN_TRANSFER_BYTES_PER_SEC = 128 * 1024;
+
+/**
+ * How long a transfer of `bytes` is allowed to take.
+ *
+ * The {@link ApiClient} applies one flat 30 s deadline to every request, armed
+ * before the fetch and never reset while bytes are flowing. That is right for
+ * a JSON call and wrong for a file: the archive's derived web PDFs run to
+ * 65–105 MB, which would need a sustained 18–28 Mbit/s just to beat the clock,
+ * and a transfer moving along perfectly well was being aborted mid-flight.
+ *
+ * So the deadline scales with the payload. It is still a deadline — an
+ * overnight batch must not hang forever on one dead socket — but one a
+ * healthy transfer cannot trip.
+ */
+export function transferTimeoutMs(bytes: number): number {
+  const seconds = Math.max(0, bytes) / MIN_TRANSFER_BYTES_PER_SEC;
+  return TRANSFER_BASE_TIMEOUT_MS + Math.ceil(seconds * 1000);
 }
 
 /** Append a boolean part as the string the Nest `ParseBoolPipe`/transform reads. */
@@ -72,15 +109,27 @@ export async function uploadFiles(
 ): Promise<FileAttachment[]> {
   const client = options.client ?? getApiClient();
   const form = new FormData();
-  for (const f of files) form.append("files", f.blob, f.filename);
+  let bytes = 0;
+  for (const f of files) {
+    form.append("files", f.blob, f.filename);
+    bytes += f.blob.size;
+  }
   if (parts.role) form.append("role", parts.role);
   appendBool(form, "doOCR", parts.doOCR);
   if (parts.extractedTexts && Object.keys(parts.extractedTexts).length > 0) {
-    form.append("extractedTexts", JSON.stringify(parts.extractedTexts));
+    // A book's OCR text rides along in this same request and is not small —
+    // count it, or the deadline understates what is on the wire.
+    const texts = JSON.stringify(parts.extractedTexts);
+    form.append("extractedTexts", texts);
+    bytes += texts.length;
   }
   return client.post<FileAttachment[]>(
     `/files/upload/${encodeURIComponent(itemId)}`,
-    { form, signal: options.signal },
+    {
+      form,
+      signal: options.signal,
+      timeoutMs: options.timeoutMs ?? transferTimeoutMs(bytes),
+    },
   );
 }
 
@@ -105,13 +154,16 @@ export async function replaceFile(
   const client = options.client ?? getApiClient();
   const form = new FormData();
   form.append("file", file.blob, file.filename);
+  let bytes = file.blob.size;
   appendBool(form, "doOCR", parts.doOCR);
   if (parts.extractedText !== undefined) {
     form.append("extractedText", parts.extractedText);
+    bytes += parts.extractedText.length;
   }
   return client.put<FileAttachment>(`/files/${encodeURIComponent(fileId)}`, {
     form,
     signal: options.signal,
+    timeoutMs: options.timeoutMs ?? transferTimeoutMs(bytes),
   });
 }
 
@@ -127,9 +179,16 @@ export async function setFileText(
 ): Promise<SetTextResult> {
   const client = options.client ?? getApiClient();
   const body: SetTextDto = { text };
+  // A book's full text is megabytes of JSON, so this is a transfer too — the
+  // recovery path for a mangled filename must not be the one call that still
+  // dies on the flat deadline.
   return client.put<SetTextResult>(
     `/files/${encodeURIComponent(fileId)}/text`,
-    { json: body, signal: options.signal },
+    {
+      json: body,
+      signal: options.signal,
+      timeoutMs: options.timeoutMs ?? transferTimeoutMs(text.length),
+    },
   );
 }
 

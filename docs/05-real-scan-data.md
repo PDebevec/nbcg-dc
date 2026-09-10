@@ -300,3 +300,26 @@ matter:
   deliberately rejects padding, while `parseScanPageName` /
   `detectPageSequence` / `compareNatural` read *incoming* scanner names, which are
   padded and prefixed. They must not be conflated.
+
+## The filed `source/` folder was indexed as its own record (2026-09-10)
+
+Found while clearing the batch list after the first live upload. Once
+`run_supplied_pdf_stage` files the operator's original PDF into
+`<item>/source/`, the scanner listed that folder as a **candidate record of its
+own** — `processed/Pisma iz Liona/source` was a tracked item named "source"
+holding a 14 MB PDF, which could be batched and published as a duplicate of the
+item it belongs to.
+
+`core::fs::walk` treats every folder at any depth as an item (deliberately —
+depth does not decide what a record is, the operator does), skipping only
+dotfolders and `SKIP_DIR_NAMES`. `source` was not among them.
+
+Fixed by skipping a directory named `SOURCE_SUBFOLDER` **at depth > 0 only**: a
+root-level folder genuinely named "source" is somebody's record and is still
+listed. Same shape as the frontend's `isFiledOriginal`, which anchors on the
+grandparent rather than matching the name wherever it appears — the second time
+this distinction has had to be drawn, so it is worth remembering that `source`
+is only meaningful *directly inside an item folder*.
+
+No index surgery was needed for the stale row: `db::items::reconcile` drops rows
+whose folders are no longer discovered, so the next scan removes it.

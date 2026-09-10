@@ -4,6 +4,13 @@
  * cancel, live `job://*` progress, run log) and the upload store (per-item
  * results, archive on success), plus the pre-upload gates computed from
  * `domain/upload` with the metadata store's readiness.
+ *
+ * Each row also carries the **expanded per-step view** (`domain/steps`): one
+ * entry per pipeline stage saying what it did, what went wrong, or which
+ * decision it is waiting on, plus a per-step re-run so a failed OCR does not
+ * cost a whole re-process. The batch bar is weighted from the same steps, so
+ * it moves at the rate the work actually takes rather than jumping a whole
+ * item at a time.
  */
 
 import {
@@ -32,7 +39,13 @@ import {
   type Batch,
 } from "@domain/batch";
 import { firstStageError, webPdfIsOurs, type Item } from "@domain/item";
-import { planPipeline } from "@domain/pipeline";
+import { planPipeline, type PipelinePlan, type RunnableStage } from "@domain/pipeline";
+import {
+  planSteps,
+  stepNeedingAttention,
+  stepProgress,
+  type StepView,
+} from "@domain/steps";
 import { planItemUpload, type UploadBlocker, type UploadWarning } from "@domain/upload";
 import { procFromProcessing, seedProcFromItems } from "@services/pipeline";
 import type { ItemUploadResult, ItemUploadStatus, UploadItemContext } from "@services/upload";
@@ -70,6 +83,17 @@ export interface ProcessingItemView {
   /** Pre-upload gates: hard blockers + soft warnings (empty = clear). */
   gates: GateNoteView[];
   upload: UploadResultView | null;
+  /** One entry per pipeline stage — the expanded view (`domain/steps`). */
+  steps: StepView[];
+  /** The step a person should look at (a failure, else a held decision), or
+   * null. Shown on the collapsed row and opens it by default. */
+  attention: StepView | null;
+  /** How far this item's processing actually is, 0–1, weighted by how long
+   * each step takes. Not the same thing as {@link ProcessingItemView.status}:
+   * a run can report the item finished while a step is still outstanding. */
+  completion: number;
+  /** Whether the per-step re-run controls are live for this item. */
+  canRerunStep: boolean;
 }
 
 const STATUS_LABELS: Record<RunStatus, string> = {
@@ -110,13 +134,17 @@ function blockerCopy(b: UploadBlocker): string {
       return "Metadata incomplete — fix it on the Metadata tab.";
     case "thumbnail-unresolved":
       return "Several thumbnail candidates — a primary thumbnail must be chosen (picker coming in the next phase).";
+    case "not-processed":
+      // The bare message ("Not fully processed yet (thumbnail).") is where an
+      // operator got stuck: it names the step but not what to do about it.
+      // Expanding the item now shows that step's own row and its Run button.
+      return `${b.message} Expand the item to see why, and run just that step.`;
     default:
       return b.message;
   }
 }
 
-function describeAssets(item: Item): string {
-  const plan = planPipeline(item.assets, item.folderName, "auto", webPdfIsOurs(item.stages));
+function describeAssets(item: Item, plan: PipelinePlan): string {
   const tiffs = item.assets.filter((a) => a.kind === "source-tiff").length;
   const images = item.assets.filter((a) => a.kind === "image").length;
   const pdfs = item.assets.filter((a) => a.kind === "web-pdf").length;
@@ -187,7 +215,6 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
   const doneCount = computed(() => statuses.value.filter((s) => s === "done").length);
   const failCount = computed(() => statuses.value.filter((s) => s === "failed").length);
   const allDone = computed(() => items.value.length > 0 && doneCount.value === items.value.length);
-  const ratio = computed(() => (items.value.length ? doneCount.value / items.value.length : 0));
 
   // When every member is already processed (e.g. derived files were picked up
   // by an index rebuild, or a re-work batch of finished items) and no run is
@@ -234,17 +261,25 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
     if (!b) return null;
     const r: ItemUploadResult | undefined = uploadResults.value.get(b.id)?.get(item.id);
     if (!r) return null;
+    // A blocked item reports its gates, not the transport: the service puts
+    // only the first blocker's bare message on the result, which is how an
+    // operator ended up staring at "Not fully processed yet (thumbnail)." with
+    // no idea what to do. Re-render every blocker through the GUI copy.
+    const blocked = r.status === "blocked" && r.blockers.length > 0;
     return {
       status: r.status,
       label: UPLOAD_LABELS[r.status],
-      message:
-        r.message ??
-        (r.status === "uploaded"
-          ? r.relationErrors.length
-            ? `Uploaded, but ${r.relationErrors.length} parent link${r.relationErrors.length === 1 ? "" : "s"} failed.`
-            : ""
-          : ""),
-      fieldErrors: r.fieldErrors.map((e) => (e.key ? `${e.key}: ${e.message}` : e.message)),
+      message: blocked
+        ? blockerCopy(r.blockers[0])
+        : (r.message ??
+          (r.status === "uploaded"
+            ? r.relationErrors.length
+              ? `Uploaded, but ${r.relationErrors.length} parent link${r.relationErrors.length === 1 ? "" : "s"} failed.`
+              : ""
+            : "")),
+      fieldErrors: blocked
+        ? r.blockers.slice(1).map(blockerCopy)
+        : r.fieldErrors.map((e) => (e.key ? `${e.key}: ${e.message}` : e.message)),
       warnings: r.warnings.map(warningCopy),
     };
   }
@@ -252,25 +287,62 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
   const rows = computed<ProcessingItemView[]>(() =>
     items.value.map((item, i) => {
       const status = statuses.value[i];
-      const live = status === "running" ? liveProgress.value.get(item.id) : undefined;
+      const live = liveProgress.value.get(item.id);
       const pct = live?.progress != null ? ` · ${Math.round(live.progress * 100)}%` : "";
+      const kind = batch.value?.overrides[item.id]?.contentKind ?? "auto";
+      const plan = planPipeline(
+        item.assets,
+        item.folderName,
+        kind,
+        webPdfIsOurs(item.stages),
+      );
+      const steps = planSteps({
+        stages: item.stages,
+        plan,
+        folderName: item.folderName,
+        metadataReady: metadata.isReady(item),
+        uploaded: item.flags.uploaded,
+        needsReupload: item.flags.reupload,
+        live: live ? { stage: live.stage, progress: live.progress } : null,
+      });
       return {
         id: item.id,
         title: item.title ?? item.folderName,
-        sub: `${item.folderName} · ${describeAssets(item)}`,
+        sub: `${item.folderName} · ${describeAssets(item, plan)}`,
         status,
         statusLabel: STATUS_LABELS[status],
         error: status === "failed" ? (firstStageError(item) ?? "Processing failed.") : "",
         canRerun: status === "failed" && !running.value && !uploaded.value && editable.value,
-        progress: live?.progress ?? null,
-        progressLabel: live ? `${live.stage}${pct}` : "",
+        progress: status === "running" ? (live?.progress ?? null) : null,
+        progressLabel: status === "running" && live ? `${live.stage}${pct}` : "",
         gates: gatesFor(item),
         upload: uploadViewFor(item),
+        steps,
+        attention: stepNeedingAttention(steps),
+        completion: stepProgress(steps),
+        canRerunStep: editable.value && !running.value && !uploading.value,
       };
     }),
   );
 
   const hasBlockers = computed(() => rows.value.some((r) => r.gates.some((g) => g.hard)));
+
+  /**
+   * The batch progress bar, averaged over each item's weighted step progress
+   * rather than counting finished items.
+   *
+   * Two things this fixes. A batch of one book used to sit at 0% for the
+   * entire run and then jump to 100%, which for an overnight job is the same
+   * as no bar at all. And an item the runner reported finished while a step
+   * was still outstanding (a thumbnail held for a decision) used to read a
+   * flat 100% — the bar now stops just short, which is the first visible clue
+   * that something is unresolved.
+   */
+  const ratio = computed(() => {
+    const all = rows.value;
+    if (all.length === 0) return 0;
+    return all.reduce((sum, r) => sum + r.completion, 0) / all.length;
+  });
 
   // ── summary + buttons ────────────────────────────────────────────────────
 
@@ -330,6 +402,25 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
     const b = batch.value;
     if (!b) return;
     await processing.rerunItem(b.id, id);
+    if (procError.value) toasts.push(procError.value, "error");
+  }
+
+  /**
+   * Run **one** step of one item, forced, leaving everything else alone.
+   *
+   * "Rerun from any step I want, not the whole processing again" — and
+   * deliberately just that step, never the ones after it: on a book, running
+   * "from the PDF onwards" means re-running OCR, which is the hours-long part
+   * and exactly what the operator was trying to avoid. Two clicks for two
+   * steps is a fair price for never starting an accidental overnight job.
+   *
+   * The native side is already there (`jobs_reprocess` takes an explicit stage
+   * list); this only exposes it.
+   */
+  async function rerunStep(id: string, stage: RunnableStage): Promise<void> {
+    const b = batch.value;
+    if (!b || !editable.value || running.value || uploading.value) return;
+    await processing.reprocess(b.id, id, [stage]);
     if (procError.value) toasts.push(procError.value, "error");
   }
 
@@ -398,6 +489,7 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
     log: recentLog,
     start,
     rerunItem,
+    rerunStep,
     rerunAllFailed,
     cancel,
     upload,

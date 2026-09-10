@@ -241,6 +241,79 @@ describe("uploadGroups", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0].role).toBe(FileRole.WEB);
   });
+
+  // A book's page scans are source material. `Pisma iz Liona` was publishing
+  // its 52 SP_*.jpg scans — ~320 MB — beside the 12.8 MB PDF that already
+  // contains every one of those pages.
+  describe("a folder with a web PDF publishes the PDF, not the pages it was built from", () => {
+    const pisma = [
+      discoverAsset("Pisma iz Liona.pdf", "/p/Pisma iz Liona.pdf"),
+      discoverAsset("Pisma iz Liona_thumb.png", "/p/Pisma iz Liona_thumb.png"),
+      discoverAsset("Pisma iz Liona.txt", "/p/Pisma iz Liona.txt"),
+      ...Array.from({ length: 52 }, (_, i) =>
+        discoverAsset(`SP_${String(i + 1).padStart(3, "0")}.jpg`, `/p/SP_${i + 1}.jpg`),
+      ),
+    ];
+
+    it("sends exactly the PDF and the thumbnail", () => {
+      const groups = uploadGroups(pisma, null);
+
+      expect(groups.flatMap((g) => g.assets.map((a) => a.filename)).sort()).toEqual([
+        "Pisma iz Liona.pdf",
+        "Pisma iz Liona_thumb.png",
+      ]);
+      expect(groups.find((g) => g.role === FileRole.WEB)!.assets).toHaveLength(1);
+    });
+
+    it("no longer needs several requests for one book", () => {
+      // 52 page images chunked at 10 to a request was six WEB calls.
+      expect(uploadGroups(pisma, null)).toHaveLength(2);
+    });
+
+    it("keeps a page image that the operator picked as the thumbnail", () => {
+      const groups = uploadGroups(pisma, "SP_001.jpg");
+      const thumb = groups.find((g) => g.role === FileRole.THUMBNAIL)!;
+
+      expect(thumb.assets.map((a) => a.filename)).toEqual(["SP_001.jpg"]);
+      // …and still only the PDF as WEB.
+      expect(groups.find((g) => g.role === FileRole.WEB)!.assets.map((a) => a.filename)).toEqual([
+        "Pisma iz Liona.pdf",
+      ]);
+    });
+
+    it("still sends every PDF of a multi-PDF item", () => {
+      const assets = [
+        discoverAsset("volume-one.pdf", "/p/volume-one.pdf"),
+        discoverAsset("volume-two.pdf", "/p/volume-two.pdf"),
+        discoverAsset("cover.jpg", "/p/cover.jpg"),
+      ];
+      const groups = uploadGroups(assets, "cover.jpg");
+
+      expect(groups.find((g) => g.role === FileRole.WEB)!.assets.map((a) => a.filename)).toEqual([
+        "volume-one.pdf",
+        "volume-two.pdf",
+      ]);
+    });
+  });
+
+  // The exception, and the reason this is not a blanket "never send images":
+  // a map or a poster has no PDF by design, so the images are the web assets.
+  it("still publishes the images of an item that has no PDF at all", () => {
+    const assets = [
+      discoverAsset("plate_1.jpg", "/p/1"),
+      discoverAsset("plate_2.jpg", "/p/2"),
+      discoverAsset("plate_3.jpg", "/p/3"),
+    ];
+    const groups = uploadGroups(assets, "plate_2.jpg");
+
+    expect(groups.find((g) => g.role === FileRole.WEB)!.assets.map((a) => a.filename)).toEqual([
+      "plate_1.jpg",
+      "plate_3.jpg",
+    ]);
+    expect(groups.find((g) => g.role === FileRole.THUMBNAIL)!.assets.map((a) => a.filename)).toEqual(
+      ["plate_2.jpg"],
+    );
+  });
 });
 
 describe("textPairs", () => {
