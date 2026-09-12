@@ -3,7 +3,7 @@ import { computed, ref } from "vue";
 import { useProcessing, type ProcessingItemView } from "@composables/useProcessing";
 import type { StepState, StepView } from "@domain/steps";
 import type { RunnableStage } from "@domain/pipeline";
-import ProgressBar from "../../components/batch/ProgressBar.vue";
+import ProgressBar from "@ui/batch/ProgressBar.vue";
 
 const props = defineProps<{ batchId: string }>();
 

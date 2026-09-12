@@ -260,14 +260,16 @@ describe("command routing + request shape", () => {
   });
 
   it("does nothing when there is no work but a member is genuinely blocked, not done", async () => {
-    // images-only, 2 candidates: the thumbnail stage already reads "done" (so
-    // stagesToRun has nothing left to run) but the pick is unresolved, so
-    // procFromProcessing reads Idle, not Done — a real blocker, not "all set".
+    // Two PDFs, so two generated first-page candidates: every stage already
+    // reads "done" (so stagesToRun has nothing left to run) but the thumbnail
+    // pick is unresolved, so procFromProcessing reads Idle, not Done - a real
+    // blocker, not "all set". (Loose images no longer reach this state: two
+    // or more of them are a page-images item whose thumbnail is page one.)
     const item = makeItem({
       id: "map",
       folderName: "map",
-      assets: [asset("map", "a.jpg"), asset("map", "b.jpg")],
-      stages: stagesWith({ thumbnail: "done" }),
+      assets: [asset("map", "a.pdf"), asset("map", "b.pdf")],
+      stages: stagesWith({ pdf: "done", thumbnail: "done", ocr: "done" }),
     });
     const batches = seed(makeBatch(["map"], { stage: BatchStage.Metadata }), [item]);
     const store = useProcessingStore();

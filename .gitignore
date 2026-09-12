@@ -40,3 +40,7 @@ src-tauri/binaries/*
 
 arh/
 processed/
+# Local environment / scratch values — never committed
+.env
+.env.*
+!.env.example

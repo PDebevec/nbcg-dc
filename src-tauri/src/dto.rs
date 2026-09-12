@@ -624,6 +624,15 @@ pub struct ItemRunRequest {
     /// the `.ts` lane already — the runner must not re-sort.
     pub page_images: Vec<String>,
     pub split_spreads: bool,
+    /// `images-only` only: the source image(s) to OCR directly.
+    ///
+    /// `ocr.py` reads an image with no PDF involved and writes `<stem>.txt`
+    /// beside it. Sent explicitly rather than reused from `primary_thumbnail`,
+    /// which resolves to the *generated* `<name>_thumb.png` on an
+    /// already-processed item - OCR-ing that downscale instead of the full
+    /// scan would be the wrong input. Empty for every other shape.
+    #[serde(default)]
+    pub ocr_images: Vec<String>,
 }
 
 /// A whole run: the batch, why, and the per-item work. `Reprocess` may carry

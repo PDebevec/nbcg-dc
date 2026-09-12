@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import AppRail from "./components/layout/AppRail.vue";
-import ToastHost from "./components/common/ToastHost.vue";
+import AppRail from "@ui/layout/AppRail.vue";
+import ToastHost from "@ui/common/ToastHost.vue";
 </script>
 
 <template>

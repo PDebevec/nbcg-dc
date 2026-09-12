@@ -16,12 +16,14 @@ import { useBatchesStore } from "@stores/useBatches";
 import { useToastsStore } from "@stores/useToasts";
 import {
   BATCH_STAGE_LABELS,
+  BATCH_STAGE_TONES,
   BATCH_STEPS,
   batchLabel,
   batchProgress,
   stepIndexForStage,
   type Batch,
   type BatchProgress,
+  type BatchStageTone,
 } from "@domain/batch";
 
 /** One step in a card's three-step indicator. */
@@ -40,6 +42,8 @@ export interface BatchCardView {
   label: string;
   /** Status-pill text (the stage label). */
   status: string;
+  /** Status-pill tone, from {@link BATCH_STAGE_TONES}. */
+  tone: BatchStageTone;
   /** Whether the pill should show a running spinner. */
   running: boolean;
   createdAt: string;
@@ -54,6 +58,7 @@ function toCard(batch: Batch): BatchCardView {
     id: batch.id,
     label: batchLabel(batch.no),
     status: BATCH_STAGE_LABELS[batch.stage],
+    tone: BATCH_STAGE_TONES[batch.stage],
     running: batch.running,
     createdAt: batch.createdAt,
     itemCount: batch.itemIds.length,

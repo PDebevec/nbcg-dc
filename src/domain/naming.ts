@@ -45,9 +45,6 @@ export const THUMBNAIL_EXT = "png";
 export const OCR_TEXT_EXT = "txt";
 export const METADATA_EXT = "json";
 
-/** The fixed name of the per-folder metadata mirror the archive reads/writes. */
-export const METADATA_MIRROR_FILENAME = `metadata.${METADATA_EXT}`;
-
 // ─── name parsing primitives ─────────────────────────────────────────────────
 
 /** Lowercased file extension without the dot (`""` when there is none). */

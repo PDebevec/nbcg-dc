@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useMetadataForm } from "@composables/useMetadataForm";
-import ProgressBar from "../../components/batch/ProgressBar.vue";
-import ParentRecordsCard from "../../components/batch/ParentRecordsCard.vue";
-import SegmentedControl from "../../components/common/SegmentedControl.vue";
-import FilesStrip from "../../components/metadata/FilesStrip.vue";
-import MetaField from "../../components/metadata/MetaField.vue";
+import ProgressBar from "@ui/batch/ProgressBar.vue";
+import ParentRecordsCard from "@ui/batch/ParentRecordsCard.vue";
+import SegmentedControl from "@ui/common/SegmentedControl.vue";
+import Spinner from "@ui/common/Spinner.vue";
+import FilesStrip from "@ui/metadata/FilesStrip.vue";
+import MetaField from "@ui/metadata/MetaField.vue";
 
 const props = defineProps<{ batchId: string }>();
 
@@ -194,7 +195,7 @@ const enumLabel: Record<string, string> = {
             />
           </div>
           <button class="btn-primary" :disabled="cobissLoading" @click="getCobiss()">
-            <span v-if="cobissLoading" class="spinner" />
+            <Spinner v-if="cobissLoading" tone="on-primary" />
             {{ cobissLoading ? "Fetching…" : "Get data" }}
           </button>
           <span v-if="cobissDone" class="cobiss-done">✓ Filled from COBISS</span>
@@ -698,16 +699,6 @@ const enumLabel: Record<string, string> = {
 .btn-primary:disabled {
   opacity: 0.7;
   cursor: default;
-}
-
-.spinner {
-  width: 13px;
-  height: 13px;
-  border: 2px solid rgba(255, 255, 255, 0.4);
-  border-top-color: #fff;
-  border-radius: 50%;
-  display: inline-block;
-  animation: spin 0.7s linear infinite;
 }
 
 .cobiss-done {

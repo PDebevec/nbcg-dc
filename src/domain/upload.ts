@@ -328,10 +328,16 @@ export function uploadGroups(
   return groups;
 }
 
-/** A web PDF paired with the OCR-text asset whose name matches it (`<base>.txt`),
- * for building the `extractedTexts` map (PDF filename → text). */
+/** An uploaded asset paired with the OCR-text asset whose base name matches
+ * it (`<base>.txt`), for building the `extractedTexts` map. */
 export interface TextPair {
-  /** The web PDF's filename (the `extractedTexts` map key). */
+  /**
+   * The uploaded file's name — the `extractedTexts` map key, which the
+   * backend matches on the EXACT multipart filename.
+   *
+   * Usually a web PDF. For an `images-only` item there is no PDF: the image
+   * itself is the web asset, and `ocr.py` writes its `<stem>.txt` beside it.
+   */
   pdfFilename: string;
   /** The `<base>.txt` asset to read the text from. */
   text: DiscoveredAsset;
@@ -349,9 +355,20 @@ export function textPairs(assets: DiscoveredAsset[]): TextPair[] {
   for (const a of assets) {
     if (a.kind === "ocr-text") texts.set(baseNameOf(a.filename).toLowerCase(), a);
   }
+  if (texts.size === 0) return [];
+
+  // A web PDF owns its text wherever one exists. Only when the item has no
+  // PDF at all does an image own it — that is the `images-only` shape, whose
+  // uploaded web asset IS the image. Guarding on "no PDF present" rather than
+  // on the kind keeps a book's page images from ever claiming the folder text:
+  // there, the pages are inputs and the assembled PDF is what gets uploaded.
+  const hasWebPdf = assets.some((a) => a.kind === "web-pdf");
+  const ownsText = (a: DiscoveredAsset): boolean =>
+    hasWebPdf ? a.kind === "web-pdf" : a.kind === "image";
+
   const pairs: TextPair[] = [];
   for (const a of assets) {
-    if (a.kind !== "web-pdf") continue;
+    if (!ownsText(a)) continue;
     const text = texts.get(baseNameOf(a.filename).toLowerCase());
     if (text) pairs.push({ pdfFilename: a.filename, text });
   }

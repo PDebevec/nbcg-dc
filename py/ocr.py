@@ -396,13 +396,6 @@ class OcrResult:
     pages_retried: int = 0
 
 
-def _raw_lines_to_recognized(raw_lines) -> list[RecognizedLine]:
-    return [
-        RecognizedLine(poly=tuple((float(x), float(y)) for x, y in box), text=text)
-        for box, text, _score in raw_lines
-    ]
-
-
 def process_file(
     input_path, langs, *, out_dir: Path | None = None, pages: list[str] | None = None,
 ) -> OcrResult:

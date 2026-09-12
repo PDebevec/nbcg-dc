@@ -61,12 +61,3 @@ export function connectionStateFromResult(
 ): ConnectionState {
   return result.reachable ? "connected" : "offline";
 }
-
-/**
- * Whether the failure is one the operator fixes in Settings (a wrong URL/prefix)
- * rather than by waiting for the network. Lets Settings point at the field
- * instead of showing a generic "Unreachable".
- */
-export function isConfigurationFault(result: ReachabilityResult): boolean {
-  return result.reason === "not-nbcg-api";
-}

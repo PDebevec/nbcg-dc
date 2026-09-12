@@ -41,6 +41,23 @@ export const BATCH_STAGE_LABELS: Record<BatchStage, string> = {
 };
 
 /**
+ * Status-pill tone for each stage, as the `tone` prop of `common/Pill.vue`.
+ *
+ * Keyed on the stage, deliberately. The batch card and the workspace header
+ * each used to derive the colour by `switch`-ing on {@link
+ * BATCH_STAGE_LABELS} output, so editing a label silently changed a pill
+ * colour.
+ */
+export const BATCH_STAGE_TONES = {
+  setup: "idle",
+  metadata: "parent",
+  processing: "info",
+  ready: "success",
+  uploaded: "success",
+} as const satisfies Record<BatchStage, string>;
+export type BatchStageTone = (typeof BATCH_STAGE_TONES)[BatchStage];
+
+/**
  * The three workspace tabs. Fewer than the five {@link BatchStage}s: Processing
  * & Upload is one tab that spans `processing → ready → uploaded`.
  */

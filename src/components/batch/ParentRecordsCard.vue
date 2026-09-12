@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { ParentRowView, ParentSearchRow } from "@composables/useParentLinks";
+import Spinner from "@ui/common/Spinner.vue";
 
 const props = defineProps<{
   parents: ParentRowView[];
@@ -93,7 +94,7 @@ function onInput(event: Event): void {
             placeholder="Search serials & collections to link… (title or id)"
             @input="onInput"
           />
-          <span v-if="searching" class="spinner" />
+          <Spinner v-if="searching" tone="primary" />
           <button
             v-else-if="query"
             class="clear-btn"
@@ -284,17 +285,6 @@ function onInput(event: Event): void {
   padding: 0 8px;
   font-size: 13px;
   width: 100%;
-}
-
-.spinner {
-  width: 13px;
-  height: 13px;
-  border: 2px solid var(--c-border);
-  border-top-color: var(--c-primary);
-  border-radius: 50%;
-  display: inline-block;
-  animation: spin 0.7s linear infinite;
-  flex: none;
 }
 
 .clear-btn {

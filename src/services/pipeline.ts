@@ -41,6 +41,7 @@ import {
   failedRunnableStages,
   planPipeline,
   processingComplete,
+  sourceImages,
   stagesToRun,
   type ContentKind,
   type RunnableStage,
@@ -105,6 +106,11 @@ export function buildItemRunRequest(
       .map((c) => c.base),
     // Page order is decided here, once, and must not be re-sorted native-side.
     pageImages: plan.pages.map((p) => p.filename),
+    // A lone graphical work has no PDF, so OCR reads the scan itself.
+    ocrImages:
+      plan.inputShape === "images-only"
+        ? sourceImages(item.assets).map((a) => a.filename)
+        : [],
     splitSpreads: opts.splitSpreads?.[item.id] ?? false,
   };
 }

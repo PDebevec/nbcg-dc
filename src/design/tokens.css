@@ -3,8 +3,16 @@
  * shadow, extracted from the v1.4.0 prototype
  * (desktop-app-interface-design/project/NBCG Archive.dc.html).
  *
- * Components reference these variables only; raw hex values stay out of
- * component styles so the dark theme can re-map the palette in one place.
+ * Components reference these variables rather than raw values, so a palette
+ * change lands in one place.
+ *
+ * Light only, and the app has no way to be anything else yet. Settings does
+ * offer a light/dark/system control (`ThemePreference`, persisted through
+ * `stores/useSettings`), but nothing consumes the choice: there is no dark
+ * palette below and no `data-theme` or `prefers-color-scheme` anywhere in
+ * the app, so the control has no visible effect today. Finishing it means a
+ * second `:root` block here plus something that stamps the preference onto
+ * the document - the components themselves would not change.
  */
 
 :root {
@@ -115,6 +123,22 @@
   --c-conn-online-halo: rgba(94, 224, 160, 0.2);
   --c-conn-offline: #f0a24b;
   --c-conn-offline-halo: rgba(240, 162, 75, 0.2);
+
+  /* ── on a filled primary surface ──────────────────────────────────── */
+  --c-on-primary: #ffffff;              /* label/icon on an indigo fill */
+  --c-on-primary-track: rgba(255, 255, 255, 0.4); /* spinner ring on one */
+
+  /* ── type scale ───────────────────────────────────────────────────── */
+  /*
+   * Only the sizes a shared component actually uses. Named from values
+   * already in the stylesheets, so renaming is safe - resizing is not.
+   * Components still reach for 18 distinct px values; the rest earn a token
+   * here when something adopts them, not in advance.
+   */
+  --fs-tiny: 11px;                 /* badges, table meta */
+  --fs-small: 11.5px;
+
+  --fw-semibold: 600;              /* the default for anything emphasised */
 
   /* ── misc ─────────────────────────────────────────────────────────── */
   --c-toast-bg: #232945;

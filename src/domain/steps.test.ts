@@ -89,9 +89,11 @@ describe("planSteps", () => {
     });
 
     it("a step held for a human decision reads `held` and says which decision", () => {
-      // Two standalone images and no way to tell which is the thumbnail — the
-      // native runner writes `Pending` here on purpose (`settle_web_stages`).
-      const assets = [asset("map", "front.jpg"), asset("map", "back.jpg")];
+      // Two PDFs generate two first-page candidates and no way to rank them —
+      // the native runner writes `Pending` here on purpose
+      // (`settle_web_stages`). Loose images no longer reach this state: two or
+      // more of them are a page-images item whose thumbnail is its first page.
+      const assets = [asset("map", "a.pdf"), asset("map", "b.pdf")];
       const steps = planSteps(
         context({ assets, plan: planPipeline(assets, "map"), folderName: "map" }),
       );
@@ -106,15 +108,14 @@ describe("planSteps", () => {
   });
 
   it("explains a step that does not apply instead of leaving it blank", () => {
-    const assets = [asset("map", "front.jpg"), asset("map", "back.jpg")];
-    const steps = planSteps(
-      context({ assets, plan: planPipeline(assets, "map", "graphical") }),
-    );
+    // A lone image builds no PDF - there is nothing to bind one sheet into.
+    const assets = [asset("map", "veliki_zemljovid.jpg")];
+    const steps = planSteps(context({ assets, plan: planPipeline(assets, "map") }));
 
-    expect(byStage(steps, "ocr").state).toBe("skipped");
-    expect(byStage(steps, "ocr").detail).toMatch(/nothing to recognise/i);
+    expect(byStage(steps, "pdf").state).toBe("skipped");
+    expect(byStage(steps, "pdf").detail).toBeTruthy();
     // Nothing to re-run: the step is N/A, not merely outstanding.
-    expect(byStage(steps, "ocr").rerunnable).toBe(false);
+    expect(byStage(steps, "pdf").rerunnable).toBe(false);
   });
 
   it("shows the live fraction on the step that is actually running", () => {
@@ -215,15 +216,18 @@ describe("stepProgress", () => {
     expect(stepProgress(failed)).toBeCloseTo(STEP_WEIGHTS.pdf, 5);
   });
 
-  it("an item whose only applicable step is done reads 100%, not 2%", () => {
-    // Image-only: no PDF, no OCR. Weighting against all three would peg a
+  it("an item whose applicable steps are all done reads 100%, not 2%", () => {
+    // A lone map: no PDF stage at all. Weighting against all three would peg a
     // finished map at the thumbnail's 2% forever.
-    const assets = [asset("map", "thumbnail.jpg")];
+    const assets = [asset("map", "veliki_zemljovid.jpg")];
     const steps = planSteps(
       context({
         assets,
-        plan: planPipeline(assets, "map", "graphical"),
-        stages: stagesWith({ thumbnail: { status: "done" } }),
+        plan: planPipeline(assets, "map"),
+        stages: stagesWith({
+          thumbnail: { status: "done" },
+          ocr: { status: "done" },
+        }),
       }),
     );
 

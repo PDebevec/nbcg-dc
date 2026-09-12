@@ -1,32 +1,18 @@
 <script setup lang="ts">
-import { computed } from "vue";
 import { useBatch } from "@composables/useBatch";
 import SetupTab from "./batch/SetupTab.vue";
 import MetadataTab from "./batch/MetadataTab.vue";
 import ProcessingTab from "./batch/ProcessingTab.vue";
-import StepIndicator from "../components/batch/StepIndicator.vue";
-import ProgressBar from "../components/batch/ProgressBar.vue";
+import StepIndicator from "@ui/batch/StepIndicator.vue";
+import ProgressBar from "@ui/batch/ProgressBar.vue";
+import Spinner from "@ui/common/Spinner.vue";
+import Pill from "@ui/common/Pill.vue";
 
 const props = defineProps<{ batchId: string }>();
 
 const { header, tabs, steps, activeTab, setTab, unlock, back } = useBatch(
   () => props.batchId,
 );
-
-/** Pill palette per status label (same mapping as BatchCard). */
-const pillClass = computed(() => {
-  switch (header.value?.status) {
-    case "Metadata":
-      return "purple";
-    case "Processing":
-      return "blue";
-    case "Ready to upload":
-    case "Uploaded":
-      return "green";
-    default:
-      return "gray";
-  }
-});
 </script>
 
 <template>
@@ -40,11 +26,12 @@ const pillClass = computed(() => {
         <div class="head-text">
           <div class="head-line">
             <span class="number">{{ header?.label ?? "Batch" }}</span>
-            <span v-if="header" class="pill" :class="pillClass">
-              <span v-if="header.running" class="pill-spinner" />
-              <span v-else class="pill-dot" />
+            <Pill v-if="header" :tone="header.tone" dense>
+              <template v-if="header.running" #marker>
+                <Spinner :size="11" />
+              </template>
               {{ header.status }}
-            </span>
+            </Pill>
             <span v-if="header?.readOnly" class="ro-badge">READ-ONLY</span>
             <button
               v-if="header?.showsUnlock"
@@ -165,52 +152,6 @@ const pillClass = computed(() => {
   color: var(--c-text-strong);
 }
 
-.pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 9px;
-  border-radius: var(--r-pill);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.pill-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-}
-
-.pill-spinner {
-  width: 11px;
-  height: 11px;
-  border: 2px solid rgba(47, 111, 237, 0.35);
-  border-top-color: var(--c-info);
-  border-radius: 50%;
-  display: inline-block;
-  animation: spin 0.7s linear infinite;
-}
-
-.pill.gray {
-  color: var(--c-idle);
-  background: var(--c-idle-bg);
-}
-
-.pill.purple {
-  color: var(--c-parent);
-  background: var(--c-parent-bg);
-}
-
-.pill.blue {
-  color: var(--c-info);
-  background: var(--c-info-bg);
-}
-
-.pill.green {
-  color: var(--c-success);
-  background: var(--c-success-bg);
-}
 
 .ro-badge {
   font-size: 10.5px;

@@ -160,8 +160,18 @@ describe("classifyInput — the adaptive branch (docs/tasks/06 §Source inputs)"
       "images-only",
     );
   });
-  it("images with no PDF/TIFF → images-only", () => {
-    expect(classifyInput(folder("map", "a.jpg", "b.jpg"))).toBe("images-only");
+  it("one image and no PDF/TIFF → images-only (nothing to bind a PDF from)", () => {
+    expect(classifyInput(folder("map", "a.jpg"))).toBe("images-only");
+  });
+  it("two or more images → page-images, numbered run or not", () => {
+    expect(classifyInput(folder("map", "a.jpg", "b.jpg"))).toBe("page-images");
+    expect(classifyInput(folder("bk", "1.jpg", "2.jpg"))).toBe("page-images");
+  });
+  it("does not count a generated thumbnail as a second sheet", () => {
+    // The folder as it looks after one run: the scan plus our own _thumb.png.
+    expect(classifyInput(folder("map", "a.jpg", "map_thumb.png"))).toBe(
+      "images-only",
+    );
   });
   it("nothing processable → empty", () => {
     expect(classifyInput(folder("nb", "notes.txt", "nb.json"))).toBe("empty");
@@ -174,11 +184,11 @@ describe("applicableStages / buildsArchival", () => {
       expect(applicableStages(shape)).toEqual({ pdf: true, thumbnail: true, ocr: true });
     }
   });
-  it("images-only runs thumbnail only (no PDF, no OCR)", () => {
+  it("images-only runs thumbnail + OCR, but never a PDF", () => {
     expect(applicableStages("images-only")).toEqual({
       pdf: false,
       thumbnail: true,
-      ocr: false,
+      ocr: true,
     });
   });
   it("empty runs nothing", () => {
@@ -262,12 +272,40 @@ describe("uploadCandidates — base names preserved for OCR matching", () => {
 });
 
 describe("planPipeline — integration", () => {
-  it("images-only marks pdf/ocr N/A and needs a thumbnail choice", () => {
-    const plan = planPipeline(folder("map", "a.jpg", "b.jpg"), "map");
+  it("a lone image marks pdf N/A, runs OCR, and needs no thumbnail choice", () => {
+    const plan = planPipeline(folder("map", "a.jpg"), "map");
     expect(plan.inputShape).toBe("images-only");
-    expect(plan.ocrApplicable).toBe(false);
-    expect(plan.stages).toEqual({ pdf: false, thumbnail: true, ocr: false });
-    expect(plan.thumbnail.needsChoice).toBe(true);
+    expect(plan.ocrApplicable).toBe(true);
+    expect(plan.stages).toEqual({ pdf: false, thumbnail: true, ocr: true });
+    expect(plan.thumbnail.needsChoice).toBe(false);
+  });
+  it("a tagged thumbnail outranks page one - never ask a human twice", () => {
+    // `thumbnail.jpg` is the operator's own convention for "this is the
+    // cover". Routing loose images through page-images must not throw that
+    // away and take the alphabetically-first sheet instead.
+    const plan = planPipeline(
+      folder("plakat", "front.jpg", "back.jpg", "thumbnail.jpg"),
+      "plakat",
+    );
+    expect(plan.inputShape).toBe("page-images");
+    expect(plan.thumbnail.autoPrimary?.filename).toBe("thumbnail.jpg");
+    expect(plan.thumbnail.needsChoice).toBe(false);
+    // ...and the tagged image is not itself bound into the PDF as a page.
+    expect(plan.pages.map((p) => p.filename)).toEqual(["back.jpg", "front.jpg"]);
+  });
+
+  it("a re-run keeps the thumbnail it already generated", () => {
+    const plan = planPipeline(folder("bk", "1.jpg", "2.jpg", "bk_thumb.png"), "bk");
+    expect(plan.thumbnail.autoPrimary?.filename).toBe("bk_thumb.png");
+    expect(plan.pages.map((p) => p.filename)).toEqual(["1.jpg", "2.jpg"]);
+  });
+
+  it("several loose images become one PDF, the first as its thumbnail", () => {
+    const plan = planPipeline(folder("map", "front.jpg", "back.jpg"), "map");
+    expect(plan.inputShape).toBe("page-images");
+    expect(plan.stages).toEqual({ pdf: true, thumbnail: true, ocr: true });
+    expect(plan.pages.map((p) => p.filename)).toEqual(["back.jpg", "front.jpg"]);
+    expect(plan.thumbnail.needsChoice).toBe(false);
   });
   it("a TIFF folder builds archival + web + thumb + ocr", () => {
     const plan = planPipeline(folder("nb", "0001.tif", "0002.tif"), "nb");
@@ -298,19 +336,22 @@ describe("stagesToRun — skip-if-done + selection", () => {
     const stages = stagesWith({ pdf: "failed", thumbnail: "failed", ocr: "failed" });
     expect(stagesToRun(stages, plan, { only: ["ocr"] })).toEqual(["ocr"]);
   });
-  it("never returns a non-applicable stage (images-only → no pdf/ocr)", () => {
-    const imgPlan = planPipeline(folder("map", "a.jpg", "b.jpg"), "map");
+  it("never returns a non-applicable stage (a lone image builds no PDF)", () => {
+    const imgPlan = planPipeline(folder("map", "a.jpg"), "map");
     const stages = stagesWith({ pdf: "pending", thumbnail: "pending", ocr: "pending" });
-    expect(stagesToRun(stages, imgPlan, { force: true })).toEqual(["thumbnail"]);
+    expect(stagesToRun(stages, imgPlan, { force: true })).toEqual([
+      "thumbnail",
+      "ocr",
+    ]);
   });
 });
 
 describe("failedRunnableStages", () => {
   it("returns only applicable, failed stages", () => {
-    const plan = planPipeline(folder("map", "a.jpg", "b.jpg"), "map"); // thumbnail only
+    const plan = planPipeline(folder("map", "a.jpg"), "map"); // no PDF stage
     const stages = stagesWith({ pdf: "failed", thumbnail: "failed", ocr: "failed" });
-    // pdf/ocr are N/A for images-only, so only thumbnail counts.
-    expect(failedRunnableStages(stages, plan)).toEqual(["thumbnail"]);
+    // pdf is N/A for a lone image, so it does not count as a failure.
+    expect(failedRunnableStages(stages, plan)).toEqual(["thumbnail", "ocr"]);
   });
 });
 
@@ -327,31 +368,47 @@ describe("processingComplete", () => {
       processingComplete(stagesWith({ pdf: "done", thumbnail: "done", ocr: "done" }), pdfPlan),
     ).toBe(true);
   });
-  it("ignores non-applicable stages (images-only needs only thumbnail)", () => {
-    const imgPlan = planPipeline(folder("nb", "cover.jpg"), "nb"); // single image → resolved
-    expect(processingComplete(stagesWith({ thumbnail: "done" }), imgPlan)).toBe(true);
+  it("ignores non-applicable stages (images-only never builds a PDF)", () => {
+    // One image: thumbnail and ocr apply, pdf never does. Completeness must
+    // ignore pdf rather than wait on it forever.
+    const imgPlan = planPipeline(folder("nb", "cover.jpg"), "nb");
+    expect(imgPlan.stages).toEqual({ pdf: false, thumbnail: true, ocr: true });
+    expect(
+      processingComplete(stagesWith({ thumbnail: "done", ocr: "done" }), imgPlan),
+    ).toBe(true);
+    // ...and still waits on the ocr it does apply.
+    expect(processingComplete(stagesWith({ thumbnail: "done" }), imgPlan)).toBe(false);
   });
   it("stays incomplete while the thumbnail choice is unresolved", () => {
-    const imgPlan = planPipeline(folder("map", "a.jpg", "b.jpg"), "map"); // needs choice
-    expect(processingComplete(stagesWith({ thumbnail: "done" }), imgPlan)).toBe(false);
+    // Two PDFs generate two first-page candidates and no way to rank them.
+    // (Loose images no longer reach here: two or more of them are a
+    // page-images item, whose thumbnail is simply its first page.)
+    const plan = planPipeline(folder("m", "a.pdf", "b.pdf"), "m");
+    expect(plan.thumbnail.needsChoice).toBe(true);
+    expect(
+      processingComplete(
+        stagesWith({ pdf: "done", thumbnail: "done", ocr: "done" }),
+        plan,
+      ),
+    ).toBe(false);
   });
 });
 
 describe("markNonApplicableSkipped", () => {
   it("downgrades untouched non-applicable stages to skipped, leaving real outcomes", () => {
-    const imgPlan = planPipeline(folder("map", "a.jpg", "b.jpg"), "map");
+    const imgPlan = planPipeline(folder("map", "a.jpg"), "map");
     const out = markNonApplicableSkipped(
       stagesWith({ pdf: "pending", ocr: "pending", thumbnail: "running" }),
       imgPlan,
     );
-    expect(out.pdf.status).toBe("skipped");
-    expect(out.ocr.status).toBe("skipped");
+    expect(out.pdf.status).toBe("skipped"); // no PDF for a lone image
+    expect(out.ocr.status).toBe("pending"); // applicable → untouched
     expect(out.thumbnail.status).toBe("running"); // applicable → untouched
   });
   it("never overwrites a recorded non-pending outcome", () => {
-    const imgPlan = planPipeline(folder("map", "a.jpg", "b.jpg"), "map");
-    const out = markNonApplicableSkipped(stagesWith({ ocr: "done" }), imgPlan);
-    expect(out.ocr.status).toBe("done");
+    const imgPlan = planPipeline(folder("map", "a.jpg"), "map");
+    const out = markNonApplicableSkipped(stagesWith({ pdf: "done" }), imgPlan);
+    expect(out.pdf.status).toBe("done");
   });
 });
 
@@ -420,7 +477,7 @@ describe("real scan folders", () => {
     expect(plan.thumbnail.autoPrimary?.filename).toBe("000.jpg");
   });
 
-  it("the watermarked map stays a graphical work: no PDF, no OCR", () => {
+  it("the watermarked map stays a graphical work: no PDF, but a lone image does OCR", () => {
     const assets = folder(
       "sa vodenim zigom",
       "Budua and Cetinje  zone 36 col XX. – Wien, 1886 Kr1516 id=21964048.jpg",
@@ -428,10 +485,20 @@ describe("real scan folders", () => {
     const plan = planPipeline(assets, "sa vodenim zigom");
 
     expect(plan.inputShape).toBe("images-only");
-    expect(plan.stages).toEqual({ pdf: false, thumbnail: true, ocr: false });
-    expect(plan.ocrApplicable).toBe(false);
+    // Still no PDF — but a map carries place names and a legend, and
+    // `ocr.py` reads the image directly, so the text is worth having.
+    expect(plan.stages).toEqual({ pdf: false, thumbnail: true, ocr: true });
+    expect(plan.ocrApplicable).toBe(true);
     expect(plan.thumbnail.resolved).toBe(true);
     expect(plan.pages).toEqual([]);
+  });
+
+  it("a two-sheet graphical work is bound into one PDF and OCR-ed", () => {
+    const plan = planPipeline(folder("plakat", "front.jpg", "back.jpg"), "plakat");
+
+    expect(plan.inputShape).toBe("page-images");
+    expect(plan.stages).toEqual({ pdf: true, thumbnail: true, ocr: true });
+    expect(plan.ocrApplicable).toBe(true);
   });
 
   it("Pisma iz Liona (PDF + 52 pages) warns instead of silently dropping them", () => {
@@ -470,13 +537,15 @@ describe("ContentKind override", () => {
     expect(classifyInput(book, "graphical")).toBe("images-only");
     const plan = planPipeline(book, "bk", "graphical");
     expect(plan.stages.pdf).toBe(false);
-    expect(plan.stages.ocr).toBe(false);
+    // Still no PDF - but the images are read, which is the whole point of
+    // keeping them out of one.
+    expect(plan.stages.ocr).toBe(true);
     expect(plan.pages).toEqual([]);
   });
 
   it("`book` forces unnumbered images to be pages, in natural order", () => {
     const odd = folder("odd", "b.jpg", "a.jpg", "c.jpg");
-    expect(classifyInput(odd)).toBe("images-only");
+    expect(classifyInput(odd)).toBe("page-images"); // three sheets, so a PDF
     const plan = planPipeline(odd, "odd", "book");
     expect(plan.inputShape).toBe("page-images");
     expect(plan.stages.ocr).toBe(true);

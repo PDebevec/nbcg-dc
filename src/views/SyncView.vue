@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useSyncScreen } from "@composables/useSyncScreen";
-import ProgressBar from "../components/batch/ProgressBar.vue";
+import ProgressBar from "@ui/batch/ProgressBar.vue";
+import Spinner from "@ui/common/Spinner.vue";
 
 const {
   syncing,
@@ -41,7 +42,7 @@ const pct = computed(() => `${Math.round(progressFraction.value * 100)}%`);
           <div class="meta-value">{{ nextSyncLabel }}</div>
         </div>
         <button class="sync-btn" :disabled="syncing" @click="syncNow()">
-          <span v-if="syncing" class="spinner" />
+          <Spinner v-if="syncing" :size="14" tone="on-primary" />
           {{ syncing ? "Syncing…" : "Sync now" }}
         </button>
       </div>
@@ -170,16 +171,6 @@ const pct = computed(() => `${Math.round(progressFraction.value * 100)}%`);
 
 .sync-btn:disabled {
   cursor: default;
-}
-
-.spinner {
-  width: 14px;
-  height: 14px;
-  border: 2px solid rgba(255, 255, 255, 0.4);
-  border-top-color: #fff;
-  border-radius: 50%;
-  display: inline-block;
-  animation: spin 0.7s linear infinite;
 }
 
 .progress-block {

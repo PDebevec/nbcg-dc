@@ -371,6 +371,20 @@ export interface ItemRunRequest {
    */
   pageImages: string[];
   /**
+   * For `inputShape: "images-only"`, the source image(s) to OCR directly.
+   *
+   * `py/ocr.py` reads an image without any PDF (its non-PDF branch) and writes
+   * `<stem>.txt` beside it, which is what pairs the text back to the image at
+   * upload. Sent explicitly rather than reusing `primaryThumbnail`: that field
+   * resolves to the **generated** `<name>_thumb.png` once the item has been
+   * processed once, and OCR-ing a downscaled thumbnail instead of the full
+   * scan is exactly the wrong input for a map's legend or a poster's title.
+   *
+   * Empty for every other shape — a multi-sheet item is `page-images`, whose
+   * OCR reads the assembled PDF via {@link ItemRunRequest.pageImages}.
+   */
+  ocrImages: string[];
+  /**
    * Whether to split two-page spreads into single pages during the `pdf` stage.
    *
    * Not a visible stage — a sub-step of the image→PDF build, toggleable (decided
@@ -534,12 +548,6 @@ export const ipc = {
       call<void>(Commands.jobsReprocess, { request }),
   },
 } as const;
-
-/** The secret-store key under which the old, manually-pasted Keycloak API
- * token used to be kept. Superseded by {@link KC_PASSWORD_SECRET_KEY} — kept
- * here only so any leftover stored value is inert rather than a dangling
- * reference; nothing reads or writes this key anymore. */
-export const API_TOKEN_SECRET_KEY = "apiToken";
 
 /** The secret-store key under which the Keycloak password is kept (the
  * username is not a secret — see `AppConfig.kcUsername`). See

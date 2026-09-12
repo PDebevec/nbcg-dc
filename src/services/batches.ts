@@ -16,23 +16,17 @@
  * `services/indexing`).
  */
 
-import {
-  ipc,
-  isTauri,
-  type BatchDto,
-  type BatchCreateDto,
-} from "@ipc/bindings";
+import { ipc, isTauri, type BatchDto } from "@ipc/bindings";
 import {
   newBatchFields,
   ItemRunStatus,
   type Batch,
   type CreateBatchInput,
-  type NewBatchFields,
 } from "@domain/batch";
 
 /** Map one native batch row to a domain {@link Batch}, normalising the maps so
  * every member item has a `proc` entry (defaults to `idle`). */
-export function toBatch(dto: BatchDto): Batch {
+function toBatch(dto: BatchDto): Batch {
   const proc: Record<string, ItemRunStatus> = {};
   for (const id of dto.itemIds) {
     proc[id] = dto.proc?.[id] ?? ItemRunStatus.Idle;
@@ -55,32 +49,6 @@ export function toBatch(dto: BatchDto): Batch {
   };
 }
 
-/** Map a domain {@link Batch} to the wire DTO for `batch_update` (identity in
- * shape; explicit so a future DTO/domain divergence is caught here). */
-export function toBatchDto(batch: Batch): BatchDto {
-  return {
-    id: batch.id,
-    no: batch.no,
-    createdAt: batch.createdAt,
-    type: batch.type,
-    itemIds: batch.itemIds,
-    stage: batch.stage,
-    running: batch.running,
-    proc: batch.proc,
-    cobissId: batch.cobissId,
-    parents: batch.parents,
-    publish: batch.publish,
-    visibility: batch.visibility,
-    overrides: batch.overrides,
-    archivedAt: batch.archivedAt,
-  };
-}
-
-/** The create fields as the wire DTO (identity in shape). */
-function toCreateDto(fields: NewBatchFields): BatchCreateDto {
-  return fields;
-}
-
 /** All batches tracked by the native store (empty outside Tauri). */
 export async function listBatches(): Promise<Batch[]> {
   if (!isTauri()) return [];
@@ -95,13 +63,13 @@ export async function listBatches(): Promise<Batch[]> {
  * member item (→ In progress). Throws outside Tauri (side-effecting).
  */
 export async function createBatch(input: CreateBatchInput): Promise<Batch> {
-  const dto = await ipc.batch.create(toCreateDto(newBatchFields(input)));
+  const dto = await ipc.batch.create(newBatchFields(input));
   return toBatch(dto);
 }
 
 /** Persist a full batch (write-through). Throws outside Tauri. */
 export async function updateBatch(batch: Batch): Promise<Batch> {
-  const dto = await ipc.batch.update(toBatchDto(batch));
+  const dto = await ipc.batch.update(batch);
   return toBatch(dto);
 }
 

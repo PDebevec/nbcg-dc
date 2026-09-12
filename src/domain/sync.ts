@@ -298,7 +298,7 @@ export interface SyncRunSummary {
 
 /** Tally outcomes into the four tiles. `skipped` items are not "checked" — the
  * run never asked the backend about them. */
-export function tally(outcomes: readonly SyncOutcome[]): SyncStats {
+function tally(outcomes: readonly SyncOutcome[]): SyncStats {
   const stats: SyncStats = { checked: 0, updated: 0, upToDate: 0, missed: 0 };
   for (const outcome of outcomes) {
     if (outcome.kind === "skipped") continue;

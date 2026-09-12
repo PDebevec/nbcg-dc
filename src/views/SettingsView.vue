@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useSettingsScreen } from "@composables/useSettingsScreen";
-import SegmentedControl from "../components/common/SegmentedControl.vue";
+import SegmentedControl from "@ui/common/SegmentedControl.vue";
 import type { ThemePreference } from "@domain/config";
 
 const {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useBatches } from "@composables/useBatches";
-import BatchCard from "../components/batch/BatchCard.vue";
+import BatchCard from "@ui/batch/BatchCard.vue";
 
 const { cards, isEmpty, loading, error, open, newFromOverview } = useBatches();
 </script>

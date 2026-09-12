@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useOverview } from "@composables/useOverview";
-import StagePips from "../components/table/StagePips.vue";
-import StatePill from "../components/table/StatePill.vue";
+import StagePips from "@ui/table/StagePips.vue";
+import StatePill from "@ui/table/StatePill.vue";
 
 const {
   loading,

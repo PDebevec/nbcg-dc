@@ -19,7 +19,7 @@ import type {
   TextExtractionStatus,
 } from "@domain/enums";
 import type { RecordMetadata, RecordMetadataInput } from "@domain/metadata";
-import type { ResolvedCode, RecordSchema } from "@domain/schema";
+import type { ResolvedCode } from "@domain/schema";
 
 export type {
   VisibilityStatus,
@@ -583,38 +583,6 @@ export interface CobissPreview {
   metadata: DomainRecord;
 }
 
-/** POST /api/import/cobiss body (async import — the archive prefers preview +
- * POST /api/items to avoid orphan drafts). */
-export interface CobissImportDto {
-  ids: string[];
-  target: ItemType;
-  visibilityStatus: VisibilityStatus;
-}
-
-export interface CobissImportResult {
-  jobId: string;
-}
-
-export interface ImportJobProgress {
-  total: number;
-  processed: number;
-  succeeded: number;
-  failed: number;
-  errors: Array<{ id: string; reason: string }>;
-}
-
-/** GET /api/import/jobs/:jobId response. `state` is a BullMQ job state. Job
- * disappears (→ 404) after its TTL (24h complete / 7d failed). */
-export interface ImportJobStatus {
-  jobId: string;
-  source: "cobiss" | "local";
-  state: string;
-  requestedAt: string;
-  progress: ImportJobProgress | null;
-  failedReason: string | null;
-  finishedAt: string | null;
-}
-
 /**
  * Normalised COBISS/COMARC record (the preview `metadata`). All fields
  * optional. Faithful to the backend's *active* (uncommented) `DomainRecord`
@@ -701,8 +669,14 @@ export interface DomainRecord {
 // ─── schema ─────────────────────────────────────────────────────────────
 // GET /api/schema/record?level=main|child  → { fields }  (strong ETag)
 
-/**
- * `GET /api/schema/record` response. Anonymous-OK; strong quoted-md5 `ETag` +
+/*
+ * `GET /api/schema/record`. The response type itself is `RecordSchema` in
+ * `@domain/schema`; this section carries only what was measured against the
+ * live backend. Deliberately not a JSDoc block - it documents the endpoint,
+ * not any one declaration, and as `/**` it would silently re-attach itself
+ * to whatever type came next.
+ *
+ * Anonymous-OK; strong quoted-md5 `ETag` +
  * `Cache-Control: public, max-age=86400`, and `If-None-Match` correctly yields
  * `304` (live-verified 2026-08-07, including for the empty body below).
  *
@@ -735,7 +709,6 @@ export interface DomainRecord {
  * no invalidation, so a schema change on the backend only reaches clients after
  * a backend restart.
  */
-export type RecordSchemaResponse = RecordSchema;
 
 // ─── health ─────────────────────────────────────────────────────────────
 // GET /api/health  (unauthenticated liveness probe)

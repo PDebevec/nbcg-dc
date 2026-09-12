@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { useBatchSetup } from "@composables/useBatchSetup";
-import SegmentedControl from "../../components/common/SegmentedControl.vue";
-import ParentRecordsCard from "../../components/batch/ParentRecordsCard.vue";
+import SegmentedControl from "@ui/common/SegmentedControl.vue";
+import Spinner from "@ui/common/Spinner.vue";
+import ParentRecordsCard from "@ui/batch/ParentRecordsCard.vue";
 
 const props = defineProps<{ batchId: string }>();
 
@@ -118,7 +119,7 @@ async function onContinue(): Promise<void> {
 
     <div v-if="editable" class="actions">
       <button class="btn-primary" :disabled="applying" @click="onContinue()">
-        <span v-if="applying" class="spinner" />
+        <Spinner v-if="applying" tone="on-primary" />
         {{ applying ? "Applying defaults…" : "Next: Metadata →" }}
       </button>
     </div>
@@ -255,15 +256,5 @@ async function onContinue(): Promise<void> {
 .btn-primary:disabled {
   opacity: 0.7;
   cursor: default;
-}
-
-.spinner {
-  width: 13px;
-  height: 13px;
-  border: 2px solid rgba(255, 255, 255, 0.4);
-  border-top-color: #fff;
-  border-radius: 50%;
-  display: inline-block;
-  animation: spin 0.7s linear infinite;
 }
 </style>

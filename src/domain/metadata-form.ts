@@ -234,7 +234,7 @@ export function isItemValid(
 export type ItemReadiness = "ready" | "incomplete" | "untouched";
 
 /** True when none of the level's fields hold a value. */
-export function allFieldsEmpty(
+function allFieldsEmpty(
   fields: FieldDescriptor[],
   values: Record<string, unknown>,
 ): boolean {

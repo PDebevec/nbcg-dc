@@ -16,10 +16,6 @@ const LEVEL_ORDER: Record<LogLevel, number> = {
 // Verbose in dev, quieter in a production bundle.
 let minLevel: LogLevel = import.meta.env.DEV ? "debug" : "info";
 
-export function setLogLevel(level: LogLevel): void {
-  minLevel = level;
-}
-
 function emit(
   level: LogLevel,
   scope: string,

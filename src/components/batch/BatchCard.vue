@@ -3,25 +3,12 @@ import { computed } from "vue";
 import type { BatchCardView } from "@composables/useBatches";
 import StepIndicator from "./StepIndicator.vue";
 import ProgressBar from "./ProgressBar.vue";
+import Spinner from "@ui/common/Spinner.vue";
+import Pill from "@ui/common/Pill.vue";
 
 const props = defineProps<{ card: BatchCardView }>();
 
 defineEmits<{ open: [id: string] }>();
-
-/** Pill palette per status label (BATCH_STAGE_LABELS copy). */
-const pillClass = computed(() => {
-  switch (props.card.status) {
-    case "Metadata":
-      return "purple";
-    case "Processing":
-      return "blue";
-    case "Ready to upload":
-    case "Uploaded":
-      return "green";
-    default:
-      return "gray";
-  }
-});
 
 const pct = computed(() => `${Math.round(props.card.progress.ratio * 100)}%`);
 </script>
@@ -34,11 +21,12 @@ const pct = computed(() => `${Math.round(props.card.progress.ratio * 100)}%`);
   >
     <div class="head">
       <span class="number">{{ card.label }}</span>
-      <span class="pill" :class="pillClass">
-        <span v-if="card.running" class="spinner" />
-        <span v-else class="dot" />
+      <Pill :tone="card.tone">
+        <template v-if="card.running" #marker>
+          <Spinner :size="11" />
+        </template>
         {{ card.status }}
-      </span>
+      </Pill>
       <span class="created">{{ card.createdAt }}</span>
     </div>
     <div class="count">
@@ -87,52 +75,6 @@ const pct = computed(() => `${Math.round(props.card.progress.ratio * 100)}%`);
   color: var(--c-text-strong);
 }
 
-.pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
-  border-radius: var(--r-pill);
-  font-size: 11.5px;
-  font-weight: 600;
-}
-
-.pill .dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-}
-
-.pill.gray {
-  color: var(--c-idle);
-  background: var(--c-idle-bg);
-}
-
-.pill.purple {
-  color: var(--c-parent);
-  background: var(--c-parent-bg);
-}
-
-.pill.blue {
-  color: var(--c-info);
-  background: var(--c-info-bg);
-}
-
-.pill.green {
-  color: var(--c-success);
-  background: var(--c-success-bg);
-}
-
-.spinner {
-  width: 11px;
-  height: 11px;
-  border: 2px solid rgba(47, 111, 237, 0.35);
-  border-top-color: var(--c-info);
-  border-radius: 50%;
-  display: inline-block;
-  animation: spin 0.7s linear infinite;
-}
 
 .created {
   margin-left: auto;

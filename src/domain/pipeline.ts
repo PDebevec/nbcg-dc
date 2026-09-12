@@ -57,9 +57,10 @@ export type InputShape =
    * own base name so its `<base>.txt` matches. */
   | "multiple-pdfs"
   /**
-   * A **numbered run of page images** with no PDF/TIFF — a book scanned page by
-   * page as JPGs. Assemble one folder-derived web PDF from the pages (in natural
-   * order) and run OCR. No archival master: JPG is already lossy, so there is no
+   * **Two or more images** with no PDF/TIFF — a book scanned page by page as
+   * JPGs, or any multi-sheet item. Assemble one folder-derived web PDF from the
+   * images (numbered order where the names give one, natural order otherwise)
+   * and run OCR. No archival master: JPG is already lossy, so there is no
    * lossless source to preserve.
    *
    * This shape exists because the real scanner output is JPG, not TIFF
@@ -67,9 +68,16 @@ export type InputShape =
    * {@link InputShape} `images-only` and silently got **no PDF and no OCR**.
    */
   | "page-images"
-  /** Images with no PDF/TIFF and **no page run** — a standalone graphical work
-   * (a map, a poster). Images are the web assets; no PDF is built and **no OCR
-   * runs**, because there is no running text to extract. */
+  /**
+   * **One image** with no PDF/TIFF — a standalone graphical work: a map, a
+   * poster, a postcard. The image is the web asset and no PDF is built, because
+   * there is nothing to bind a single sheet into.
+   *
+   * It still gets OCR. A lone graphical work usually does carry text — a
+   * poster's title, a map's legend — and `py/ocr.py` reads an image directly
+   * (its non-PDF branch), writing `<stem>.txt` beside it. That name is what
+   * pairs it back to the image in `domain/upload.textPairs`.
+   */
   | "images-only"
   /** Nothing processable found. */
   | "empty";
@@ -93,7 +101,7 @@ export type ContentKind =
   | "graphical";
 
 /** The source TIFFs in a folder (kept local; never uploaded). */
-export function sourceTiffs(assets: DiscoveredAsset[]): DiscoveredAsset[] {
+function sourceTiffs(assets: DiscoveredAsset[]): DiscoveredAsset[] {
   return assets.filter((a) => a.kind === "source-tiff");
 }
 
@@ -176,12 +184,15 @@ export function classifyInput(
   // left to classify from.
   if (images.length === 0) return allPdfs.length > 0 ? "supplied-pdf" : "empty";
 
-  // Images only. Are they a book's pages, or a standalone graphical work?
+  // Images only, so the question is just how many sheets there are.
+  //
+  // One image is a standalone work — a map, a poster, a postcard — and there
+  // is no PDF to build out of a single sheet. Two or more are bound into one
+  // PDF, whether or not their names happen to form a numbered run: an
+  // unnumbered pair is still two sheets of one item. Either way they get OCR.
   if (kind === "book") return "page-images";
   if (kind === "graphical") return "images-only";
-  return detectPageSequence(images.map((a) => a.filename)).isSequence
-    ? "page-images"
-    : "images-only";
+  return sourceImages(assets).length <= 1 ? "images-only" : "page-images";
 }
 
 /** The page images of a folder, **in page order** (natural sort). Empty unless
@@ -192,9 +203,7 @@ export function pageImages(
   context: ClassifyContext = {},
 ): DiscoveredAsset[] {
   if (classifyInput(assets, kind, context) !== "page-images") return [];
-  const images = thumbnailCandidates(assets).filter(
-    (a) => !isVariantFilename(a.filename),
-  );
+  const images = sourceImages(assets);
   const sequence = detectPageSequence(images.map((a) => a.filename));
   if (sequence.isSequence) {
     // Detection already ordered the run numerically; map back to the assets.
@@ -203,14 +212,18 @@ export function pageImages(
       .map((f) => byName.get(f))
       .filter((a): a is DiscoveredAsset => Boolean(a));
   }
-  // Forced `book` with unnumbered names — fall back to natural order.
+  // Unnumbered names (an unnumbered multi-sheet item, or a forced `book`) —
+  // fall back to natural order.
   return [...images].sort((a, b) => compareNatural(a.filename, b.filename));
 }
 
 /** Which of the three runnable stages apply to an input shape. Stages that do
  * **not** apply are N/A for the item and should be recorded `skipped` (e.g. OCR
  * on an images-only folder). */
-export function applicableStages(shape: InputShape): Record<RunnableStage, boolean> {
+/** Which stages a shape can run at all. */
+export function applicableStages(
+  shape: InputShape,
+): Record<RunnableStage, boolean> {
   switch (shape) {
     case "tiffs":
     case "supplied-pdf":
@@ -221,7 +234,7 @@ export function applicableStages(shape: InputShape): Record<RunnableStage, boole
       // runner.
       return { pdf: true, thumbnail: true, ocr: true };
     case "images-only":
-      return { pdf: false, thumbnail: true, ocr: false };
+      return { pdf: false, thumbnail: true, ocr: true };
     case "empty":
       return { pdf: false, thumbnail: false, ocr: false };
   }
@@ -284,6 +297,21 @@ function generatedFirstPageCount(assets: DiscoveredAsset[], shape: InputShape): 
 }
 
 /** Resolve the {@link ThumbnailPlan} for a folder. */
+/**
+ * The folder's **source** images — the scans themselves.
+ *
+ * Deliberately not {@link thumbnailCandidates}, which also returns
+ * `kind: "thumbnail"`: that includes the `<name>_thumb.png` this app
+ * *generates*. Counting a derived output as a source scan made a processed
+ * one-image folder look like a two-image one, and picking one as the OCR
+ * input would have read the downscaled thumbnail instead of the full scan.
+ */
+export function sourceImages(assets: DiscoveredAsset[]): DiscoveredAsset[] {
+  return assets.filter(
+    (a) => a.kind === "image" && !isVariantFilename(a.filename),
+  );
+}
+
 export function planThumbnail(
   assets: DiscoveredAsset[],
   shape: InputShape,
@@ -294,9 +322,15 @@ export function planThumbnail(
   // A book's thumbnail is its FIRST PAGE — there is nothing to choose. Without
   // this, a 260-page scan reported 260 equal candidates and blocked the item on
   // an operator "choice" that has exactly one sensible answer.
+  //
+  // Unless something already picked one. A tagged image — one the operator
+  // named `thumbnail`, or the `<name>_thumb.png` a previous run generated — is
+  // a deliberate choice and outranks page one, which is only ever a fallback.
+  // The cover is usually the better catalogue image anyway
+  // (docs/tasks/cover-shots-and-thumbnail-choice.md).
   if (shape === "page-images") {
     const pages = pageImages(assets, kind);
-    const first = pages[0] ?? null;
+    const first = autoThumbnail(assets) ?? pages[0] ?? null;
     return {
       present: pages,
       generatedCount: 0,
@@ -420,7 +454,7 @@ function summarizeNumbers(numbers: number[], cap = 10): string {
 }
 
 /** Build the {@link PipelinePlan} for one item folder. `folderName` is the
- * derived-output naming base (the folder's own name — docs/10 §Naming);
+ * derived-output naming base (the folder's own name — docs/tasks/10 §Naming);
  * `kind` is the operator's content override (default: detect). */
 export function planPipeline(
   assets: DiscoveredAsset[],
@@ -561,15 +595,13 @@ export function markNonApplicableSkipped(
 }
 
 /**
- * The stages whose (re)production dirties a published item — every derived
- * output (PDF, thumbnail, OCR), **never** `metadata`. Regenerating any of these
- * on an already-uploaded item sets the "derived-changed-since-upload" flag that
- * surfaces as **Needs re-upload** (docs/tasks/06; Epics 02/07). Metadata edits
- * write through by `PATCH` and never dirty the assets.
+ * Whether (re)running a stage dirties a published item → **Needs re-upload**.
+ *
+ * True for every derived output (PDF, thumbnail, OCR), **never** for
+ * `metadata`: regenerating a derived asset on an already-uploaded item sets
+ * the "derived-changed-since-upload" flag (docs/tasks/06; Epics 02/07), while
+ * metadata edits write through by `PATCH` and never dirty the assets.
  */
-export const DERIVED_STAGES: readonly RunnableStage[] = RUNNABLE_STAGES;
-
-/** Whether (re)running a stage dirties a published item → Needs re-upload. */
 export function dirtiesUpload(stage: StageName): boolean {
-  return (DERIVED_STAGES as readonly StageName[]).includes(stage);
+  return (RUNNABLE_STAGES as readonly StageName[]).includes(stage);
 }

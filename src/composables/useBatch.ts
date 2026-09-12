@@ -27,6 +27,7 @@ import { useBatchesStore } from "@stores/useBatches";
 import { useBatchWorkStore } from "@stores/useBatchWork";
 import {
   BATCH_STAGE_LABELS,
+  BATCH_STAGE_TONES,
   BATCH_STEPS,
   BATCH_TAB_LABELS,
   batchLabel,
@@ -34,6 +35,7 @@ import {
   singleRunBlockedMessage,
   stepIndexForStage,
   type BatchProgress,
+  type BatchStageTone,
   type BatchTab,
 } from "@domain/batch";
 
@@ -44,6 +46,8 @@ export interface BatchHeaderView {
   label: string;
   /** Status-pill text (the stage label). */
   status: string;
+  /** Status-pill tone, from {@link BATCH_STAGE_TONES}. */
+  tone: BatchStageTone;
   running: boolean;
   itemCount: number;
   /** Whether the batch is read-only right now (archived, or Done-not-unlocked). */
@@ -95,6 +99,7 @@ export function useBatch(batchId: MaybeRefOrGetter<string>) {
       id: b.id,
       label: batchLabel(b.no),
       status: BATCH_STAGE_LABELS[b.stage],
+      tone: BATCH_STAGE_TONES[b.stage],
       running: b.running,
       itemCount: b.itemIds.length,
       readOnly: readOnly.value,

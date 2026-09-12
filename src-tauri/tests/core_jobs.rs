@@ -178,6 +178,7 @@ fn page_images_item(
         thumbnail_needs_choice: false,
         web_pdf_bases: Vec::new(),
         page_images: page_images.into_iter().map(String::from).collect(),
+        ocr_images: Vec::new(),
         split_spreads: false,
     }
 }
@@ -916,6 +917,7 @@ fn images_only_thumbnail_only_never_builds_a_pdf() {
         thumbnail_needs_choice: false,
         web_pdf_bases: Vec::new(),
         page_images: Vec::new(),
+        ocr_images: Vec::new(),
         split_spreads: false,
     };
 
@@ -971,6 +973,7 @@ fn images_only_honours_the_tagged_thumbnail_over_the_natural_first_image() {
         thumbnail_needs_choice: false,
         web_pdf_bases: Vec::new(),
         page_images: Vec::new(),
+        ocr_images: Vec::new(),
         split_spreads: false,
     };
 

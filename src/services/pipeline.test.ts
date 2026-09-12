@@ -106,6 +106,8 @@ describe("buildRunRequest", () => {
       webPdfBases: ["nb"],
       // A TIFF build is not a page run, and spread splitting is opt-in.
       pageImages: [],
+      // Only an images-only item OCRs a bare image.
+      ocrImages: [],
       splitSpreads: false,
     });
   });
@@ -160,21 +162,23 @@ describe("buildRunRequest", () => {
     expect(req.items[0].primaryThumbnail).toBe("cover.jpg");
   });
 
-  it("carries no PDF/OCR work and no web-pdf bases for an images-only item", () => {
-    // The adaptive contract: images-only ⇒ thumbnail stage only, empty
-    // webPdfBases (DTO: "Empty for images-only").
+  it("carries no PDF work and no web-pdf bases for a lone image, but does OCR it", () => {
+    // The adaptive contract: images-only ⇒ no PDF to build, empty
+    // webPdfBases (DTO: "Empty for images-only"), and the scan itself as the
+    // OCR input - never the generated thumbnail.
     const item = makeItem({
       id: "map",
       folderName: "map",
-      assets: [asset("map", "a.jpg"), asset("map", "b.jpg")],
+      assets: [asset("map", "a.jpg")],
     });
     const req = buildRunRequest(makeBatch(["map"]), mapOf(item), { mode: "run" });
     expect(req.items[0].inputShape).toBe("images-only");
-    expect(req.items[0].stages).toEqual(["thumbnail"]);
+    expect(req.items[0].stages).toEqual(["thumbnail", "ocr"]);
     expect(req.items[0].webPdfBases).toEqual([]);
-    // no operator pick + 2 candidates ⇒ unresolved primary, held pending
-    expect(req.items[0].primaryThumbnail).toBeNull();
-    expect(req.items[0].thumbnailNeedsChoice).toBe(true);
+    expect(req.items[0].ocrImages).toEqual(["a.jpg"]);
+    // one candidate ⇒ auto-resolved
+    expect(req.items[0].primaryThumbnail).toBe("a.jpg");
+    expect(req.items[0].thumbnailNeedsChoice).toBe(false);
   });
 
   it("uses an operator-chosen primary thumbnail over the plan default", () => {

@@ -94,14 +94,17 @@ describe("uploadBlockers", () => {
     expect(codes).toEqual(["processing-failed"]);
   });
 
-  it("hard-blocks a multi-image item with no chosen primary", () => {
+  it("does not block a multi-image item: its thumbnail is simply page one", () => {
+    // Two or more loose images are a page-images item now, so there is no
+    // cover to choose - `planThumbnail` takes pages[0]. The multi-PDF case
+    // below is what still needs an operator pick.
     const assets = [
       discoverAsset("page_1.jpg", "/p/page_1.jpg"),
       discoverAsset("page_2.jpg", "/p/page_2.jpg"),
     ];
     const item = makeItem({ assets });
     const codes = uploadBlockers(item, { metadataReady: true, primaryThumbnail: null }).map((b) => b.code);
-    expect(codes).toContain("thumbnail-unresolved");
+    expect(codes).not.toContain("thumbnail-unresolved");
   });
 
   it("clears the thumbnail gate once a primary is chosen", () => {
@@ -346,6 +349,31 @@ describe("textPairs", () => {
       ["Gorski.pdf", "gorski.txt"],
     ]);
   });
+
+  it("pairs an images-only item's text with the image, since there is no PDF", () => {
+    // The lone graphical work now gets OCR-ed (domain/pipeline), and the image
+    // is what gets uploaded - so the image filename is the extractedTexts key.
+    // Without this the .txt would be written and then silently dropped.
+    const assets = [
+      discoverAsset("map.jpg", "/p/map.jpg"),
+      discoverAsset("map.txt", "/p/map.txt"),
+    ];
+    const pairs = textPairs(assets);
+    expect(pairs.map((p) => [p.pdfFilename, p.text.filename])).toEqual([
+      ["map.jpg", "map.txt"],
+    ]);
+  });
+
+  it("never lets a book's page image claim the folder text - the PDF owns it", () => {
+    const assets = [
+      discoverAsset("Book.pdf", "/p/Book.pdf"),
+      discoverAsset("Book.txt", "/p/Book.txt"),
+      discoverAsset("001.jpg", "/p/001.jpg"),
+      discoverAsset("001.txt", "/p/001.txt"),
+    ];
+    const pairs = textPairs(assets);
+    expect(pairs.map((p) => p.pdfFilename)).toEqual(["Book.pdf"]);
+  });
 });
 
 // ── mode + change detection ─────────────────────────────────────────────
@@ -434,9 +462,10 @@ describe("planItemUpload / isUploadable", () => {
   });
 
   it("carries blockers and is not uploadable when unresolved", () => {
+    // Two PDFs: two generated first-page candidates, no way to rank them.
     const assets = [
-      discoverAsset("page_1.jpg", "/p/1"),
-      discoverAsset("page_2.jpg", "/p/2"),
+      discoverAsset("a.pdf", "/p/1"),
+      discoverAsset("b.pdf", "/p/2"),
     ];
     const plan = planItemUpload(makeItem({ assets }), { metadataReady: false, primaryThumbnail: null });
     expect(isUploadable(plan)).toBe(false);

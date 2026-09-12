@@ -42,6 +42,8 @@ Read in order:
 | [05 – Real scan data](docs/05-real-scan-data.md) | Measured from actual scanner output |
 | [06 – Native core & dev setup](docs/06-native-core-and-dev-setup.md) | What `src-tauri/` does; toolchain requirements |
 | [PROJECT-KNOWLEDGE](docs/PROJECT-KNOWLEDGE.md) | The verified backend contract |
+| [REFACTOR](docs/REFACTOR.md) | The de-slop plan — what has been cleaned and what is next |
+| [OUTSTANDING](docs/OUTSTANDING.md) | Everything still to do that the other backlogs do not record |
 | [tasks/](docs/tasks/README.md) | The epic roadmap |
 
 ## Layout
@@ -59,8 +61,8 @@ Ownership is split by file type across three lanes — see
 ## Tests
 
 ```bash
-npm test                      # 618 frontend tests
-cd src-tauri && cargo test    # 73 native tests
+npm test                      # 771 frontend tests
+cd src-tauri && cargo test    # 149 native tests (+1 needing a real Python)
 ```
 
 ## Recommended IDE setup
