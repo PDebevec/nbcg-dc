@@ -220,6 +220,15 @@ Blocked, but recorded so it is not lost.
   `requirements.txt` documents at length how an unpinned recogniser once cost a
   large silent regression.
 
+- [ ] **OCR runs with PaddlePaddle's optimised CPU backend switched off, and it
+      does not have to.** `enable_mkldnn=False` is there because the *detector*
+      crashes under oneDNN; the recogniser, which is ~95% of the runtime, does
+      not. Measured 11.1x on a lone map, 2.2-2.6x on a book, and slightly *more*
+      accurate. See `docs/OCR-PERFORMANCE.md` for the measurements and the exact
+      changes - it also records why PP-OCRv6 and an engine swap were rejected,
+      and what an ONNX Runtime move would buy (924 MB -> ~60 MB, and GPU support
+      on non-NVIDIA machines).
+
 ---
 
 ## 7. Deliberately not doing

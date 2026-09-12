@@ -25,6 +25,16 @@ pypdfium2>=5.13.0
 # ocr.py now pins every model name explicitly, so this can't recur silently;
 # these pins are the second line of defence. Re-verify with
 # py/tools/bench_ocr.py before raising any of them.
+#
+# Second thing to re-check on a bump: paddlepaddle 3.3.1 cannot run the text
+# *detector* under oneDNN - it raises `ConvertPirAttribute2RuntimeAttribute`
+# from the PIR executor. `ocr.py` works around that by registering the
+# detector in PaddleX's own MKLDNN_BLOCKLIST, so oneDNN can stay on for the
+# recogniser, which is ~95% of the runtime and where the speed is. If a newer
+# paddlepaddle fixes the detector, that workaround can go and detection gets
+# faster too. It reaches into a private PaddleX module path, so a PaddleX bump
+# is the other thing that can break it - it fails soft (back to today's
+# speed), but check the log line. See docs/OCR-PERFORMANCE.md.
 paddleocr==3.7.0
 paddlepaddle==3.3.1
 numpy==2.3.5

@@ -19,13 +19,35 @@ import os
 # wide - see `ocr.py`'s DEFAULT_CPU_THREADS.
 THREADS_PER_WORKER = 2
 
-# Resident set of one warmed-up worker, measured at roughly 400-500 MB across
-# the benchmark runs. Used to keep a big core count from promising more
-# workers than the machine has memory for.
-WORKER_FOOTPRINT_MB = 500
+# Resident set of one warmed-up worker. Used to keep a big core count from
+# promising more workers than the machine has memory for.
+#
+# This was 500 MB, measured before oneDNN. It is now higher for two reasons
+# that compound, and 500 was low enough to let the machine thrash:
+#
+#   - oneDNN roughly doubles a worker's resident set (342 MB -> ~660 MB
+#     measured on the same page). The OMP_NUM_THREADS pin in `ocr.py` holds
+#     that down; without it, budget more again.
+#   - the PDF path is heavier than the page-image path. Each worker opens its
+#     own pdfium handle and rasterises pages into it, so a long book read
+#     straight from a large PDF sits well above a worker fed page images.
+#
+# Measured in the app, 11 workers on a 522-page 61 MB PDF: mean 643 MB, peak
+# 745 MB. At the old 500 MB the ceiling below never bound, 11 workers were
+# started, and the machine went to 0.7 GB free and ~1400 hard page faults per
+# second - paging cost far more than the extra workers bought. Budget the
+# peak, not the mean: the ceiling exists to stop exactly that.
+WORKER_FOOTPRINT_MB = 800
 
 # Leave this much for the OS, the app itself, and the parent process.
-RESERVED_MB = 2048
+#
+# Was 2048, which is not what this app actually leaves behind. Measured while
+# OCR was running: 3.8 GB held by everything that is not a worker - the Tauri
+# app, its WebView, the operator's browser, the parent python. Reserving less
+# than that guarantees the shortfall comes out of the pagefile, which is what
+# happened. This is a desktop tool someone is using while it runs, not a
+# batch box, so the reservation has to cover the desktop.
+RESERVED_MB = 4096
 
 # Below this many pages a worker cannot pay for itself: each one loads the
 # recognition models from scratch (a second or two), so slicing a five-page
@@ -34,14 +56,23 @@ MIN_PAGES_PER_WORKER = 8
 
 
 def _available_memory_mb() -> int | None:
-    """Total system memory, or `None` when it cannot be determined - in which
-    case the caller simply does not apply the memory ceiling."""
+    """Memory this run can actually claim, or `None` when it cannot be
+    determined - in which case the caller does not apply the memory ceiling.
+
+    Deliberately `available`, not `total`. Sizing from total assumes the
+    machine is otherwise idle, and it never is: the app, a WebView and a
+    browser were holding 3.8 GB when this was measured, so a "15 GB" machine
+    had about 11 GB to give. Total-based sizing put 11 workers on it, went to
+    0.7 GB free, and spent the difference in the pagefile. `available` is what
+    the operating system says can be handed out without paging, which is the
+    question actually being asked here.
+    """
     try:
         import psutil
     except Exception:
         return None
     try:
-        return int(psutil.virtual_memory().total / (1024 * 1024))
+        return int(psutil.virtual_memory().available / (1024 * 1024))
     except Exception:
         return None
 
@@ -61,8 +92,14 @@ def worker_count(
     With no request, use as much of the machine as the *measured* curve
     supports: one worker per `THREADS_PER_WORKER` cores. Throughput does
     flatten well before the core count (memory bandwidth, not cores, is the
-    limit), so this is a ceiling rather than a promise - but leaving cores
-    idle guarantees the slow case, and the flattening only wastes a little.
+    limit), so this is a ceiling rather than a promise.
+
+    The memory ceiling is not a formality. Overshooting cores costs a little
+    throughput; overshooting memory costs everything, because the machine
+    starts paging and the workers spend their time waiting on disk instead of
+    reading pages. That is not hypothetical - it is what eleven of these
+    workers did to a 15 GB laptop once oneDNN raised the per-worker footprint.
+    So when the two disagree, memory wins.
     """
     if page_count <= 0:
         return 1

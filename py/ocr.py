@@ -28,6 +28,22 @@ Requirements:
     pip install paddleocr paddlepaddle pypdfium2 pypdf reportlab
     No system dependency - see py/requirements.txt.
 """
+import os
+
+# oneDNN builds its own thread pool and does NOT honour PaddleOCR's
+# `cpu_threads`; OMP_NUM_THREADS is what it reads. Left unset, one worker
+# spreads over ~13 of this machine's 22 cores and ~730 MB resident instead of
+# staying in its two-core lane at ~485 MB - which collides with the sibling
+# workers and quietly invalidates `nbcg_pipeline.workers`' memory sizing.
+#
+# This has to run before numpy/cv2/paddle are imported: whichever of them
+# loads the OpenMP runtime first fixes the pool size, and assigning afterwards
+# is silently ignored (measured - setting it below `import cv2` does nothing).
+# Spawned workers inherit it. Keep it in step with DEFAULT_CPU_THREADS below,
+# which cannot be referenced here: defining it means importing, which is
+# exactly what must not happen yet.
+os.environ.setdefault("OMP_NUM_THREADS", "2")
+
 import argparse
 import logging
 import time
@@ -96,6 +112,36 @@ REC_MODELS = {
 }
 PADDLE_LANGS = {"rs_latin": "rs_latin", "rs_cyrillic": "cyrillic"}
 
+# oneDNN, for the recogniser only.
+#
+# `enable_mkldnn` reaches every submodel at once, and the *detector* crashes
+# under oneDNN on paddlepaddle 3.3.1 (`NotImplementedError: (Unimplemented)
+# ConvertPirAttribute2RuntimeAttribute`, measured). That is why this pipeline
+# ran on unoptimised kernels throughout - including the recogniser, which is
+# ~95% of the runtime and works under oneDNN perfectly well.
+#
+# PaddleX already knows how to handle a model that cannot run oneDNN:
+# MKLDNN_BLOCKLIST makes it fall back to the plain backend and log that it
+# did, rather than crash. This detector is simply missing from the list
+# upstream, so put it there. The append mutates the same list object
+# `runner.py` imported, and the list is read when a predictor is built, so
+# doing this after `import paddleocr` is enough (verified).
+#
+# Worth 11.1x on a lone map and 2.2-2.6x on a book, and it read slightly
+# *more* correct words, not fewer. See docs/OCR-PERFORMANCE.md. Re-test after
+# any paddlepaddle upgrade: once the detector bug is fixed this entry only
+# denies detection a speedup, so it stays safe in the meantime.
+try:
+    from paddlex.inference.models.runners.paddle_static.config import blocklists
+
+    if DET_MODEL not in blocklists.MKLDNN_BLOCKLIST:
+        blocklists.MKLDNN_BLOCKLIST.append(DET_MODEL)
+    ONEDNN = True
+except Exception:
+    # A PaddleX that moved this private module. Stay exactly on the old path
+    # rather than letting the detector crash mid-batch.
+    ONEDNN = False
+
 # Inference threads per OCR process. Measured, on 22 cores, one process per
 # configuration, three real pages each:
 #
@@ -108,12 +154,29 @@ PADDLE_LANGS = {"rs_latin": "rs_latin", "rs_cyrillic": "cyrillic"}
 # once, not by giving one item more threads. Overridable with --cpu-threads,
 # but re-measure with py/tools/bench_ocr.py before believing a bigger number
 # will help.
+#
+# That table predates oneDNN. Re-measured with it on, the curve is still flat
+# (1 thread 15.6s, 2 -> 14.6s, 4 -> 14.8s, 8 -> 15.3s, 16 -> 16.2s), so 2
+# stands. Note it no longer governs the recogniser by itself: oneDNN reads
+# OMP_NUM_THREADS, pinned at the top of this file.
 DEFAULT_CPU_THREADS = 2
 
-# Recognition batch size. `None` means "whatever PaddleOCR picks", which
-# measured fastest: batching the detected lines more aggressively was slower,
-# not faster (20.20 s/page at the library default, 21.88 at 16, 24.74 at 32).
-DEFAULT_REC_BATCH_SIZE = None
+# Recognition batch size.
+#
+# This was `None` - "whatever PaddleOCR picks" - on the measurement that
+# batching was slower, not faster: 20.20 s/page at the library default, 21.88
+# at 16, 24.74 at 32. That was measured with oneDNN off, where batching cannot
+# pay, and the library's own pick is effectively 1. With oneDNN on the
+# ordering reverses outright, same page, same crops:
+#
+#     batch     1      8      16     32
+#     seconds   16.9   6.2    4.8    4.0
+#
+# The two settings are coupled, which is why moving either one alone found
+# nothing. Batching does perturb what is read a little - PP-OCR pads the crops
+# in a batch out to the widest one - but across three real samples it read
+# *more* correct words rather than fewer (docs/OCR-PERFORMANCE.md).
+DEFAULT_REC_BATCH_SIZE = 32
 
 _OCR_ENGINES = {}
 _ENGINE_OPTIONS = {
@@ -158,8 +221,9 @@ def _current_device() -> device.DeviceChoice:
 
 
 def _build_engine(lang, choice: device.DeviceChoice):
-    # Only passed when set: PaddleOCR's own default measured fastest, and
-    # passing None explicitly is not the same as leaving it alone.
+    # Still only passed when set: passing None explicitly is not the same as
+    # leaving it alone. The default is no longer None, though - see
+    # DEFAULT_REC_BATCH_SIZE for why the library's own pick is the slow one.
     batch_size = _ENGINE_OPTIONS["rec_batch_size"]
     extra = {} if batch_size is None else {"text_recognition_batch_size": batch_size}
     threads = _ENGINE_OPTIONS["cpu_threads"] or choice.cpu_threads
@@ -179,13 +243,9 @@ def _build_engine(lang, choice: device.DeviceChoice):
         # --no-textline-orientation turns it off when the source is known to
         # be upright and the time matters more.
         use_textline_orientation=_ENGINE_OPTIONS["textline_orientation"],
-        # Left off deliberately. It is PaddleOCR's own default and the obvious
-        # speed lever, but on paddlepaddle 3.3.1 it raises
-        # `NotImplementedError: (Unimplemented) ConvertPirAttribute2Run`
-        # during inference - measured, and almost certainly why this was
-        # switched off here in the first place. Re-test after any paddlepaddle
-        # upgrade.
-        enable_mkldnn=False,
+        # On for the recogniser; the detector falls back to the plain backend
+        # through MKLDNN_BLOCKLIST above, which is where the why lives.
+        enable_mkldnn=ONEDNN,
         cpu_threads=threads,
     )
 
@@ -778,15 +838,22 @@ def main() -> int:
         help=f"Inference threads per OCR process (default {DEFAULT_CPU_THREADS}). "
              "More is measurably slower, not faster: on 22 cores this went "
              "20.0s/page at 1 thread to 27.6s at 16. Use more of the machine "
-             "by running more items at once instead.",
+             "by running more items at once instead. Note this sets paddle's "
+             "own thread count, which no longer governs recognition on its "
+             "own: that runs under oneDNN, which reads OMP_NUM_THREADS "
+             "(pinned to 2 at the top of this file). Set that in the "
+             "environment to widen recognition - and see why you probably "
+             "should not in docs/OCR-PERFORMANCE.md.",
     )
     parser.add_argument(
         "--rec-batch-size",
         type=int,
         default=DEFAULT_REC_BATCH_SIZE,
-        help="How many detected text lines are recognized per batch. "
-             "Default is PaddleOCR's own choice, which measured fastest - "
-             "forcing 16 or 32 was slower.",
+        help=f"How many detected text lines are recognized per batch "
+             f"(default {DEFAULT_REC_BATCH_SIZE}). PaddleOCR's own pick is "
+             "effectively 1, which is ~4x slower now that recognition runs "
+             "under oneDNN - the older note that batching lost was measured "
+             "with oneDNN off.",
     )
     parser.add_argument(
         "--workers",

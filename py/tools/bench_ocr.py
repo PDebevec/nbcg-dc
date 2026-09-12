@@ -37,6 +37,11 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Mirrors ocr.py: oneDNN reads OMP_NUM_THREADS, not `cpu_threads`, and it must
+# be set before cv2/numpy/paddle load the OpenMP runtime. Without this the
+# `threads` column below measures nothing once mkldnn is on.
+os.environ.setdefault("OMP_NUM_THREADS", "2")
+
 import cv2
 import numpy as np
 import psutil
@@ -56,6 +61,18 @@ CURRENT_LATIN_REC_EFFECTIVE = "PP-OCRv6_medium_rec"
 # The mobile counterpart, i.e. what the cyrillic branch already pins.
 CANDIDATE_LATIN_REC = "latin_PP-OCRv5_mobile_rec"
 
+# Mirrors ocr.py: the detector cannot run under oneDNN, so PaddleX is told to
+# fall back to the plain backend for it. Without this, every mkldnn config
+# below dies in detection instead of measuring the recogniser.
+try:
+    from paddlex.inference.models.runners.paddle_static.config import blocklists
+
+    if CURRENT_DET_MODEL not in blocklists.MKLDNN_BLOCKLIST:
+        blocklists.MKLDNN_BLOCKLIST.append(CURRENT_DET_MODEL)
+    ONEDNN_AVAILABLE = True
+except Exception:
+    ONEDNN_AVAILABLE = False
+
 
 @dataclass(frozen=True)
 class Config:
@@ -63,10 +80,10 @@ class Config:
     label: str
     lang: str = "rs_latin"
     threads: int = 2
-    mkldnn: bool = False
+    mkldnn: bool = True                # what ships; see ocr.py's ONEDNN note
     rec_model: str | None = None       # None = let paddleocr decide
     textline_ori: bool = True
-    rec_batch: int | None = None       # None = library default
+    rec_batch: int | None = 32         # what ships; the library default is 1
     scale: float = 1.0
 
 
@@ -176,13 +193,21 @@ def run_config(config: Config, pages: list[str]) -> Result:
 def matrix(quick: bool) -> list[Config]:
     """Ordered by measured impact, biggest first.
 
-    `enable_mkldnn=True` is deliberately absent. It is PaddleOCR's own
-    default and the obvious first thing to try, but on paddlepaddle 3.3.1 it
-    raises `NotImplementedError: (Unimplemented) ConvertPirAttribute2Run`
-    during inference - measured, not assumed, which is very likely why
-    `ocr.py` hardcodes it off in the first place. Re-test it after any
-    paddlepaddle upgrade; until then it is a dead lever, and leaving it in
-    the matrix just burns a model load to fail twice.
+    oneDNN is no longer a dead lever, and the note that used to stand here
+    was half right. It does crash on paddlepaddle 3.3.1 - but only in the
+    *detector*. The recogniser, which is ~95% of the runtime, runs under it
+    fine, so `ocr.py` now blocklists the detector and leaves oneDNN on. Both
+    this module and `ocr.py` therefore default `mkldnn=True`.
+
+    Two live consequences for anyone reading a table out of this tool:
+
+    - the `threads` column only means something while OMP_NUM_THREADS is
+      pinned (top of this file), because that, not `cpu_threads`, is what
+      oneDNN honours;
+    - **the batch-size rows must be re-measured.** Every batch number quoted
+      in `ocr.py`'s history was taken with oneDNN off, where batching loses;
+      with it on, batching wins by ~4x. Any conclusion about one of these
+      settings that was reached without the other is void.
     """
     configs = [
         Config("baseline (what ships today)"),
