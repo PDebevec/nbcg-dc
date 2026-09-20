@@ -35,14 +35,13 @@ import {
   summariseRun,
   syncableItems,
   type MissReason,
-  type RemoteRecord,
   type SyncOutcome,
   type SyncProgress,
   type SyncStage,
 } from "@domain/sync";
 import { ApiError } from "./api/client";
 import type { SearchHit } from "./api/dto";
-import { findById, searchIndexToItemType } from "./api/search";
+import { findById, hitToRemote } from "./api/search";
 import {
   listIndex,
   readItemMetadata,
@@ -57,6 +56,10 @@ import {
   type SyncRunDto,
 } from "@ipc/bindings";
 import { logger } from "@lib/logger";
+
+// Re-exported so existing importers of `hitToRemote` from this module (it lived
+// here until it moved next to `SearchHit` in `services/api/search`) keep working.
+export { hitToRemote };
 
 /** How many item reads are in flight at once. Small on purpose: the archive is
  * one workstation talking to a shared production API, and a sync is background
@@ -119,20 +122,6 @@ function defaultDeps(): SyncDeps {
 
 function resolveDeps(overrides?: Partial<SyncDeps>): SyncDeps {
   return { ...defaultDeps(), ...overrides };
-}
-
-/** Project a search hit into the framework-free {@link RemoteRecord} the domain
- * policy consumes. The index name carries `targetState` — the document itself
- * has no such field (see `services/api/search.searchIndexToItemType`). */
-export function hitToRemote(hit: SearchHit): RemoteRecord {
-  const source = hit.source ?? {};
-  return {
-    id: hit.id,
-    targetState: searchIndexToItemType(hit.index),
-    visibilityStatus: source.visibilityStatus ?? null,
-    version: typeof source.version === "number" ? source.version : null,
-    metadata: (source.metadata ?? {}) as RecordMetadata,
-  };
 }
 
 /** The record title to cache on the index row, if the backend has one. */

@@ -39,6 +39,8 @@ import {
   type SuggestResult,
 } from "./dto";
 import { ItemType } from "@domain/enums";
+import type { RecordMetadata } from "@domain/metadata";
+import type { RemoteRecord } from "@domain/sync";
 import { getApiClient } from "../backend";
 
 /** Default page size when the caller does not specify one (mirrors the backend
@@ -66,6 +68,20 @@ export function searchIndexToItemType(index: string): ItemType | null {
 /** The reverse mapping — the `type` filter that scopes a query to one collection. */
 export function itemTypeToSearchIndex(type: ItemType): SearchIndex {
   return type === ItemType.RECORD ? "records" : "drafts";
+}
+
+/** Project a search hit into the framework-free {@link RemoteRecord} the domain
+ * policy consumes. The index name carries `targetState` — the document itself
+ * has no such field (see {@link searchIndexToItemType}). */
+export function hitToRemote(hit: SearchHit): RemoteRecord {
+  const source = hit.source ?? {};
+  return {
+    id: hit.id,
+    targetState: searchIndexToItemType(hit.index),
+    visibilityStatus: source.visibilityStatus ?? null,
+    version: typeof source.version === "number" ? source.version : null,
+    metadata: (source.metadata ?? {}) as RecordMetadata,
+  };
 }
 
 /**
