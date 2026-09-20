@@ -1,5 +1,8 @@
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import { ApiError } from "./api/client";
+import { deterministicItemId } from "./api/deterministicId";
+import { findById } from "./api/search";
+import { previewCobiss } from "./api/cobiss";
 import {
   uploadItem,
   uploadBatch,
@@ -18,6 +21,23 @@ import type { SearchHit } from "./api/search";
 import type { RecordSchema } from "@domain/schema";
 import type { LocalMetadataFile } from "@domain/metadata";
 import { MAX_FILES_PER_REQUEST } from "@domain/upload";
+
+// The two network reads `defaultDeps().resolveExistingRecord` is built from.
+// Everything else in both modules stays real — `hitToRemote` in particular,
+// which `hitToExisting` runs the fetched record through. Mocked at module
+// level so one test can drive the GENUINE default resolver end-to-end
+// (`uploadItem` → the id it picks → the lookup → the verification), which is
+// the seam every `resolveExistingRecord`-stubbing test leaves untouched.
+// No other test in this file reaches either function: `fakeDeps` always
+// supplies `resolveExistingRecord`, and nothing here calls COBISS preview.
+vi.mock("./api/search", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./api/search")>()),
+  findById: vi.fn(),
+}));
+vi.mock("./api/cobiss", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./api/cobiss")>()),
+  previewCobiss: vi.fn(),
+}));
 
 // ── fixtures ──────────────────────────────────────────────────────────────
 
@@ -66,6 +86,22 @@ const SCHEMA: RecordSchema = {
   fields: [
     { key: "title", type: "string", required: true, group: "basic", order: 0, parentInheritable: false, issueIdentifying: false, levels: ["main", "child"] },
     { key: "year", type: "string", required: false, group: "basic", order: 1, parentInheritable: false, issueIdentifying: false, levels: ["main", "child"] },
+  ],
+};
+
+/**
+ * `SCHEMA` plus `cobissId`.
+ *
+ * The app's real record schema carries the field; the fixture above does not,
+ * and `pruneToSchema` drops every key the schema does not name. So a test
+ * about *the COBISS id the create actually sent* has to use this one —
+ * otherwise `pruned.cobissId` is absent, nothing collidable goes on the wire,
+ * and the scenario cannot exist.
+ */
+const COBISS_SCHEMA: RecordSchema = {
+  fields: [
+    ...SCHEMA.fields,
+    { key: "cobissId", type: "string", required: false, group: "basic", order: 2, parentInheritable: false, issueIdentifying: false, levels: ["main", "child"] },
   ],
 };
 
@@ -446,6 +482,65 @@ describe("create collision — adoption", () => {
     expect(res.backendId).toBe(existing.id);
   });
 
+  it("records ONE visibility for an unknown one, in both local stores, and never the batch's", async () => {
+    // A search hit may omit `visibilityStatus` (`hitToRemote` → null), while
+    // the SQLite row's `UploadRecordDto.visibilityStatus` is non-null — so
+    // something has to be invented. Inventing it twice left `metadata.json`
+    // saying null and the index row saying PRIVATE for the same unknown, and
+    // then the null fell through `adopted.visibilityStatus ?? ctx.visibility`
+    // so the *batch's* setting was persisted as if it were the record's real
+    // state — a value adoption deliberately never pushed to the backend.
+    const writeMirror = vi.fn(async () => {});
+    const recordUpload = vi.fn(async () => {});
+    const deps = fakeDeps({
+      createItem: vi.fn(async () => conflict()),
+      resolveExistingRecord: vi.fn(async () => ({ ...existing, visibilityStatus: null })),
+      updateItem: vi.fn(async () => ({ version: 8 })),
+      writeMirror,
+      recordUpload,
+    });
+
+    // The batch says PUBLIC. The backend's own value is unknown.
+    const res = await uploadItem(
+      makeItem(),
+      { ...CTX, metadata: { title: "New title" }, visibility: "PUBLIC" },
+      deps,
+    );
+
+    expect(res.status).toBe("uploaded");
+    const mirrored = (writeMirror as any).mock.calls.map((c: any[]) => c[1].visibilityStatus);
+    const indexed = (recordUpload as any).mock.calls.map((c: any[]) => c[1].visibilityStatus);
+    expect(mirrored.length).toBeGreaterThan(0);
+    expect(indexed.length).toBeGreaterThan(0);
+    expect(new Set([...mirrored, ...indexed])).toEqual(new Set(["PRIVATE"]));
+  });
+
+  it("carries the adopted-existing warning onto a FAILED adoption, not just a successful one", async () => {
+    // `removableBackendIds` refuses to hard-delete a record carrying this
+    // warning — and that exclusion can only ever be consulted on a
+    // non-`uploaded` result, because `uploaded` is dropped one line earlier.
+    // While `mapUploadError` built its results without the run's warnings, the
+    // marker existed on exactly the outcomes that never reach the check and on
+    // none of the outcomes that do: the exclusion was dead code against the
+    // live catalogue, and `created` was the only thing standing between an
+    // adopted, possibly curated record and a permanent DELETE.
+    const deps = fakeDeps({
+      createItem: vi.fn(async () => conflict()),
+      resolveExistingRecord: vi.fn(async () => existing),
+      // The PATCH after adoption loses the optimistic-concurrency race.
+      updateItem: vi.fn(async () => conflict()),
+    });
+    const res = await uploadItem(makeItem(), { ...CTX, metadata: { title: "New title" } }, deps);
+
+    expect(res.status).not.toBe("uploaded");
+    expect(res.warnings.map((w) => w.code)).toContain("adopted-existing");
+    // And the exclusion it exists for now actually fires. `created` is forced
+    // on because the guard is only meaningful against a result that would
+    // otherwise be removable — the shape adoption → PATCH 404 →
+    // `recreateOrphaned` really can produce.
+    expect(removableBackendIds([{ ...res, created: true }])).toEqual([]);
+  });
+
   it("degrades to duplicate when the record cannot be resolved", async () => {
     const deps = fakeDeps({
       createItem: vi.fn(async () => conflict()),
@@ -454,6 +549,104 @@ describe("create collision — adoption", () => {
     const res = await uploadItem(makeItem(), CTX, deps);
     expect(res.status).toBe("duplicate");
     expect(res.message).toMatch(/sync/i);
+  });
+});
+
+// ── which record adoption actually resolves ────────────────────────────────
+//
+// Every test above stubs `deps.resolveExistingRecord` wholesale, so none of
+// them exercises the decision that picks WHICH record gets adopted: the COBISS
+// id `uploadItem` hands the resolver. These two drive the genuine default dep
+// — only `findById` and `previewCobiss` are faked — with the item's indexed
+// `catalogueId` and the live form value in disagreement.
+//
+// `catalogueId` comes from the SQLite row (`indexing.ts`) and is refreshed only
+// by a folder rescan, so it lags what the operator just typed. Keying off it
+// failed in both directions: a corrected id adopted the OLD record (and the
+// cobissId guard passed, because it verified against the same stale value),
+// and an id entered this session left `catalogueId` null so adoption never
+// fired at all.
+
+describe("create collision — resolved on the id this run actually sent", () => {
+  beforeEach(() => {
+    vi.mocked(findById).mockReset();
+    vi.mocked(previewCobiss).mockReset();
+    // The COBISS fallback must not be what rescues either test.
+    vi.mocked(previewCobiss).mockResolvedValue({ itemId: null } as never);
+  });
+
+  /** `fakeDeps` minus `resolveExistingRecord`, so `withDefaults` supplies the
+   * real one and the whole resolution path runs. */
+  function depsUsingTheRealResolver(over: Partial<UploadDeps> = {}): Partial<UploadDeps> {
+    const deps: Partial<UploadDeps> = fakeDeps(over);
+    delete deps.resolveExistingRecord;
+    return deps;
+  }
+
+  function hitFor(id: string, cobissId: string, version: number, title: string): SearchHit {
+    return {
+      id,
+      index: "records",
+      score: 1,
+      source: { version, visibilityStatus: "PUBLIC", metadata: { cobissId, title } },
+    };
+  }
+
+  it("looks up the live cobissId, never the item's stale indexed one", async () => {
+    const staleId = await deterministicItemId("111"); // what the index row still says
+    const liveId = await deterministicItemId("222"); // what this create sent
+    expect(staleId).not.toBe(liveId);
+
+    const byId: Record<string, SearchHit> = {
+      [staleId]: hitFor(staleId, "111", 3, "Someone else's record"),
+      [liveId]: hitFor(liveId, "222", 9, "The record that collided"),
+    };
+    vi.mocked(findById).mockImplementation(async (id: string) => byId[id] ?? null);
+
+    const res = await uploadItem(
+      // The operator corrected 111 → 222 this session; no rescan has landed.
+      makeItem({ catalogueId: "111" }),
+      { ...CTX, metadata: { cobissId: "222", title: "Gorski vijenac" } },
+      depsUsingTheRealResolver({
+        createItem: vi.fn(async () => { throw apiError("conflict", 409); }),
+        getSchema: vi.fn(async () => COBISS_SCHEMA),
+        updateItem: vi.fn(async () => ({ version: 10 })),
+      }),
+    );
+
+    // The lookup that mattered: id(222), and id(111) never fetched at all.
+    expect(vi.mocked(findById).mock.calls.map((c) => c[0])).toEqual([liveId]);
+    expect(res.status).toBe("uploaded");
+    expect(res.backendId).toBe(liveId);
+    expect(res.backendId).not.toBe(staleId);
+  });
+
+  it("adopts on the first press when the COBISS id was typed this session (catalogueId still null)", async () => {
+    // The branch's headline win. `useMetadata.saveItem` refreshes only the
+    // row's title, and the debounced rescan lands after `upload()` has captured
+    // its members — so a brand-new item's `catalogueId` is still null when the
+    // create collides. Resolving from it returned null before any lookup and
+    // the run degraded to the old `duplicate` outcome: exactly the two-trip
+    // Sync → Upload dance this branch exists to remove.
+    const liveId = await deterministicItemId("222");
+    vi.mocked(findById).mockImplementation(async (id: string) =>
+      id === liveId ? hitFor(liveId, "222", 9, "The record that collided") : null,
+    );
+
+    const res = await uploadItem(
+      makeItem({ catalogueId: null }),
+      { ...CTX, metadata: { cobissId: "222", title: "Gorski vijenac" } },
+      depsUsingTheRealResolver({
+        createItem: vi.fn(async () => { throw apiError("conflict", 409); }),
+        getSchema: vi.fn(async () => COBISS_SCHEMA),
+        updateItem: vi.fn(async () => ({ version: 10 })),
+      }),
+    );
+
+    expect(vi.mocked(findById)).toHaveBeenCalledWith(liveId);
+    expect(res.status).toBe("uploaded");
+    expect(res.backendId).toBe(liveId);
+    expect(res.warnings.map((w) => w.code)).toContain("adopted-existing");
   });
 });
 
@@ -605,7 +798,7 @@ describe("uploadItem — error outcomes", () => {
       // The backend replaces every non-ASCII character with '?'.
       uploadFiles: vi.fn(async (_id: string, files: UploadFile[]) =>
         files.map((f) =>
-          attachment(f.filename.replace(/[^ -]/g, "?"), {
+          attachment(f.filename.replace(/[^\x00-\x7f]/g, "?"), {
             textExtractionStatus: "NOT_EXTRACTED",
           }),
         ),
@@ -639,7 +832,7 @@ describe("uploadItem — error outcomes", () => {
     ];
     const deps = fakeDeps({
       uploadFiles: vi.fn(async (_id: string, files: UploadFile[]) =>
-        files.map((f) => attachment(f.filename.replace(/[^ -]/g, "?"))),
+        files.map((f) => attachment(f.filename.replace(/[^\x00-\x7f]/g, "?"))),
       ),
       setFileText: vi.fn(async () => {
         throw apiError("bad_request", 400);
@@ -980,6 +1173,78 @@ describe("orphan recovery", () => {
     expect(res.warnings.map((w) => w.code)).toContain("recreated-orphaned");
   });
 
+  it("brings the record back in the state the mirror last saw, not the batch's", async () => {
+    // A restoration, not a publication. The mirror says this was a PUBLIC
+    // RECORD; the batch this re-upload happens to run under is a routine
+    // DRAFT/PRIVATE one. Re-creating with the batch's settings silently
+    // unpublished material that had been live on the National Library's public
+    // catalogue — and the operator only ever saw "the upload retried and
+    // worked".
+    const createItem = vi.fn(async () => ({
+      ...ENTITY,
+      id: "cbwkbr9guqs3w11xylpri1ylw",
+      version: 0,
+      metadata: {},
+    }));
+    const recordUpload = vi.fn(async () => {});
+    const deps = fakeDeps({
+      readMirror: vi.fn(async () => ORPHAN_MIRROR), // RECORD / PUBLIC
+      updateItem: vi.fn(async () => { throw apiError("not_found", 404); }),
+      createItem,
+      recordUpload,
+    });
+    const item = { ...makeItem(), backendId: "cbwkbr9guqs3w11xylpri1ylw" };
+
+    const res = await uploadItem(
+      item,
+      { ...CTX, targetState: "DRAFT", visibility: "PRIVATE" },
+      deps,
+    );
+
+    expect(res.status).toBe("uploaded");
+    const [dto] = (createItem as any).mock.calls[0];
+    expect(dto.targetState).toBe("RECORD");
+    expect(dto.visibilityStatus).toBe("PUBLIC");
+    // …and the local stores record the state it was actually re-created in.
+    const calls = (recordUpload as any).mock.calls;
+    const [, upload] = calls[calls.length - 1];
+    expect(upload.targetState).toBe("RECORD");
+    expect(upload.visibilityStatus).toBe("PUBLIC");
+  });
+
+  it("falls back to the batch's settings when the mirror never recorded any", async () => {
+    // A mirror written before `targetState`/`visibilityStatus` existed. There
+    // is nothing better than the batch's values, and refusing to re-create
+    // would put the item back in the hard lock this path exists to clear.
+    const createItem = vi.fn(async () => ({
+      ...ENTITY,
+      id: "cbwkbr9guqs3w11xylpri1ylw",
+      version: 0,
+      metadata: {},
+    }));
+    const deps = fakeDeps({
+      readMirror: vi.fn(async () => ({
+        ...ORPHAN_MIRROR,
+        targetState: null,
+        visibilityStatus: null,
+      })),
+      updateItem: vi.fn(async () => { throw apiError("not_found", 404); }),
+      createItem,
+    });
+    const item = { ...makeItem(), backendId: "cbwkbr9guqs3w11xylpri1ylw" };
+
+    const res = await uploadItem(
+      item,
+      { ...CTX, targetState: "DRAFT", visibility: "PRIVATE" },
+      deps,
+    );
+
+    expect(res.status).toBe("uploaded");
+    const [dto] = (createItem as any).mock.calls[0];
+    expect(dto.targetState).toBe("DRAFT");
+    expect(dto.visibilityStatus).toBe("PRIVATE");
+  });
+
   it("does NOT re-create on a 409 — that record still exists", async () => {
     const createItem = vi.fn();
     const deps = fakeDeps({
@@ -1184,7 +1449,7 @@ describe("transfer retries", () => {
 });
 
 describe("resolveExistingRecord (default dep)", () => {
-  it("adopts a record whose cobissId matches the item's", async () => {
+  it("adopts a record whose cobissId matches the one that collided", async () => {
     const hit: SearchHit = {
       id: "cbwkbr9guqs3w11xylpri1ylw",
       index: "records",
@@ -1196,7 +1461,7 @@ describe("resolveExistingRecord (default dep)", () => {
       },
     };
     const found = await resolveExistingRecordWith(
-      { ...makeItem(), catalogueId: "12345" },
+      "12345",
       { findById: vi.fn(async () => hit), previewCobiss: vi.fn() },
     );
     expect(found).toEqual({
@@ -1218,7 +1483,7 @@ describe("resolveExistingRecord (default dep)", () => {
       source: { version: 7, visibilityStatus: "PUBLIC", metadata: { cobissId: "999" } },
     };
     const found = await resolveExistingRecordWith(
-      { ...makeItem(), catalogueId: "12345" },
+      "12345",
       { findById: vi.fn(async () => hit), previewCobiss: vi.fn(async () => ({ itemId: null })) },
     );
     expect(found).toBeNull();
@@ -1232,16 +1497,16 @@ describe("resolveExistingRecord (default dep)", () => {
       source: { visibilityStatus: "PUBLIC", metadata: { cobissId: "12345" } },
     };
     const found = await resolveExistingRecordWith(
-      { ...makeItem(), catalogueId: "12345" },
+      "12345",
       { findById: vi.fn(async () => hit), previewCobiss: vi.fn(async () => ({ itemId: null })) },
     );
     expect(found).toBeNull();
   });
 
-  it("returns null without any network call when the item has no catalogueId", async () => {
+  it("returns null without any network call when there is no cobissId at all", async () => {
     const findById = vi.fn();
     const found = await resolveExistingRecordWith(
-      { ...makeItem(), catalogueId: null },
+      null,
       { findById, previewCobiss: vi.fn() },
     );
     expect(found).toBeNull();

@@ -487,10 +487,25 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
     }
   }
 
-  async function closeBatch(): Promise<void> {
+  /**
+   * Close the batch, optionally removing the backend records this run created
+   * and left half-made (`services/upload.removableBackendIds`).
+   *
+   * `options` exists so the confirm dialog can be wired entirely in the `.vue`
+   * lane: `closableSummary` already tells the dialog how many records cleanup
+   * would delete, and the checkbox that offers it has to be able to say yes.
+   * Without the parameter the GUI owner could show the number and never act on
+   * it — and reaching the store directly from a template would route around
+   * the toast handling below.
+   *
+   * Default is off, deliberately, and the dialog's checkbox must default off
+   * too: closing is already irreversible (an archived batch has no unlock), and
+   * the delete is a second, permanent act against the live public catalogue.
+   */
+  async function closeBatch(options: { cleanup?: boolean } = {}): Promise<void> {
     const b = batch.value;
     if (!b) return;
-    await uploadStore.closeBatch(b.id);
+    await uploadStore.closeBatch(b.id, options);
     if (uploadError.value) {
       toasts.push(uploadError.value, "error");
     } else {

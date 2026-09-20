@@ -257,7 +257,7 @@ describe("closeBatch", () => {
 
     await view.closeBatch();
 
-    expect(uploadFake.closeBatch).toHaveBeenCalledWith("b1");
+    expect(uploadFake.closeBatch).toHaveBeenCalledWith("b1", {});
     expect(
       toasts.toasts.some(
         (t) => t.kind === "error" && t.message === "The batch could not be archived.",
@@ -278,11 +278,29 @@ describe("closeBatch", () => {
 
     await view.closeBatch();
 
-    expect(uploadFake.closeBatch).toHaveBeenCalledWith("b1");
+    expect(uploadFake.closeBatch).toHaveBeenCalledWith("b1", {});
     expect(
       toasts.toasts.some((t) => t.kind === "success" && t.message === "Batch closed."),
     ).toBe(true);
     expect(toasts.toasts.some((t) => t.kind === "error")).toBe(false);
+  });
+
+  it("forwards the cleanup choice to the store", async () => {
+    // `closableSummary` exists purely to tell the confirm dialog how many
+    // unfinished records a close would delete. Until this parameter existed the
+    // dialog could show that number and had no way to act on it: `closeBatch()`
+    // took no arguments and always called the store with none, so the whole
+    // cleanup feature was unreachable without a `.ts` edit — and wiring the
+    // store straight into the template would have skipped the toast handling
+    // above.
+    seed(makeBatch(["nb"], { stage: BatchStage.Processing }), [
+      makeItem({ id: "nb", folderName: "nb" }),
+    ]);
+    const view = useProcessing(() => "b1");
+
+    await view.closeBatch({ cleanup: true });
+
+    expect(uploadFake.closeBatch).toHaveBeenCalledWith("b1", { cleanup: true });
   });
 });
 

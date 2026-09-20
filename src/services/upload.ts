@@ -110,10 +110,25 @@ export interface UploadDeps {
   writeMirror: (item: Item, file: LocalMetadataFile) => Promise<void>;
   /** Persist the upload facts onto the SQLite index row (native). */
   recordUpload: (itemId: string, dto: UploadRecordDto) => Promise<void>;
-  /** Resolve the record an already-existing create-collision (409) hit. Default:
-   * {@link resolveExistingRecordWith} against the real search/COBISS reads. Lets
-   * a collision reuse the known id (and version) instead of ever double-creating. */
-  resolveExistingRecord: (item: Item) => Promise<ExistingRecord | null>;
+  /**
+   * Resolve the record an already-existing create-collision (409) hit, given
+   * **the COBISS id that caused it**. Default:
+   * {@link resolveExistingRecordWith} against the real search/COBISS reads.
+   * Lets a collision reuse the known id (and version) instead of ever
+   * double-creating.
+   *
+   * Takes the id, deliberately NOT the {@link Item}. `item.catalogueId` is the
+   * SQLite index row's copy (`indexing.ts` — `catalogueId: dto.cobissId`),
+   * refreshed only by a folder rescan, so it lags the value the operator just
+   * typed into the form; the id that actually produced the `409` is the one
+   * this run sent, i.e. {@link collidingCobissId}. Passing the item here let
+   * the resolver look up a *different* record than the one that collided —
+   * and because `hitToExisting` then verified that hit against the same stale
+   * value, the mismatch guard passed on an unrelated record, which went on to
+   * be PATCHed with this item's metadata and have this batch's files attached.
+   * Narrowing the parameter is what makes that class of bug unexpressible.
+   */
+  resolveExistingRecord: (cobissId: string | null) => Promise<ExistingRecord | null>;
   /** Move the item's folder `/unprocessed` → `/processed` (native). */
   moveToProcessed: (item: Item) => Promise<void>;
   /** The tracked local items, used to map a connected `parentId` back to a
@@ -142,10 +157,10 @@ function defaultDeps(): UploadDeps {
     readMirror: (item) => readItemMetadata(item),
     writeMirror: (item, file) => writeItemMetadata(item, file),
     recordUpload: (itemId, dto) => ipc.index.recordUpload(itemId, dto).then(() => {}),
-    resolveExistingRecord: (item) =>
-      resolveExistingRecordWith(item, {
+    resolveExistingRecord: (cobissId) =>
+      resolveExistingRecordWith(cobissId, {
         findById: (id) => findById(id),
-        previewCobiss: (cobissId) => previewCobiss(cobissId),
+        previewCobiss: (id) => previewCobiss(id),
       }),
     moveToProcessed: async (item) => {
       await ipc.fs.moveToProcessed(item.id);
@@ -415,6 +430,41 @@ async function prunedMetadata(
   };
 }
 
+/**
+ * The COBISS id that a create `409` was about — i.e. the one this run actually
+ * put on the wire.
+ *
+ * `pruned` is literally the `metadata` the create sent, and the backend only
+ * ever derives an explicit (collidable) item id from `sanitizedMetadata.cobissId`
+ * (`items.service.create`). So a collision is always about *this* value.
+ *
+ * `item.catalogueId` is the fallback, not the source: it is the SQLite index
+ * row's copy (`indexing.ts` — `catalogueId: dto.cobissId ?? null`), rewritten
+ * only by a folder rescan. Two ordinary situations made it wrong at exactly
+ * the moment it was needed:
+ *  - a COBISS id typed **this session** — `useMetadata.saveItem` refreshes only
+ *    the row's `title`, and the debounced rescan lands after `upload()` has
+ *    captured its members — so `catalogueId` is still `null` and adoption
+ *    never fired at all, on the very press this branch exists to fix;
+ *  - a **corrected** COBISS id (`111` → `222`) — the create collides on
+ *    `id(222)` while `catalogueId` still reads `111`, so the resolver fetched
+ *    the record for `111` and `hitToExisting` verified it against `111` too.
+ *    The guard passed on an unrelated record, which was then PATCHed with this
+ *    item's metadata and given this batch's files.
+ *
+ * It stays as the fallback because a re-upload whose form never loaded the
+ * field (schema without `cobissId`, so `pruneToSchema` drops it) still has a
+ * genuine indexed id, and using it is strictly better than resolving nothing.
+ */
+function collidingCobissId(pruned: RecordMetadataInput, item: Item): string | null {
+  // `pruneToSchema` drops empty values, so a present key is a non-empty string;
+  // the type guard is belt-and-braces against a non-string sneaking through an
+  // unusual schema.
+  const sent = (pruned as { cobissId?: unknown }).cobissId;
+  if (typeof sent === "string" && sent !== "") return sent;
+  return item.catalogueId;
+}
+
 /** Persist the write-through mirror + index row after a successful upload. */
 async function writeThrough(
   item: Item,
@@ -537,10 +587,15 @@ export async function uploadItem(
   // schema is fetched (inside the try, so a schema-fetch failure folds into an
   // error result rather than escaping and crashing the batch).
   let fieldKeys: string[] = [];
+  // Hoisted out of the `try` so the `catch` can hand them to `mapUploadError`.
+  // A failed upload's warnings are not decoration: `"adopted-existing"` is the
+  // second guard that stops close-time cleanup hard-deleting a record this
+  // batch merely adopted, and it can only do that job if it survives onto a
+  // non-`uploaded` result. The OCR and mangled-filename warnings the operator
+  // needs in order to know *what* to fix rode on the same list.
+  const warnings: UploadWarning[] = [...plan.warnings];
 
   try {
-    const warnings = [...plan.warnings];
-
     // Resolve the working metadata (ctx override, else the folder mirror) and the
     // schema-valid subset to send. Inside the try: `getRecordSchema` rethrows on a
     // cold cache + backend error, and that must become an error result.
@@ -563,10 +618,17 @@ export async function uploadItem(
       } catch (err) {
         if (!(err instanceof ApiError) || err.kind !== "conflict") throw err;
 
-        const adopted = await adoptExistingRecord(item, deps);
+        // The id this run sent, not the item's indexed one — `collidingCobissId`
+        // documents the two ways the indexed copy is wrong exactly here.
+        const adopted = await adoptExistingRecord(
+          item,
+          collidingCobissId(pruned, item),
+          deps,
+        );
         if (!adopted) {
           return result(item.id, "duplicate", {
             backendId: null,
+            warnings,
             message:
               "Already on the backend, but its current state could not be read — run Sync, then upload again.",
           });
@@ -665,7 +727,14 @@ export async function uploadItem(
     // they diverge only when `recreateOrphaned` replaced a 404'd link with a
     // fresh id, and there the hoisted value is the dead one (see
     // `RunCreation.backendId`).
-    return mapUploadError(item.id, run.backendId ?? backendId, err, fieldKeys, run.created);
+    return mapUploadError(
+      item.id,
+      run.backendId ?? backendId,
+      err,
+      fieldKeys,
+      run.created,
+      warnings,
+    );
   }
 }
 
@@ -709,6 +778,13 @@ async function replaceOnBackend(
     // sharpest case the `created` flag exists to stop.
     return result(item.id, "error", {
       backendId,
+      // Carried for the same reasons `mapUploadError` carries them: the
+      // operator's pre-upload notes survive the failure, and an
+      // `"adopted-existing"` marker reaches `removableBackendIds`. This branch
+      // is reachable *after* an adoption only if the resolved record's version
+      // vanished, but a result that silently dropped the marker would be one
+      // more place where the cleanup exclusion cannot fire.
+      warnings,
       message:
         "Local sync state is missing this item's version — re-sync it (Sync) before re-uploading.",
     });
@@ -738,7 +814,7 @@ async function replaceOnBackend(
       // of folding into a mapped `ItemUploadResult`, which in turn rejects
       // `uploadBatch` and discards every already-uploaded item's result in
       // the run.
-      return await recreateOrphaned(item, ctx, plan, pruned, deps, warnings, run);
+      return await recreateOrphaned(item, ctx, plan, pruned, mirror, deps, warnings, run);
     }
     throw err;
   }
@@ -812,6 +888,12 @@ function hitToExisting(
 /**
  * Find the record a create-`409` collided with.
  *
+ * `cobissId` must be the id **this run actually sent** ({@link
+ * collidingCobissId}) — never the item's indexed `catalogueId`. Both the
+ * lookup and `hitToExisting`'s verification key off this one value, so a stale
+ * input does not merely miss: it looks up the wrong record and then verifies
+ * that record against the same wrong input, which passes.
+ *
  * Fast path: compute the id locally and read it back. Offline-capable and
  * instant. Fallback: ask the backend what id it would use, which costs a
  * COBISS upstream round-trip — used only when the fast path does not verify,
@@ -821,10 +903,9 @@ function hitToExisting(
  * the caller degrades to a `duplicate` outcome rather than failing.
  */
 export async function resolveExistingRecordWith(
-  item: Item,
+  cobissId: string | null,
   deps: ResolveExistingDeps,
 ): Promise<ExistingRecord | null> {
-  const cobissId = item.catalogueId;
   if (!cobissId) return null;
 
   const computed = await deterministicItemId(cobissId).catch(() => null);
@@ -857,21 +938,42 @@ export async function resolveExistingRecordWith(
  * applied: the archive did not create this record and must not silently
  * re-publish or hide one somebody else curated. The caller warns instead.
  *
+ * `cobissId` is the id this run sent, not the item's indexed one — see
+ * {@link collidingCobissId} for why that distinction decides *which record*
+ * gets adopted.
+ *
  * `null` when the record could not be resolved (CDC lag, or a drifted id
  * derivation) — the caller then degrades to today's `duplicate` outcome.
  */
 async function adoptExistingRecord(
   item: Item,
+  cobissId: string | null,
   deps: UploadDeps,
 ): Promise<LocalMetadataFile | null> {
-  const existing = await deps.resolveExistingRecord(item).catch(() => null);
+  const existing = await deps.resolveExistingRecord(cobissId).catch(() => null);
   if (!existing) return null;
+
+  // One resolution of "the backend didn't tell us its visibility", used by BOTH
+  // local stores. A search hit may omit `visibilityStatus` (`hitToRemote`
+  // yields `null`), and the SQLite row's `UploadRecordDto.visibilityStatus` is
+  // non-null, so *something* has to be invented for it. Inventing it twice is
+  // how the `metadata.json` mirror came to say `null` while the index row said
+  // `PRIVATE` for the very same unknown — and, worse, how the batch's own
+  // visibility then leaked back in: with a `null` here, the caller's
+  // `adopted.visibilityStatus ?? ctx.visibility` fell through to the batch
+  // setting, which `replaceOnBackend`'s write-through persisted as if it were
+  // the record's real state — a value adoption deliberately never pushed.
+  //
+  // `PRIVATE` is the conservative invention: a later run comparing against it
+  // can only ever *reveal* a record it already intended to publish, never hide
+  // one somebody curated.
+  const visibilityStatus = existing.visibilityStatus ?? "PRIVATE";
 
   const mirror: LocalMetadataFile = {
     backendId: existing.id,
     version: existing.version,
     targetState: existing.targetState,
-    visibilityStatus: existing.visibilityStatus,
+    visibilityStatus,
     metadata: existing.metadata,
     syncedAt: deps.now(),
   };
@@ -879,20 +981,38 @@ async function adoptExistingRecord(
     backendId: existing.id,
     version: existing.version,
     targetState: existing.targetState,
-    visibility: existing.visibilityStatus ?? "PRIVATE",
+    visibility: visibilityStatus,
     metadata: existing.metadata,
   });
   return mirror;
 }
 
-/** Re-create a record the backend has authoritatively lost, then finish the
+/**
+ * Re-create a record the backend has authoritatively lost, then finish the
  * upload as a create (assets, parents, move). See the caller for why this
- * cannot double-create. */
+ * cannot double-create.
+ *
+ * **Publish state comes from the mirror, not the batch.** This is a
+ * restoration, not a publication: the record existed, the operator is
+ * re-uploading files to it, and the batch's `targetState`/`visibility` are
+ * whatever this run's defaults happen to be — typically DRAFT/PRIVATE for
+ * routine work. Using them brought a PUBLIC RECORD back as a PRIVATE DRAFT,
+ * silently unpublishing material that had been on the live catalogue, on a
+ * path the operator experiences as "the upload retried and worked". The
+ * mirror holds the last state the archive actually observed on the backend
+ * (write-through on every upload, and `sync` refreshes it), so it is the
+ * closest thing to what was lost.
+ *
+ * `ctx` is still the fallback: a mirror written before `targetState` /
+ * `visibilityStatus` existed, or one that never recorded them, leaves nothing
+ * better to use.
+ */
 async function recreateOrphaned(
   item: Item,
   ctx: UploadItemContext,
   plan: ItemUploadPlan,
   pruned: RecordMetadataInput,
+  mirror: LocalMetadataFile,
   deps: UploadDeps,
   warnings: UploadWarning[],
   run: RunCreation,
@@ -902,8 +1022,10 @@ async function recreateOrphaned(
     message:
       "The linked record no longer exists on the backend — it was re-created from the local copy.",
   });
+  const targetState = mirror.targetState ?? ctx.targetState;
+  const visibility = mirror.visibilityStatus ?? ctx.visibility;
   const created = await createOnBackend(
-    { targetState: ctx.targetState, visibilityStatus: ctx.visibility, metadata: pruned },
+    { targetState, visibilityStatus: visibility, metadata: pruned },
     deps,
   );
   // The second (and last) create site. The old link was authoritatively 404'd
@@ -914,8 +1036,8 @@ async function recreateOrphaned(
   await writeThrough(item, deps, {
     backendId: created.id,
     version: created.version,
-    targetState: ctx.targetState,
-    visibility: ctx.visibility,
+    targetState,
+    visibility,
     metadata: created.metadata,
   });
   const attachments = await uploadCreateAssets(
@@ -1440,6 +1562,16 @@ async function connectParents(
  * guessed from `backendId`. A `401`, a `403` or a lost `PATCH` race proves the
  * opposite of creation — nothing was written — yet each of them reports the
  * item's long-standing link in `backendId`.
+ *
+ * `warnings` is the run's accumulated list, carried onto the failure for two
+ * reasons. It is what the operator needs in order to act (which file's OCR is
+ * missing, whose filename the backend mangled) — dropping it lost that on
+ * every failed upload. And `"adopted-existing"` is a *safety* marker:
+ * {@link removableBackendIds} refuses to hard-delete a record carrying it, and
+ * that exclusion can only ever fire on a non-`uploaded` result, i.e. exactly
+ * the ones this function builds. Until it was threaded through, that second
+ * guard was unreachable in production and the whole protection rested on the
+ * `created` flag alone.
  */
 function mapUploadError(
   itemId: string,
@@ -1447,12 +1579,14 @@ function mapUploadError(
   err: unknown,
   fieldKeys: string[],
   created: boolean,
+  warnings: UploadWarning[],
 ): ItemUploadResult {
   if (err instanceof ApiError) {
     if (err.kind === "unauthorized") {
       return result(itemId, "unauthenticated", {
         backendId,
         created,
+        warnings,
         message:
           "Not signed in — the request carried no valid token. Check the Keycloak username and password in Settings.",
       });
@@ -1461,6 +1595,7 @@ function mapUploadError(
       return result(itemId, "forbidden", {
         backendId,
         created,
+        warnings,
         message:
           "Signed in, but this account lacks write access (records:manage / drafts:manage).",
       });
@@ -1471,6 +1606,7 @@ function mapUploadError(
       return result(itemId, backendId ? "error" : "duplicate", {
         backendId,
         created,
+        warnings,
         message: backendId
           ? "The record changed on the server since it was last synced — refresh and retry."
           : "A record with this identifier already exists on the backend.",
@@ -1480,15 +1616,16 @@ function mapUploadError(
       return result(itemId, "error", {
         backendId,
         created,
+        warnings,
         fieldErrors: mapValidationErrors(err.body, fieldKeys),
         message: err.message,
       });
     }
-    return result(itemId, "error", { backendId, created, message: err.message });
+    return result(itemId, "error", { backendId, created, warnings, message: err.message });
   }
   const message = err instanceof Error ? err.message : String(err);
   logger.error("upload", `Unexpected error uploading ${itemId}.`, err);
-  return result(itemId, "error", { backendId, created, message });
+  return result(itemId, "error", { backendId, created, warnings, message });
 }
 
 // ─── batch driver ──────────────────────────────────────────────────────────

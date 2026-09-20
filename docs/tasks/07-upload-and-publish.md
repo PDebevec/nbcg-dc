@@ -457,9 +457,20 @@ pure function of the COBISS id
 this computation so the archive can resolve a collision **without** a COBISS
 upstream round-trip. Because duplicating a backend algorithm client-side is a
 real coupling risk, no caller trusts the computed id blindly: the record is
-read back and adopted only when its own `metadata.cobissId` matches the
-item's — so a future drift between the two implementations degrades to "not
-resolved" (today's `duplicate` outcome), never "adopted the wrong record".
+read back and adopted only when its own `metadata.cobissId` matches — so a
+future drift between the two implementations degrades to "not resolved"
+(today's `duplicate` outcome), never "adopted the wrong record".
+
+**Which COBISS id — the one this run sent, not the item's indexed one.** Both
+the lookup and that verification key off a single value, and it must be
+`pruned.cobissId`, the id the create actually put on the wire
+(`services/upload.collidingCobissId`). The item's `catalogueId` is the SQLite
+row's copy (`services/indexing.ts`), refreshed only by a folder rescan, so it
+lags the form: an id typed this session leaves it `null`, and a *corrected*
+id leaves it pointing at the previous record. Keying off it failed both ways —
+adoption never fired on a first press, and a corrected id resolved the old
+record while the guard, verifying against that same stale value, passed. The
+verification is only meaningful against the id that caused the `409`.
 
 **On a `409`, the archive adopts instead of dead-ending.** `uploadItem` reads
 the existing record's authoritative state (id, version, `targetState`,
@@ -485,6 +496,14 @@ deterministic id, so the local link stays valid; a non-COBISS item mints a new
 one and the write-through records it. Nothing re-creates on a search `404` —
 that would double-create.
 
+The re-created record takes its `targetState`/`visibilityStatus` from the
+**mirror**, not from the batch, falling back to the batch only when the mirror
+recorded neither. This is a restoration, not a publication: the batch a
+re-upload happens to run under is typically a routine Draft/Private one, and
+using its settings brought a Public Record back as a Private Draft — silently
+unpublishing live material on a path the operator experiences as "the retry
+worked".
+
 **Closing a batch that did not fully upload.** The operator can close a batch
 whose items are not all `uploaded`, optionally deleting the records **this
 run created and did not finish** (`services/upload.cleanupUnfinishedRecords`,
@@ -503,6 +522,19 @@ were to set `created` on its way through. `DELETE /api/items` is
 all-or-nothing, so the removable ids are sent in one request; a failure to
 delete is reported back rather than thrown, so closing the batch itself never
 fails because cleanup did.
+
+**Known limitation — cleanup only sees the most recent run.** The removable
+ids come from `useUpload.resultsFor(batchId)`, and `run()` clears that map at
+the start of every run. So a record stranded by an *earlier* attempt is no
+longer listed once the operator presses Upload again: if the retry gets
+further, or fails somewhere that produces no `created` result for that item,
+the first attempt's half-made record is invisible to a later close and cleanup
+will not offer to remove it. The operator deletes it on the website instead.
+This is deliberately fail-safe — cleanup under-reaches rather than
+over-deletes, and the alternative (accumulating per-item provenance across
+runs) is a design change, not a patch. It is also self-limiting in practice: a
+retry that succeeds replaces the same record rather than stranding a second
+one, because the link was persisted before the assets were pushed.
 
 ## Acceptance
 
