@@ -90,7 +90,15 @@ export type UploadWarningCode =
   /** The create collided with an existing record, which this upload adopted
    * instead of creating a second one. The batch's publish/visibility settings
    * were NOT applied — the backend's own remain authoritative. */
-  | "adopted-existing";
+  | "adopted-existing"
+  /**
+   * The linked record no longer existed on the backend (a PATCH `404`, which is
+   * authoritative — see `services/upload.recreateOrphaned`) and was re-created
+   * from the local copy. Distinct from `"adopted-existing"`: that code means an
+   * existing record was found and reused; this one means the record was gone
+   * and a new one had to be made.
+   */
+  | "recreated-orphaned";
 
 export interface UploadBlocker {
   code: UploadBlockerCode;

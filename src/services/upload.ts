@@ -392,6 +392,54 @@ async function writeThrough(
   });
 }
 
+/**
+ * Finish an upload once the record and its assets are already on the
+ * backend: connect parents, adopt their bumped versions, reposition the
+ * folder to `/processed`, and build the `"uploaded"` result.
+ *
+ * Shared tail for all three paths that end in a successful write — the
+ * create branch of {@link uploadItem}, {@link replaceOnBackend}, and
+ * {@link recreateOrphaned} (an orphaned replace re-created as a fresh
+ * record). It used to be copied into each; extracted so the parent-linking
+ * and move-to-processed behaviour can't drift between them.
+ */
+async function finishUpload(
+  item: Item,
+  backendId: string,
+  ctx: UploadItemContext,
+  deps: UploadDeps,
+  warnings: UploadWarning[],
+): Promise<ItemUploadResult> {
+  // Link parents (idempotent server-side); a per-parent failure doesn't undo
+  // the upload — record it and continue. Each success reports the parent's new
+  // version, which the caller needs to keep that parent's mirror usable.
+  const { errors: relationErrors, states: parentStates } = await connectParents(
+    backendId,
+    ctx.parentIds,
+    deps,
+  );
+
+  // Each connect bumped the parent's version server-side; adopt it now or the
+  // parent's next PATCH 409s. Never throws — see `applyParentStates`.
+  await applyParentStates(parentStates, deps);
+
+  // Reposition to `/processed` on first upload (a replace already lives there).
+  if (item.root === "unprocessed") {
+    try {
+      await deps.moveToProcessed(item);
+    } catch (err) {
+      logger.warn("upload", `Uploaded ${item.id} but failed to move to /processed.`, err);
+    }
+  }
+
+  return result(item.id, "uploaded", {
+    backendId,
+    warnings,
+    relationErrors,
+    parentStates,
+  });
+}
+
 // ─── the item upload ─────────────────────────────────────────────────────────
 
 /**
@@ -539,34 +587,7 @@ export async function uploadItem(
       return await replaceOnBackend(item, ctx, plan, pruned, mirror, deps, warnings);
     }
 
-    // Link parents (idempotent server-side); a per-parent failure doesn't undo
-    // the upload — record it and continue. Each success reports the parent's new
-    // version, which the caller needs to keep that parent's mirror usable.
-    const { errors: relationErrors, states: parentStates } = await connectParents(
-      backendId,
-      ctx.parentIds,
-      deps,
-    );
-
-    // Each connect bumped the parent's version server-side; adopt it now or the
-    // parent's next PATCH 409s. Never throws — see `applyParentStates`.
-    await applyParentStates(parentStates, deps);
-
-    // Reposition to `/processed` on first upload (a replace already lives there).
-    if (item.root === "unprocessed") {
-      try {
-        await deps.moveToProcessed(item);
-      } catch (err) {
-        logger.warn("upload", `Uploaded ${item.id} but failed to move to /processed.`, err);
-      }
-    }
-
-    return result(item.id, "uploaded", {
-      backendId,
-      warnings,
-      relationErrors,
-      parentStates,
-    });
+    return await finishUpload(item, backendId, ctx, deps, warnings);
   } catch (err) {
     return mapUploadError(item.id, backendId, err, fieldKeys);
   }
@@ -611,7 +632,34 @@ async function replaceOnBackend(
     });
   }
   const prevMeta = (mirror.metadata ?? {}) as RecordMetadata;
-  const version = await patchOnBackend(item, backendId, pruned, ctx, mirror, deps, options);
+  let version: number;
+  try {
+    version = await patchOnBackend(item, backendId, pruned, ctx, mirror, deps, options);
+  } catch (err) {
+    // A PATCH 404 comes from Postgres, not the CDC-lagged search index
+    // (backend items.service.ts:190-196), so it is authoritative: the record
+    // really is gone — deleted on the website after we linked to it. Without
+    // this branch the item is permanently stuck, because `uploadMode()` returns
+    // "replace" for as long as `backendId` is set and nothing ever clears it.
+    //
+    // Re-creating is safe precisely because the absence is authoritative. For a
+    // COBISS item the backend regenerates the SAME deterministic id, so the
+    // local link stays valid; for a non-COBISS item it mints a new one and
+    // `writeThrough` records it.
+    if (err instanceof ApiError && err.kind === "not_found") {
+      // `await` (not a bare return): this `catch` is nested inside
+      // `replaceOnBackend`, which is itself called from `uploadItem`'s own
+      // `try` (directly, or via the adoption path's `catch`). A bare `return
+      // recreateOrphaned(...)` would settle `replaceOnBackend`'s promise
+      // directly from the returned promise, bypassing every enclosing `catch`
+      // — so a later rejection here would reject `uploadItem` itself instead
+      // of folding into a mapped `ItemUploadResult`, which in turn rejects
+      // `uploadBatch` and discards every already-uploaded item's result in
+      // the run.
+      return await recreateOrphaned(item, ctx, plan, pruned, deps, warnings);
+    }
+    throw err;
+  }
   const mirrorMetadata = { ...prevMeta, ...pruned };
 
   // Persist the confirmed metadata/version FIRST (the PATCH already
@@ -637,34 +685,7 @@ async function replaceOnBackend(
   );
   warnings.push(...textQualityWarnings(attachments));
 
-  // Link parents (idempotent server-side); a per-parent failure doesn't undo
-  // the upload — record it and continue. Each success reports the parent's new
-  // version, which the caller needs to keep that parent's mirror usable.
-  const { errors: relationErrors, states: parentStates } = await connectParents(
-    backendId,
-    ctx.parentIds,
-    deps,
-  );
-
-  // Each connect bumped the parent's version server-side; adopt it now or the
-  // parent's next PATCH 409s. Never throws — see `applyParentStates`.
-  await applyParentStates(parentStates, deps);
-
-  // Reposition to `/processed` on first upload (a replace already lives there).
-  if (item.root === "unprocessed") {
-    try {
-      await deps.moveToProcessed(item);
-    } catch (err) {
-      logger.warn("upload", `Uploaded ${item.id} but failed to move to /processed.`, err);
-    }
-  }
-
-  return result(item.id, "uploaded", {
-    backendId,
-    warnings,
-    relationErrors,
-    parentStates,
-  });
+  return await finishUpload(item, backendId, ctx, deps, warnings);
 }
 
 /** A backend record that already exists at the id this item would have created.
@@ -780,6 +801,43 @@ async function adoptExistingRecord(
     metadata: existing.metadata,
   });
   return mirror;
+}
+
+/** Re-create a record the backend has authoritatively lost, then finish the
+ * upload as a create (assets, parents, move). See the caller for why this
+ * cannot double-create. */
+async function recreateOrphaned(
+  item: Item,
+  ctx: UploadItemContext,
+  plan: ItemUploadPlan,
+  pruned: RecordMetadataInput,
+  deps: UploadDeps,
+  warnings: UploadWarning[],
+): Promise<ItemUploadResult> {
+  warnings.push({
+    code: "recreated-orphaned",
+    message:
+      "The linked record no longer exists on the backend — it was re-created from the local copy.",
+  });
+  const created = await createOnBackend(
+    { targetState: ctx.targetState, visibilityStatus: ctx.visibility, metadata: pruned },
+    deps,
+  );
+  await writeThrough(item, deps, {
+    backendId: created.id,
+    version: created.version,
+    targetState: ctx.targetState,
+    visibility: ctx.visibility,
+    metadata: created.metadata,
+  });
+  const attachments = await uploadCreateAssets(
+    created.id,
+    { ...plan, backendId: created.id },
+    deps,
+    warnings,
+  );
+  warnings.push(...textQualityWarnings(attachments));
+  return await finishUpload(item, created.id, ctx, deps, warnings);
 }
 
 // ─── backend steps ───────────────────────────────────────────────────────────

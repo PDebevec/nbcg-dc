@@ -938,6 +938,61 @@ describe("uploadItem — replace", () => {
   });
 });
 
+// ── orphan recovery ──────────────────────────────────────────────────────────
+// A PATCH 404 reads Postgres directly, unlike a search 404 which is CDC-lagged
+// — so it is authoritative: the record really is gone, and re-creating it
+// cannot double-create. A 409 must NOT trigger this — that record still exists.
+
+const ORPHAN_MIRROR: LocalMetadataFile = {
+  backendId: "cbwkbr9guqs3w11xylpri1ylw",
+  version: 3,
+  targetState: "RECORD",
+  visibilityStatus: "PUBLIC",
+  metadata: {},
+  syncedAt: "2026-09-20T00:00:00.000Z",
+};
+
+describe("orphan recovery", () => {
+  it("re-creates when the backend says the record is gone", async () => {
+    // A PATCH 404 reads Postgres directly (items.service.ts:190-196), unlike a
+    // search 404 which is CDC-lagged. So it is authoritative: the row is gone
+    // and re-creating cannot double-create.
+    const createItem = vi.fn(async () => ({
+      ...ENTITY,
+      id: "cbwkbr9guqs3w11xylpri1ylw",
+      version: 0,
+      metadata: {},
+    }));
+    const deps = fakeDeps({
+      readMirror: vi.fn(async () => ORPHAN_MIRROR),
+      updateItem: vi.fn(async () => { throw apiError("not_found", 404); }),
+      createItem,
+    });
+    const item = { ...makeItem(), backendId: "cbwkbr9guqs3w11xylpri1ylw" };
+
+    const res = await uploadItem(item, CTX, deps);
+
+    expect(createItem).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe("uploaded");
+    expect(res.warnings.map((w) => w.code)).toContain("recreated-orphaned");
+  });
+
+  it("does NOT re-create on a 409 — that record still exists", async () => {
+    const createItem = vi.fn();
+    const deps = fakeDeps({
+      readMirror: vi.fn(async () => ORPHAN_MIRROR),
+      updateItem: vi.fn(async () => { throw apiError("conflict", 409); }),
+      createItem,
+    });
+    const item = { ...makeItem(), backendId: "cbwkbr9guqs3w11xylpri1ylw" };
+
+    const res = await uploadItem(item, CTX, deps);
+
+    expect(createItem).not.toHaveBeenCalled();
+    expect(res.status).toBe("error");
+  });
+});
+
 // ── connected parents adopt their bumped version ─────────────────────────────
 // `POST /api/relations/connect` fires a trigger that bumps the PARENT's version
 // once per edge, so connecting a child silently invalidates the parent's
