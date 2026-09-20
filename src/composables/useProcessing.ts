@@ -367,6 +367,12 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
   const showUpload = computed(() => editable.value && allDone.value && !running.value && !uploading.value);
   const canUpload = computed(() => showUpload.value && !hasBlockers.value && uploadingBatchId.value == null);
   const showCancel = computed(() => running.value && activeBatchId.value === batch.value?.id);
+  /** Offer an explicit close once an upload has been attempted and left the
+   * batch open — never before, so it cannot be mistaken for "upload". */
+  const showClose = computed(
+    () => editable.value && !running.value && !uploading.value && !uploaded.value
+      && uploadStore.resultsFor(batch.value?.id ?? "").size > 0,
+  );
 
   const publishLabel = computed(() => {
     const b = batch.value;
@@ -465,6 +471,13 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
     }
   }
 
+  async function closeBatch(): Promise<void> {
+    const b = batch.value;
+    if (!b) return;
+    await uploadStore.closeBatch(b.id);
+    toasts.push("Batch closed.", "success");
+  }
+
   async function init(): Promise<void> {
     if (!itemsStore.loaded) await itemsStore.load();
   }
@@ -484,6 +497,7 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
     showUpload,
     canUpload,
     showCancel,
+    showClose,
     blockedNote,
     publishLabel,
     visibilityLabel,
@@ -494,5 +508,6 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
     rerunAllFailed,
     cancel,
     upload,
+    closeBatch,
   };
 }

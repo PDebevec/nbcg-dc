@@ -60,6 +60,34 @@ export const useUploadStore = defineStore("upload", () => {
   }
 
   /**
+   * Mark a batch finished and archive it, regardless of whether every item
+   * uploaded.
+   *
+   * `run()` calls this automatically on an all-`uploaded` outcome. It is exposed
+   * so the operator can also close a batch they have decided is done — an item
+   * that legitimately cannot upload (duplicate that only needs a Sync, a blocked
+   * folder they will redo later) would otherwise pin the batch "In progress"
+   * with no way out, since this is the only archive call site in the app.
+   */
+  async function closeBatch(batchId: string): Promise<void> {
+    const batches = useBatchesStore();
+    const batch = batches.get(batchId);
+    if (batch) {
+      try {
+        await batches.update({ ...batch, stage: BatchStage.Uploaded });
+      } catch (err) {
+        logger.warn("upload", "Couldn't mark the batch uploaded.", err);
+      }
+    }
+    try {
+      await batches.archive(batchId);
+    } catch (err) {
+      logger.error("upload", "Couldn't archive the batch.", err);
+      error.value = "The batch could not be archived.";
+    }
+  }
+
+  /**
    * Upload a batch's items. `resolveContext` supplies each item's publish
    * decisions + working metadata + readiness (from the batch + metadata store).
    * Returns true when every item uploaded (the batch is then archived).
@@ -74,7 +102,6 @@ export const useUploadStore = defineStore("upload", () => {
       return false;
     }
     if (items.length === 0) return false;
-    const batches = useBatchesStore();
     activeBatchId.value = batchId;
     error.value = null;
     clearResults(batchId);
@@ -92,20 +119,7 @@ export const useUploadStore = defineStore("upload", () => {
       completed.value = c;
 
       if (outcome.allUploaded) {
-        const batch = batches.get(batchId);
-        if (batch) {
-          try {
-            await batches.update({ ...batch, stage: BatchStage.Uploaded });
-          } catch (err) {
-            logger.warn("upload", "Couldn't mark the batch uploaded.", err);
-          }
-          try {
-            await batches.archive(batchId);
-          } catch (err) {
-            logger.error("upload", "Uploaded, but couldn't archive the batch.", err);
-            error.value = "Uploaded, but the batch could not be archived.";
-          }
-        }
+        await closeBatch(batchId);
       }
       // Whatever the outcome, some items may have moved / gained a backend id.
       await useItemsStore().refresh();
@@ -129,6 +143,7 @@ export const useUploadStore = defineStore("upload", () => {
     isRunning,
     resultsFor,
     clearResults,
+    closeBatch,
     run,
   };
 });
