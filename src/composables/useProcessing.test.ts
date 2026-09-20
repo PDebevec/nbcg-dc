@@ -510,6 +510,9 @@ describe("per-step rows", () => {
               itemId: "nb",
               status: "blocked" as const,
               backendId: null,
+              // A blocked item never reaches the backend this run — it did
+              // not create anything.
+              created: false,
               blockers: [
                 { code: "not-processed" as const, message: "Not fully processed yet (thumbnail)." },
                 { code: "metadata-invalid" as const, message: "Required metadata is incomplete or invalid." },

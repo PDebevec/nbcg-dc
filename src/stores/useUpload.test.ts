@@ -27,6 +27,7 @@ vi.mock("@services/api/items", async (importOriginal) => {
 
 const { useUploadStore } = await import("./useUpload");
 const { useBatchesStore } = await import("./useBatches");
+const { deleteItems } = await import("@services/api/items");
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -125,27 +126,54 @@ describe("useUpload.closeBatch", () => {
 // `cleanupUnfinishedRecords`). This suite covers only the store-level
 // integration: closing must still succeed when that best-effort delete fails.
 describe("useUpload.closeBatch — cleanup", () => {
-  it("still archives when the cleanup delete fails", async () => {
+  const unfinished: ItemUploadResult = {
+    itemId: "i1",
+    status: "error",
+    backendId: "b2",
+    // Created this run and left unfinished — exactly the removable shape
+    // `cleanupUnfinishedRecords` is expected to attempt to delete.
+    created: true,
+    blockers: [],
+    warnings: [],
+    fieldErrors: [],
+    relationErrors: [],
+    parentStates: [],
+    message: null,
+  };
+
+  it("still archives when the cleanup delete fails, and tells the operator", async () => {
+    // The module-level mock above rejects every `deleteItems` call.
     const batches = useBatchesStore();
     batches.batches = [makeBatch()];
     vi.spyOn(batches, "update").mockResolvedValue({} as never);
     const archive = vi.spyOn(batches, "archive").mockResolvedValue({} as never);
     const store = useUploadStore();
-    const unfinished: ItemUploadResult = {
-      itemId: "i1",
-      status: "error",
-      backendId: "b2",
-      blockers: [],
-      warnings: [],
-      fieldErrors: [],
-      relationErrors: [],
-      parentStates: [],
-      message: null,
-    };
     store.results = new Map([["b1", new Map([["i1", unfinished]])]]);
 
     await store.closeBatch("b1", { cleanup: true });
 
+    // The batch closes either way — cleanup is best-effort, never blocking.
     expect(archive).toHaveBeenCalledWith("b1");
+    // But a failed cleanup must reach the operator, not just `logger.warn`.
+    expect(store.error).toBe(
+      "The batch was closed, but unfinished records could not be removed from the backend.",
+    );
+  });
+
+  it("does not set an error when cleanup succeeds", async () => {
+    // Non-vacuous against always setting the error on `cleanup: true`: flip
+    // this one call to resolve and confirm `error` stays null.
+    vi.mocked(deleteItems).mockResolvedValueOnce(undefined as never);
+    const batches = useBatchesStore();
+    batches.batches = [makeBatch()];
+    vi.spyOn(batches, "update").mockResolvedValue({} as never);
+    vi.spyOn(batches, "archive").mockResolvedValue({} as never);
+    const store = useUploadStore();
+    store.results = new Map([["b1", new Map([["i1", unfinished]])]]);
+
+    await store.closeBatch("b1", { cleanup: true });
+
+    expect(deleteItems).toHaveBeenCalledWith({ ids: ["b2"] });
+    expect(store.error).toBeNull();
   });
 });

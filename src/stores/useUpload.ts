@@ -83,7 +83,11 @@ export const useUploadStore = defineStore("upload", () => {
   ): Promise<void> {
     error.value = null;
     if (options.cleanup) {
-      await cleanupUnfinishedRecords(resultsFor(batchId).values());
+      const cleaned = await cleanupUnfinishedRecords(resultsFor(batchId).values());
+      if (!cleaned) {
+        error.value =
+          "The batch was closed, but unfinished records could not be removed from the backend.";
+      }
     }
     const batches = useBatchesStore();
     const batch = batches.get(batchId);

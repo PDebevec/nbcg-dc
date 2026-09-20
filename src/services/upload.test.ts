@@ -1258,6 +1258,7 @@ function uploadResult(over: Partial<ItemUploadResult> = {}): ItemUploadResult {
     itemId: "i",
     status: "error",
     backendId: null,
+    created: true,
     blockers: [],
     warnings: [],
     fieldErrors: [],
@@ -1356,10 +1357,11 @@ describe("cleanupUnfinishedRecords", () => {
       }),
     ];
 
-    await cleanupUnfinishedRecords(results, { deleteItems });
+    const ok = await cleanupUnfinishedRecords(results, { deleteItems });
 
     expect(deleteItems).toHaveBeenCalledTimes(1);
     expect(deleteItems).toHaveBeenCalledWith(["b2"]);
+    expect(ok).toBe(true);
   });
 
   it("does not call deleteItems when nothing is removable", async () => {
@@ -1367,27 +1369,182 @@ describe("cleanupUnfinishedRecords", () => {
     // deleteItems would be called with an empty array.
     const deleteItems = vi.fn(async () => {});
 
-    await cleanupUnfinishedRecords(
+    const ok = await cleanupUnfinishedRecords(
       [uploadResult({ itemId: "i1", status: "uploaded", backendId: "b1" })],
       { deleteItems },
     );
 
     expect(deleteItems).not.toHaveBeenCalled();
+    expect(ok).toBe(true);
   });
 
-  it("is best-effort: a rejected delete does not throw", async () => {
+  it("is best-effort: a rejected delete does not throw, but reports failure", async () => {
     // Non-vacuous against removing the try/catch: without it the rejection
-    // would propagate and this assertion would fail.
+    // would propagate and this assertion would fail. Non-vacuous against
+    // always returning `true`: without a real `false` on the caught branch,
+    // `closeBatch` would have no way to tell the operator cleanup failed.
     const deleteItems = vi.fn(async () => {
       throw new Error("boom");
     });
 
-    await expect(
-      cleanupUnfinishedRecords(
-        [uploadResult({ itemId: "i2", status: "error", backendId: "b2" })],
-        { deleteItems },
-      ),
-    ).resolves.toBeUndefined();
+    const ok = await cleanupUnfinishedRecords(
+      [uploadResult({ itemId: "i2", status: "error", backendId: "b2" })],
+      { deleteItems },
+    );
+
     expect(deleteItems).toHaveBeenCalledWith(["b2"]);
+    expect(ok).toBe(false);
+  });
+});
+
+// ── created provenance drives removability, end to end ──────────────────────
+// Task 7 fix: the ORIGINAL selection rule inferred "this batch created it"
+// from `backendId` alone — but `backendId` is seeded from `item.backendId`, a
+// *persistent local* value from the `metadata.json` mirror. It survives
+// sessions and means "linked", not "made here". These run the real
+// `uploadItem` pipeline (not a synthetic fixture) so the `created` flag under
+// test is the one the production code actually computed — proving the fix
+// where it matters: at the site that produced a false positive before.
+
+const REPLACE_MIRROR: LocalMetadataFile = {
+  backendId: "rec_1",
+  version: 3,
+  targetState: "RECORD",
+  visibilityStatus: "PUBLIC",
+  metadata: { title: "Old title" },
+  syncedAt: "2026-08-01T00:00:00.000Z",
+};
+
+describe("removableBackendIds — created provenance (regression)", () => {
+  it("a failed replace with a pre-existing backendId and no warning is NOT removable", async () => {
+    const deps = fakeDeps({
+      readMirror: vi.fn(async () => REPLACE_MIRROR),
+      // A non-transient, non-404, non-409 PATCH failure — nothing about it
+      // suggests a fresh record.
+      updateItem: vi.fn(async () => {
+        throw apiError("server", 500);
+      }),
+    });
+    const item = makeItem({
+      root: "processed",
+      backendId: "rec_1",
+      flags: { uploaded: true, reupload: true, reuploadTextOnly: false },
+    });
+
+    const res = await uploadItem(item, CTX, deps);
+
+    expect(res.status).toBe("error");
+    expect(res.backendId).toBe("rec_1");
+    expect(res.created).toBe(false);
+    expect(removableBackendIds([res])).toEqual([]);
+  });
+
+  it("a blocked item carrying a pre-existing backendId is NOT removable", async () => {
+    const item = makeItem({ backendId: "rec_1" });
+
+    const res = await uploadItem(item, { ...CTX, metadataReady: false }, fakeDeps());
+
+    expect(res.status).toBe("blocked");
+    expect(res.backendId).toBe("rec_1");
+    expect(res.created).toBe(false);
+    expect(removableBackendIds([res])).toEqual([]);
+  });
+
+  it("an unauthenticated (401) replace with a pre-existing backendId is NOT removable", async () => {
+    const deps = fakeDeps({
+      readMirror: vi.fn(async () => REPLACE_MIRROR),
+      updateItem: vi.fn(async () => {
+        throw apiError("unauthorized", 401);
+      }),
+    });
+    const item = makeItem({
+      root: "processed",
+      backendId: "rec_1",
+      flags: { uploaded: true, reupload: true, reuploadTextOnly: false },
+    });
+
+    const res = await uploadItem(item, CTX, deps);
+
+    expect(res.status).toBe("unauthenticated");
+    expect(res.backendId).toBe("rec_1");
+    expect(res.created).toBe(false);
+    expect(removableBackendIds([res])).toEqual([]);
+  });
+
+  it("a forbidden (403) replace with a pre-existing backendId is NOT removable", async () => {
+    const deps = fakeDeps({
+      readMirror: vi.fn(async () => REPLACE_MIRROR),
+      updateItem: vi.fn(async () => {
+        throw apiError("forbidden", 403);
+      }),
+    });
+    const item = makeItem({
+      root: "processed",
+      backendId: "rec_1",
+      flags: { uploaded: true, reupload: true, reuploadTextOnly: false },
+    });
+
+    const res = await uploadItem(item, CTX, deps);
+
+    expect(res.status).toBe("forbidden");
+    expect(res.backendId).toBe("rec_1");
+    expect(res.created).toBe(false);
+    expect(removableBackendIds([res])).toEqual([]);
+  });
+
+  it("a failed create (created this run, assets failed) IS removable", async () => {
+    const deps = fakeDeps({
+      uploadFiles: vi.fn(async () => {
+        throw apiError("bad_request", 400, { message: ["boom"] });
+      }),
+    });
+
+    const res = await uploadItem(makeItem(), CTX, deps);
+
+    expect(res.status).toBe("error");
+    expect(res.backendId).toBe("rec_1");
+    expect(res.created).toBe(true);
+    expect(removableBackendIds([res])).toEqual(["rec_1"]);
+  });
+
+  it("a failed recreated-orphaned run IS removable, at the fresh id — not the dead one", async () => {
+    // The subtle case: `recreateOrphaned` mints a NEW id ("new_rec_2") while
+    // `uploadItem`'s hoisted `backendId` still reads the dead, 404'd orphan
+    // id ("cbwkbr9guqs3w11xylpri1ylw"). Reporting the dead id would send
+    // close-time cleanup at a record that no longer exists.
+    const orphanMirror: LocalMetadataFile = {
+      backendId: "cbwkbr9guqs3w11xylpri1ylw",
+      version: 3,
+      targetState: "RECORD",
+      visibilityStatus: "PUBLIC",
+      metadata: {},
+      syncedAt: "2026-09-20T00:00:00.000Z",
+    };
+    const deps = fakeDeps({
+      readMirror: vi.fn(async () => orphanMirror),
+      updateItem: vi.fn(async () => {
+        throw apiError("not_found", 404);
+      }),
+      createItem: vi.fn(async () => ({ ...ENTITY, id: "new_rec_2", version: 0, metadata: {} })),
+      // The re-created record's own asset upload then fails — stranding the
+      // fresh record this run just made.
+      uploadFiles: vi.fn(async () => {
+        throw apiError("bad_request", 400, { message: ["boom"] });
+      }),
+    });
+    const item = { ...makeItem(), backendId: "cbwkbr9guqs3w11xylpri1ylw" };
+
+    const res = await uploadItem(item, CTX, deps);
+
+    // Note: `mapUploadError` (the sole constructor for an `"error"` outcome
+    // reached via a throw) does not thread the accumulated `warnings` array
+    // through, so the "recreated-orphaned" warning pushed inside
+    // `recreateOrphaned` does not survive onto this failed result — a
+    // pre-existing gap outside this fix's scope. `created`/`backendId` are
+    // exactly what `removableBackendIds` acts on, and both are asserted below.
+    expect(res.status).toBe("error");
+    expect(res.backendId).toBe("new_rec_2");
+    expect(res.created).toBe(true);
+    expect(removableBackendIds([res])).toEqual(["new_rec_2"]);
   });
 });

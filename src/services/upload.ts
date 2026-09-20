@@ -213,6 +213,25 @@ export interface ItemUploadResult {
   status: ItemUploadStatus;
   /** The connected backend id on success (or the existing one). */
   backendId: string | null;
+  /**
+   * Whether **this run** created the record at {@link backendId} — i.e.
+   * `createOnBackend` returned it during this very `uploadItem` call.
+   *
+   * Deliberately NOT inferable from `backendId`. That field is seeded from
+   * `item.backendId`, a *persistent local* value read back from the
+   * `metadata.json` mirror; it survives across sessions and means only "this
+   * item is linked to a backend record", never "this run made it". Inferring
+   * creation from it is how a failed replace, a `blocked` item, or a `401` on
+   * an item uploaded weeks ago all end up looking like fresh half-made
+   * records.
+   *
+   * That distinction is load-bearing: {@link removableBackendIds} gates a
+   * **hard, permanent** `DELETE /api/items` against the live public catalogue
+   * on this flag. It is therefore set at exactly the two sites that create —
+   * the create branch of {@link uploadItem} and {@link recreateOrphaned} —
+   * and defaults to `false` everywhere else.
+   */
+  created: boolean;
   /** Hard gates (only on `blocked`). */
   blockers: UploadBlocker[];
   /** Soft warnings (pre-upload OCR + post-upload text quality). */
@@ -253,6 +272,9 @@ function result(
     itemId,
     status,
     backendId: null,
+    // Safe default: a result that does not go out of its way to say "this run
+    // created me" is never eligible for close-time deletion.
+    created: false,
     blockers: [],
     warnings: [],
     fieldErrors: [],
@@ -261,6 +283,35 @@ function result(
     message: null,
     ...extra,
   };
+}
+
+/**
+ * What *this run* actually created on the backend, recorded the moment it
+ * happens so the outer `catch` can still report it.
+ *
+ * Mutable and threaded down on purpose. A create can happen several frames
+ * deep — the create branch of {@link uploadItem}, or {@link recreateOrphaned}
+ * reached from a replace whose `PATCH` 404'd — while the failure that strands
+ * the new record is mapped back up in `uploadItem`'s own `catch`. There is no
+ * other way for that `catch` to tell a record this run made from one the item
+ * has been linked to since an earlier session (see
+ * {@link ItemUploadResult.created}).
+ */
+interface RunCreation {
+  /** True once `createOnBackend` has returned a record in this run. */
+  created: boolean;
+  /**
+   * The id that create returned.
+   *
+   * Tracked separately from `uploadItem`'s hoisted `backendId` because the two
+   * can disagree: an orphaned replace re-created under a freshly minted
+   * (non-COBISS) id leaves the hoisted value pointing at the id the backend
+   * has already authoritatively 404'd. Reporting that dead id would send
+   * close-time cleanup at a record that no longer exists — and `DELETE
+   * /api/items` is all-or-nothing, so one such id fails the whole request and
+   * the genuinely half-made records in the same batch survive.
+   */
+  backendId: string | null;
 }
 
 // ─── retry ────────────────────────────────────────────────────────────────
@@ -410,6 +461,7 @@ async function finishUpload(
   ctx: UploadItemContext,
   deps: UploadDeps,
   warnings: UploadWarning[],
+  run: RunCreation,
 ): Promise<ItemUploadResult> {
   // Link parents (idempotent server-side); a per-parent failure doesn't undo
   // the upload — record it and continue. Each success reports the parent's new
@@ -433,8 +485,14 @@ async function finishUpload(
     }
   }
 
+  // `created` is carried onto the success result too. `removableBackendIds`
+  // drops `uploaded` before it ever looks at the flag, so nothing depends on
+  // it here — but a field documented as "this run created this record" must
+  // not quietly read `false` on the one outcome where it is most obviously
+  // true.
   return result(item.id, "uploaded", {
     backendId,
+    created: run.created,
     warnings,
     relationErrors,
     parentStates,
@@ -471,6 +529,10 @@ export async function uploadItem(
   // `backendId` is hoisted so the catch reports the id we actually created (a
   // failure *after* create must not lose it — that would double-create on retry).
   let backendId = item.backendId;
+  // Seeded "nothing created yet". Note what `backendId` above already is at
+  // this point: for a replace it is the *persisted* link from an earlier
+  // session, which is exactly why creation cannot be inferred from it.
+  const run: RunCreation = { created: false, backendId: null };
   // `fieldKeys` is hoisted for validation-error mapping; populated once the
   // schema is fetched (inside the try, so a schema-fetch failure folds into an
   // error result rather than escaping and crashing the batch).
@@ -553,6 +615,10 @@ export async function uploadItem(
         // instead of folding into a mapped `ItemUploadResult`, which in turn
         // rejects `uploadBatch` and discards every already-uploaded item's
         // result in the run.
+        // `run` stays untouched here on purpose: adoption did NOT create
+        // anything — it attached to a record that already existed, possibly a
+        // librarian's own. (The `"adopted-existing"` warning pushed above is
+        // the second, independent guard against ever deleting it.)
         return await replaceOnBackend(
           item,
           adoptedCtx,
@@ -561,10 +627,15 @@ export async function uploadItem(
           adopted,
           deps,
           warnings,
+          run,
           { suppressVisibility: true },
         );
       }
       backendId = created.id;
+      // The create site. From here on this run owns the record: if anything
+      // below fails, close-time cleanup may delete it.
+      run.created = true;
+      run.backendId = created.id;
       version = created.version;
       mirrorMetadata = created.metadata;
 
@@ -585,12 +656,16 @@ export async function uploadItem(
       warnings.push(...textQualityWarnings(attachments));
     } else {
       // Replace (re-upload) — stable id, stays in `/processed`.
-      return await replaceOnBackend(item, ctx, plan, pruned, mirror, deps, warnings);
+      return await replaceOnBackend(item, ctx, plan, pruned, mirror, deps, warnings, run);
     }
 
-    return await finishUpload(item, backendId, ctx, deps, warnings);
+    return await finishUpload(item, backendId, ctx, deps, warnings, run);
   } catch (err) {
-    return mapUploadError(item.id, backendId, err, fieldKeys);
+    // Prefer the id this run actually minted. They agree on the create branch;
+    // they diverge only when `recreateOrphaned` replaced a 404'd link with a
+    // fresh id, and there the hoisted value is the dead one (see
+    // `RunCreation.backendId`).
+    return mapUploadError(item.id, run.backendId ?? backendId, err, fieldKeys, run.created);
   }
 }
 
@@ -620,12 +695,18 @@ async function replaceOnBackend(
   mirror: LocalMetadataFile | null,
   deps: UploadDeps,
   warnings: UploadWarning[],
+  run: RunCreation,
   options: ReplaceOnBackendOptions = {},
 ): Promise<ItemUploadResult> {
   const backendId = plan.backendId as string;
   if (!mirror || mirror.version == null) {
     // A connected item with no local version can't do optimistic-concurrency;
     // don't silently write an unconfirmed mirror — ask for a re-sync.
+    //
+    // `created` is left at its `false` default, and that is the whole point:
+    // NOT ONE backend call has been made in this run, yet `backendId` here is
+    // a live, possibly curated record from an earlier session. This is the
+    // sharpest case the `created` flag exists to stop.
     return result(item.id, "error", {
       backendId,
       message:
@@ -657,7 +738,7 @@ async function replaceOnBackend(
       // of folding into a mapped `ItemUploadResult`, which in turn rejects
       // `uploadBatch` and discards every already-uploaded item's result in
       // the run.
-      return await recreateOrphaned(item, ctx, plan, pruned, deps, warnings);
+      return await recreateOrphaned(item, ctx, plan, pruned, deps, warnings, run);
     }
     throw err;
   }
@@ -686,7 +767,7 @@ async function replaceOnBackend(
   );
   warnings.push(...textQualityWarnings(attachments));
 
-  return await finishUpload(item, backendId, ctx, deps, warnings);
+  return await finishUpload(item, backendId, ctx, deps, warnings, run);
 }
 
 /** A backend record that already exists at the id this item would have created.
@@ -814,6 +895,7 @@ async function recreateOrphaned(
   pruned: RecordMetadataInput,
   deps: UploadDeps,
   warnings: UploadWarning[],
+  run: RunCreation,
 ): Promise<ItemUploadResult> {
   warnings.push({
     code: "recreated-orphaned",
@@ -824,6 +906,11 @@ async function recreateOrphaned(
     { targetState: ctx.targetState, visibilityStatus: ctx.visibility, metadata: pruned },
     deps,
   );
+  // The second (and last) create site. The old link was authoritatively 404'd
+  // and this record is brand new, so if the assets below fail there is nothing
+  // here but a record this run stranded.
+  run.created = true;
+  run.backendId = created.id;
   await writeThrough(item, deps, {
     backendId: created.id,
     version: created.version,
@@ -838,7 +925,7 @@ async function recreateOrphaned(
     warnings,
   );
   warnings.push(...textQualityWarnings(attachments));
-  return await finishUpload(item, created.id, ctx, deps, warnings);
+  return await finishUpload(item, created.id, ctx, deps, warnings, run);
 }
 
 // ─── backend steps ───────────────────────────────────────────────────────────
@@ -1345,17 +1432,27 @@ async function connectParents(
   return { errors, states };
 }
 
-/** Fold a thrown error into the right {@link ItemUploadResult} outcome. */
+/**
+ * Fold a thrown error into the right {@link ItemUploadResult} outcome.
+ *
+ * `created` says whether *this run* created `backendId` before the throw (see
+ * {@link RunCreation}); it is stamped onto every outcome below rather than
+ * guessed from `backendId`. A `401`, a `403` or a lost `PATCH` race proves the
+ * opposite of creation — nothing was written — yet each of them reports the
+ * item's long-standing link in `backendId`.
+ */
 function mapUploadError(
   itemId: string,
   backendId: string | null,
   err: unknown,
   fieldKeys: string[],
+  created: boolean,
 ): ItemUploadResult {
   if (err instanceof ApiError) {
     if (err.kind === "unauthorized") {
       return result(itemId, "unauthenticated", {
         backendId,
+        created,
         message:
           "Not signed in — the request carried no valid token. Check the Keycloak username and password in Settings.",
       });
@@ -1363,6 +1460,7 @@ function mapUploadError(
     if (err.kind === "forbidden") {
       return result(itemId, "forbidden", {
         backendId,
+        created,
         message:
           "Signed in, but this account lacks write access (records:manage / drafts:manage).",
       });
@@ -1372,6 +1470,7 @@ function mapUploadError(
       // optimistic-concurrency race.
       return result(itemId, backendId ? "error" : "duplicate", {
         backendId,
+        created,
         message: backendId
           ? "The record changed on the server since it was last synced — refresh and retry."
           : "A record with this identifier already exists on the backend.",
@@ -1380,15 +1479,16 @@ function mapUploadError(
     if (err.kind === "bad_request") {
       return result(itemId, "error", {
         backendId,
+        created,
         fieldErrors: mapValidationErrors(err.body, fieldKeys),
         message: err.message,
       });
     }
-    return result(itemId, "error", { backendId, message: err.message });
+    return result(itemId, "error", { backendId, created, message: err.message });
   }
   const message = err instanceof Error ? err.message : String(err);
   logger.error("upload", `Unexpected error uploading ${itemId}.`, err);
-  return result(itemId, "error", { backendId, message });
+  return result(itemId, "error", { backendId, created, message });
 }
 
 // ─── batch driver ──────────────────────────────────────────────────────────
@@ -1453,13 +1553,34 @@ export async function uploadBatch(
  * Backend ids this batch CREATED and did not finish — the only records a
  * close may remove.
  *
- * Three exclusions, each load-bearing:
+ * The gate is {@link ItemUploadResult.created}: positive, this-run provenance,
+ * stamped at the two sites that actually create. Creation is **not** inferred
+ * from `backendId`, and this is the single most important line in the
+ * function. `backendId` is seeded from `item.backendId`, a persistent local
+ * field read back from the `metadata.json` mirror — it survives sessions and
+ * means "linked", not "made here". Inferring from it hard-deleted live,
+ * curated records out of the National Library's public catalogue in three
+ * ordinary situations:
+ *  - a **failed replace** (a `409`, a `403`, a dropped connection) of an item
+ *    uploaded in an earlier session, whose error result carries that
+ *    pre-existing id and no warning at all — including `replaceOnBackend`'s
+ *    missing-local-version branch, which makes zero backend calls;
+ *  - a **`blocked`** item, which by definition never reached the backend this
+ *    run, yet reports the id it was published under previously;
+ *  - `unauthenticated` / `forbidden`, where the `401`/`403` is itself proof
+ *    that nothing was written.
+ *
+ * Three further exclusions, each still load-bearing — necessary, no longer
+ * sufficient:
  *  - `uploaded` items are legitimately published; in a mixed batch the
  *    operator is closing because of some *other* item.
  *  - an `"adopted-existing"` warning means the record pre-dated this batch
  *    (see `adoptExistingRecord`). It may be a librarian's own record —
- *    deleting it would destroy third-party data.
- *  - no `backendId` means nothing was ever created.
+ *    deleting it would destroy third-party data. Kept ahead of `created` in
+ *    spirit: an adopted record must stay un-removable even if some future
+ *    path sets the flag on its way through (the adoption path can reach
+ *    `recreateOrphaned`, which does exactly that).
+ *  - no `backendId` means there is nothing to address a delete to.
  *
  * `"recreated-orphaned"` is deliberately NOT excluded: that warning means
  * *this run* re-created a record the backend had authoritatively lost
@@ -1472,6 +1593,7 @@ export function removableBackendIds(
 ): string[] {
   const out: string[] = [];
   for (const r of results) {
+    if (!r.created) continue;
     if (r.status === "uploaded") continue;
     if (!r.backendId) continue;
     if (r.warnings.some((w) => w.code === "adopted-existing")) continue;
@@ -1499,7 +1621,13 @@ function defaultCleanupDeps(): CleanupDeps {
  * is all-or-nothing (docs/PROJECT-KNOWLEDGE §"DELETE /api/items": a `404` on
  * any id deletes nothing), so the caller must send only ids it is confident
  * exist, in a single request. A failure here must not stop the close the
- * operator asked for, so it is logged rather than thrown.
+ * operator asked for, so it is logged rather than thrown — **never throws**.
+ *
+ * Still reports whether it worked: `true` on success or when there was
+ * nothing to remove, `false` when `deleteItems` rejected. The caller
+ * (`useUpload.closeBatch`) uses that to tell the operator the records are
+ * still out there — a silently-swallowed failure here would mean nobody was
+ * ever told a "removed" record actually wasn't.
  *
  * The local link is left alone on purpose: the next upload's authoritative
  * `404` re-creates the record (Task 5). Clearing it would need a `dto.rs`
@@ -1509,17 +1637,19 @@ function defaultCleanupDeps(): CleanupDeps {
 export async function cleanupUnfinishedRecords(
   results: Iterable<ItemUploadResult>,
   depsOverride?: Partial<CleanupDeps>,
-): Promise<void> {
+): Promise<boolean> {
   const deps = { ...defaultCleanupDeps(), ...depsOverride };
   const ids = removableBackendIds(results);
-  if (ids.length === 0) return;
+  if (ids.length === 0) return true;
   try {
     await deps.deleteItems(ids);
+    return true;
   } catch (err) {
     logger.warn(
       "upload",
       `Closed the batch but could not remove ${ids.length} unfinished record(s).`,
       err,
     );
+    return false;
   }
 }
