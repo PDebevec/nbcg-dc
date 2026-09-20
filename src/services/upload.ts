@@ -48,6 +48,8 @@ import {
 import { connectParent as apiConnectParent } from "./api/relations";
 import { previewCobiss } from "./api/cobiss";
 import { getRecordSchema } from "./api/schema";
+import { deterministicItemId } from "./api/deterministicId";
+import { findById, hitToRemote, type SearchHit } from "./api/search";
 import { listIndex, readItemMetadata, writeItemMetadata } from "./indexing";
 import type {
   CreateItemDto,
@@ -107,11 +109,10 @@ export interface UploadDeps {
   writeMirror: (item: Item, file: LocalMetadataFile) => Promise<void>;
   /** Persist the upload facts onto the SQLite index row (native). */
   recordUpload: (itemId: string, dto: UploadRecordDto) => Promise<void>;
-  /** Resolve the backend id of an already-existing record on a create-collision
-   * (409). Default: the deterministic id from the COBISS preview when the item
-   * carries a catalogue id, else null. Lets a collision reuse the known id
-   * instead of ever double-creating. */
-  resolveExistingBackendId: (item: Item) => Promise<string | null>;
+  /** Resolve the record an already-existing create-collision (409) hit. Default:
+   * {@link resolveExistingRecordWith} against the real search/COBISS reads. Lets
+   * a collision reuse the known id (and version) instead of ever double-creating. */
+  resolveExistingRecord: (item: Item) => Promise<ExistingRecord | null>;
   /** Move the item's folder `/unprocessed` → `/processed` (native). */
   moveToProcessed: (item: Item) => Promise<void>;
   /** The tracked local items, used to map a connected `parentId` back to a
@@ -140,11 +141,11 @@ function defaultDeps(): UploadDeps {
     readMirror: (item) => readItemMetadata(item),
     writeMirror: (item, file) => writeItemMetadata(item, file),
     recordUpload: (itemId, dto) => ipc.index.recordUpload(itemId, dto).then(() => {}),
-    resolveExistingBackendId: async (item) => {
-      if (!item.catalogueId) return null;
-      const preview = await previewCobiss(item.catalogueId);
-      return preview.itemId ?? null;
-    },
+    resolveExistingRecord: (item) =>
+      resolveExistingRecordWith(item, {
+        findById: (id) => findById(id),
+        previewCobiss: (cobissId) => previewCobiss(cobissId),
+      }),
     moveToProcessed: async (item) => {
       await ipc.fs.moveToProcessed(item.id);
     },
@@ -547,6 +548,80 @@ export async function uploadItem(
   }
 }
 
+/** A backend record that already exists at the id this item would have created.
+ * `version` is non-null by construction — a record we cannot do optimistic
+ * concurrency against is not adoptable, so the resolver returns null instead. */
+export interface ExistingRecord {
+  id: string;
+  version: number;
+  targetState: ItemType;
+  visibilityStatus: VisibilityStatus | null;
+  metadata: RecordMetadata;
+}
+
+/** The two reads `resolveExistingRecordWith` needs, injectable for tests. */
+export interface ResolveExistingDeps {
+  findById: (id: string) => Promise<SearchHit | null>;
+  previewCobiss: (cobissId: string) => Promise<{ itemId?: string | null }>;
+}
+
+/** Project a search hit into an {@link ExistingRecord}, but ONLY if it really is
+ * this item's record. See `services/api/deterministicId` for why the check is
+ * not optional. */
+function hitToExisting(
+  hit: SearchHit | null,
+  expectCobissId: string,
+): ExistingRecord | null {
+  if (!hit) return null;
+  const remote = hitToRemote(hit);
+  if (remote.version === null) return null;
+  if (remote.targetState === null) return null;
+  const cobissId = (remote.metadata as { cobissId?: unknown }).cobissId;
+  if (cobissId !== expectCobissId) return null;
+  return {
+    id: remote.id,
+    version: remote.version,
+    targetState: remote.targetState,
+    visibilityStatus: remote.visibilityStatus,
+    metadata: remote.metadata,
+  };
+}
+
+/**
+ * Find the record a create-`409` collided with.
+ *
+ * Fast path: compute the id locally and read it back. Offline-capable and
+ * instant. Fallback: ask the backend what id it would use, which costs a
+ * COBISS upstream round-trip — used only when the fast path does not verify,
+ * i.e. when the backend's derivation has drifted from our port.
+ *
+ * `null` is a legitimate answer (CDC lag, or a genuinely unresolvable id) and
+ * the caller degrades to a `duplicate` outcome rather than failing.
+ */
+export async function resolveExistingRecordWith(
+  item: Item,
+  deps: ResolveExistingDeps,
+): Promise<ExistingRecord | null> {
+  const cobissId = item.catalogueId;
+  if (!cobissId) return null;
+
+  const computed = await deterministicItemId(cobissId).catch(() => null);
+  if (computed) {
+    const hit = await deps.findById(computed).catch(() => null);
+    const found = hitToExisting(hit, cobissId);
+    if (found) return found;
+  }
+
+  const previewed = await deps
+    .previewCobiss(cobissId)
+    .then((p) => p.itemId ?? null)
+    .catch(() => null);
+  if (!previewed || previewed === computed) return null;
+
+  const hit = await deps.findById(previewed).catch(() => null);
+  return hitToExisting(hit, cobissId);
+}
+
 /**
  * Handle a create-collision (`409`): a record with this item's deterministic
  * COBISS id already exists. Reuse it — resolve the existing backend id, record
@@ -571,7 +646,8 @@ async function recoverCreateCollision(
   deps: UploadDeps,
 ): Promise<ItemUploadResult | null> {
   if (!(err instanceof ApiError) || err.kind !== "conflict") return null;
-  const existingId = await deps.resolveExistingBackendId(item).catch(() => null);
+  const existing = await deps.resolveExistingRecord(item).catch(() => null);
+  const existingId = existing?.id ?? null;
   if (!existingId) return null;
   try {
     await writeThrough(item, deps, {

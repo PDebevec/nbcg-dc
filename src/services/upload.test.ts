@@ -1,10 +1,17 @@
 import { describe, it, expect, vi } from "vitest";
 import { ApiError } from "./api/client";
-import { uploadItem, uploadBatch, type UploadDeps, type UploadItemContext } from "./upload";
+import {
+  uploadItem,
+  uploadBatch,
+  resolveExistingRecordWith,
+  type UploadDeps,
+  type UploadItemContext,
+} from "./upload";
 import type { UploadFile } from "./api/files";
 import { discoverAsset, type DiscoveredAsset } from "@domain/files";
 import { emptyStages, type Item, type ItemStages, type StageName } from "@domain/item";
 import type { ItemEntity, FileAttachment } from "./api/dto";
+import type { SearchHit } from "./api/search";
 import type { RecordSchema } from "@domain/schema";
 import type { LocalMetadataFile } from "@domain/metadata";
 import { MAX_FILES_PER_REQUEST } from "@domain/upload";
@@ -111,7 +118,7 @@ function fakeDeps(over: Partial<UploadDeps> = {}): UploadDeps {
     readMirror: vi.fn(async () => null),
     writeMirror: vi.fn(async () => {}),
     recordUpload: vi.fn(async () => {}),
-    resolveExistingBackendId: vi.fn(async () => null),
+    resolveExistingRecord: vi.fn(async () => null),
     moveToProcessed: vi.fn(async () => {}),
     listItems: vi.fn(async () => [] as Item[]),
     getSchema: vi.fn(async () => SCHEMA),
@@ -236,7 +243,13 @@ describe("uploadItem — create", () => {
       createItem: vi.fn(async () => {
         throw apiError("conflict", 409);
       }),
-      resolveExistingBackendId: vi.fn(async () => "rec_existing"),
+      resolveExistingRecord: vi.fn(async () => ({
+        id: "rec_existing",
+        version: 3,
+        targetState: "RECORD" as const,
+        visibilityStatus: "PUBLIC" as const,
+        metadata: {},
+      })),
     });
     const res = await uploadItem(makeItem({ catalogueId: "COBISS.123" }), CTX, deps);
     expect(res.status).toBe("duplicate");
@@ -265,7 +278,7 @@ describe("uploadItem — create", () => {
       createItem: vi.fn(async () => {
         throw apiError("conflict", 409);
       }),
-      resolveExistingBackendId: vi.fn(async () => null),
+      resolveExistingRecord: vi.fn(async () => null),
     });
     const res = await uploadItem(makeItem(), CTX, deps);
     expect(res.status).toBe("duplicate");
@@ -943,5 +956,71 @@ describe("transfer retries", () => {
     // warning, not a lost upload — but it says so instead of retrying blind.
     expect(res.status).toBe("uploaded");
     expect(res.warnings.some((w) => w.message.includes("could not be attached"))).toBe(true);
+  });
+});
+
+describe("resolveExistingRecord (default dep)", () => {
+  it("adopts a record whose cobissId matches the item's", async () => {
+    const hit: SearchHit = {
+      id: "cbwkbr9guqs3w11xylpri1ylw",
+      index: "records",
+      score: 1,
+      source: {
+        version: 7,
+        visibilityStatus: "PUBLIC",
+        metadata: { cobissId: "12345", title: "Existing" },
+      },
+    };
+    const found = await resolveExistingRecordWith(
+      { ...makeItem(), catalogueId: "12345" },
+      { findById: vi.fn(async () => hit), previewCobiss: vi.fn() },
+    );
+    expect(found).toEqual({
+      id: "cbwkbr9guqs3w11xylpri1ylw",
+      version: 7,
+      targetState: "RECORD",
+      visibilityStatus: "PUBLIC",
+      metadata: { cobissId: "12345", title: "Existing" },
+    });
+  });
+
+  it("refuses a record whose cobissId does NOT match", async () => {
+    // The computed id is a port of a backend invariant. If the backend's
+    // derivation ever drifts we must degrade, never adopt a stranger's record.
+    const hit: SearchHit = {
+      id: "cbwkbr9guqs3w11xylpri1ylw",
+      index: "records",
+      score: 1,
+      source: { version: 7, visibilityStatus: "PUBLIC", metadata: { cobissId: "999" } },
+    };
+    const found = await resolveExistingRecordWith(
+      { ...makeItem(), catalogueId: "12345" },
+      { findById: vi.fn(async () => hit), previewCobiss: vi.fn(async () => ({ itemId: null })) },
+    );
+    expect(found).toBeNull();
+  });
+
+  it("refuses a hit with no version (nothing to do optimistic concurrency with)", async () => {
+    const hit: SearchHit = {
+      id: "cbwkbr9guqs3w11xylpri1ylw",
+      index: "records",
+      score: 1,
+      source: { visibilityStatus: "PUBLIC", metadata: { cobissId: "12345" } },
+    };
+    const found = await resolveExistingRecordWith(
+      { ...makeItem(), catalogueId: "12345" },
+      { findById: vi.fn(async () => hit), previewCobiss: vi.fn(async () => ({ itemId: null })) },
+    );
+    expect(found).toBeNull();
+  });
+
+  it("returns null without any network call when the item has no catalogueId", async () => {
+    const findById = vi.fn();
+    const found = await resolveExistingRecordWith(
+      { ...makeItem(), catalogueId: null },
+      { findById, previewCobiss: vi.fn() },
+    );
+    expect(found).toBeNull();
+    expect(findById).not.toHaveBeenCalled();
   });
 });

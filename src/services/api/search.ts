@@ -43,6 +43,10 @@ import type { RecordMetadata } from "@domain/metadata";
 import type { RemoteRecord } from "@domain/sync";
 import { getApiClient } from "../backend";
 
+// Re-exported so callers (e.g. `services/upload`) can get `SearchHit` from the
+// same module as `findById`/`hitToRemote`, without also reaching into `./dto`.
+export type { SearchHit };
+
 /** Default page size when the caller does not specify one (mirrors the backend
  * default, stated explicitly so paging maths never depends on a server default). */
 export const DEFAULT_SEARCH_LIMIT = 20;
