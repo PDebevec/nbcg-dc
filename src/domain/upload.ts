@@ -86,7 +86,11 @@ export type UploadWarningCode =
    * the text by file id, which fixes the text — but the stored filename stays
    * corrupted, so the operator is told.
    */
-  | "filename-mangled";
+  | "filename-mangled"
+  /** The create collided with an existing record, which this upload adopted
+   * instead of creating a second one. The batch's publish/visibility settings
+   * were NOT applied — the backend's own remain authoritative. */
+  | "adopted-existing";
 
 export interface UploadBlocker {
   code: UploadBlockerCode;

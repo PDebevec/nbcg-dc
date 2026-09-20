@@ -450,11 +450,46 @@ export async function uploadItem(
           deps,
         );
       } catch (err) {
-        // A create-collision (409) means a record with this (deterministic
-        // COBISS) id already exists — reuse it instead of ever creating a second.
-        const recovered = await recoverCreateCollision(item, ctx, pruned, err, deps);
-        if (recovered) return recovered;
-        throw err;
+        if (!(err instanceof ApiError) || err.kind !== "conflict") throw err;
+
+        const adopted = await adoptExistingRecord(item, deps);
+        if (!adopted) {
+          return result(item.id, "duplicate", {
+            backendId: null,
+            message:
+              "Already on the backend, but its current state could not be read — run Sync, then upload again.",
+          });
+        }
+
+        if (
+          adopted.targetState !== ctx.targetState ||
+          adopted.visibilityStatus !== ctx.visibility
+        ) {
+          warnings.push({
+            code: "adopted-existing",
+            message: `Adopted the existing ${adopted.targetState} on the backend; this batch's publish and visibility settings were not applied to it.`,
+          });
+        } else {
+          warnings.push({
+            code: "adopted-existing",
+            message: "Adopted the record that already existed on the backend.",
+          });
+        }
+
+        const adoptedCtx: UploadItemContext = {
+          ...ctx,
+          targetState: adopted.targetState ?? ctx.targetState,
+          visibility: adopted.visibilityStatus ?? ctx.visibility,
+        };
+        // `mode` flips too: the plan was assembled as a create, and leaving it
+        // saying "create" would mislead anyone reading the plan downstream even
+        // though `replaceOnBackend` only reads `backendId`.
+        const adoptedPlan: ItemUploadPlan = {
+          ...plan,
+          mode: "replace",
+          backendId: adopted.backendId,
+        };
+        return replaceOnBackend(item, adoptedCtx, adoptedPlan, pruned, adopted, deps, warnings);
       }
       backendId = created.id;
       version = created.version;
@@ -669,47 +704,44 @@ export async function resolveExistingRecordWith(
 }
 
 /**
- * Handle a create-collision (`409`): a record with this item's deterministic
- * COBISS id already exists. Reuse it — resolve the existing backend id, record
- * the local link (so we never create a second record and a retry replaces), and
- * surface a `duplicate` outcome. We do NOT blind-PATCH it: we have no version for
- * a record we did not create; Epic 08 sync reconciles its metadata. Returns null
- * when the error is not a recoverable collision (the caller rethrows).
+ * Adopt the record a create-`409` collided with.
  *
- * Writes through both halves (mirror + index), same as the create/replace paths
- * — `pruned` is a best-effort mirror value (not what the existing record
- * actually holds, since we didn't create it), but Epic 08 sync overwrites it
- * with the real metadata on its next pass, so it's self-correcting rather than
- * a lasting inaccuracy. Leaving the mirror unwritten here (as before) left the
- * exact "index says uploaded, mirror absent" state that makes an item a
- * landmine for the next index rebuild.
+ * Pulls the backend's authoritative state down into the mirror FIRST — id,
+ * version, targetState, visibilityStatus and the complete metadata — so that
+ * the replace path which follows diffs the operator's values against what the
+ * backend really holds, and sends only genuine changes. This is what keeps the
+ * backend the single source of truth through a path that ends in a write.
+ *
+ * The batch's own `targetState`/`visibilityStatus` are deliberately NOT
+ * applied: the archive did not create this record and must not silently
+ * re-publish or hide one somebody else curated. The caller warns instead.
+ *
+ * `null` when the record could not be resolved (CDC lag, or a drifted id
+ * derivation) — the caller then degrades to today's `duplicate` outcome.
  */
-async function recoverCreateCollision(
+async function adoptExistingRecord(
   item: Item,
-  ctx: UploadItemContext,
-  pruned: RecordMetadataInput,
-  err: unknown,
   deps: UploadDeps,
-): Promise<ItemUploadResult | null> {
-  if (!(err instanceof ApiError) || err.kind !== "conflict") return null;
+): Promise<LocalMetadataFile | null> {
   const existing = await deps.resolveExistingRecord(item).catch(() => null);
-  const existingId = existing?.id ?? null;
-  if (!existingId) return null;
-  try {
-    await writeThrough(item, deps, {
-      backendId: existingId,
-      version: null,
-      targetState: ctx.targetState,
-      visibility: ctx.visibility,
-      metadata: pruned as RecordMetadata,
-    });
-  } catch (recErr) {
-    logger.warn("upload", `Linked ${item.id} to existing ${existingId} but failed to persist.`, recErr);
-  }
-  return result(item.id, "duplicate", {
-    backendId: existingId,
-    message: "Already on the backend — linked to the existing record; re-sync to edit it.",
+  if (!existing) return null;
+
+  const mirror: LocalMetadataFile = {
+    backendId: existing.id,
+    version: existing.version,
+    targetState: existing.targetState,
+    visibilityStatus: existing.visibilityStatus,
+    metadata: existing.metadata,
+    syncedAt: deps.now(),
+  };
+  await writeThrough(item, deps, {
+    backendId: existing.id,
+    version: existing.version,
+    targetState: existing.targetState,
+    visibility: existing.visibilityStatus ?? "PRIVATE",
+    metadata: existing.metadata,
   });
+  return mirror;
 }
 
 // ─── backend steps ───────────────────────────────────────────────────────────

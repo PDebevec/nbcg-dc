@@ -238,7 +238,7 @@ describe("uploadItem — create", () => {
     expect(deps.createItem).not.toHaveBeenCalled();
   });
 
-  it("recovers a create-409 by reusing the existing (deterministic) id and linking it", async () => {
+  it("adopts a resolvable create-409 collision instead of reporting duplicate", async () => {
     const deps = fakeDeps({
       createItem: vi.fn(async () => {
         throw apiError("conflict", 409);
@@ -252,22 +252,23 @@ describe("uploadItem — create", () => {
       })),
     });
     const res = await uploadItem(makeItem({ catalogueId: "COBISS.123" }), CTX, deps);
-    expect(res.status).toBe("duplicate");
+    expect(res.status).toBe("uploaded");
     expect(res.backendId).toBe("rec_existing");
-    expect(deps.recordUpload).toHaveBeenCalledWith("item-1", {
-      backendId: "rec_existing",
-      version: null,
-      targetState: "RECORD",
-      visibilityStatus: "PUBLIC",
-    });
-    // Write-through must cover the mirror too, not just the index row — a
+
+    // The FIRST write-through captures the backend's authoritative state
+    // (id/version/targetState/visibility) BEFORE any patch is attempted — a
     // recovered collision that skips the mirror leaves the same "index says
     // uploaded, mirror absent" state that makes an item a landmine for the
     // next index rebuild.
-    expect(deps.writeMirror).toHaveBeenCalledTimes(1);
     expect((deps.writeMirror as any).mock.calls[0][1]).toMatchObject({
       backendId: "rec_existing",
-      version: null,
+      version: 3,
+      targetState: "RECORD",
+      visibilityStatus: "PUBLIC",
+    });
+    expect(deps.recordUpload).toHaveBeenCalledWith("item-1", {
+      backendId: "rec_existing",
+      version: 3,
       targetState: "RECORD",
       visibilityStatus: "PUBLIC",
     });
@@ -285,6 +286,96 @@ describe("uploadItem — create", () => {
     // Nothing to link, so nothing to write.
     expect(deps.writeMirror).not.toHaveBeenCalled();
     expect(deps.recordUpload).not.toHaveBeenCalled();
+  });
+});
+
+// ── create collision — adoption ─────────────────────────────────────────────
+
+describe("create collision — adoption", () => {
+  const existing = {
+    id: "cbwkbr9guqs3w11xylpri1ylw",
+    version: 7,
+    targetState: "RECORD" as const,
+    visibilityStatus: "PUBLIC" as const,
+    metadata: { cobissId: "12345", title: "Existing title" },
+  };
+  const conflict = () => { throw apiError("conflict", 409); };
+
+  it("adopts, attaches files and reports uploaded", async () => {
+    const updateItem = vi.fn(async () => ({ version: 8 }));
+    const deps = fakeDeps({
+      createItem: vi.fn(async () => conflict()),
+      resolveExistingRecord: vi.fn(async () => existing),
+      updateItem,
+      uploadFiles: vi.fn(async () => []),
+    });
+    const res = await uploadItem(makeItem(), { ...CTX, metadata: { title: "New title" } }, deps);
+
+    expect(res.status).toBe("uploaded");
+    expect(res.backendId).toBe(existing.id);
+    expect(res.warnings.some((w) => w.code === "adopted-existing")).toBe(true);
+  });
+
+  it("PATCHes only what the operator actually changed", async () => {
+    const updateItem = vi.fn(async () => ({ version: 8 }));
+    const deps = fakeDeps({
+      createItem: vi.fn(async () => conflict()),
+      resolveExistingRecord: vi.fn(async () => existing),
+      updateItem,
+    });
+    await uploadItem(makeItem(), { ...CTX, metadata: { cobissId: "12345", title: "New title" } }, deps);
+
+    expect(updateItem).toHaveBeenCalledTimes(1);
+    const [, body] = (updateItem as any).mock.calls[0];
+    expect(body.expectedVersion).toBe(7);
+    expect(body.metadata).toEqual({ title: "New title" }); // cobissId matched → not resent
+  });
+
+  it("issues NO patch when the operator changed nothing", async () => {
+    const updateItem = vi.fn();
+    const deps = fakeDeps({
+      createItem: vi.fn(async () => conflict()),
+      resolveExistingRecord: vi.fn(async () => existing),
+      updateItem,
+    });
+    const res = await uploadItem(
+      makeItem(),
+      { ...CTX, metadata: { ...existing.metadata }, visibility: "PUBLIC" },
+      deps,
+    );
+    expect(updateItem).not.toHaveBeenCalled();
+    expect(res.status).toBe("uploaded");
+  });
+
+  it("keeps the BACKEND's targetState and visibility, and warns", async () => {
+    const recordUpload = vi.fn(async () => {});
+    const deps = fakeDeps({
+      createItem: vi.fn(async () => conflict()),
+      resolveExistingRecord: vi.fn(async () => existing),
+      updateItem: vi.fn(async () => ({ version: 8 })),
+      recordUpload,
+    });
+    // The batch says DRAFT/PRIVATE; the live record is RECORD/PUBLIC.
+    const res = await uploadItem(
+      makeItem(),
+      { ...CTX, targetState: "DRAFT", visibility: "PRIVATE" },
+      deps,
+    );
+
+    const [, dto] = (recordUpload as any).mock.calls[0];
+    expect(dto.targetState).toBe("RECORD");
+    expect(dto.visibilityStatus).toBe("PUBLIC");
+    expect(res.warnings.some((w) => w.code === "adopted-existing")).toBe(true);
+  });
+
+  it("degrades to duplicate when the record cannot be resolved", async () => {
+    const deps = fakeDeps({
+      createItem: vi.fn(async () => conflict()),
+      resolveExistingRecord: vi.fn(async () => null),
+    });
+    const res = await uploadItem(makeItem(), CTX, deps);
+    expect(res.status).toBe("duplicate");
+    expect(res.message).toMatch(/sync/i);
   });
 });
 
