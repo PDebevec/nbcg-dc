@@ -437,6 +437,73 @@ Implemented in `uploadGroups` rather than `uploadRoleFor`, which sees one asset
 at a time and cannot know whether a PDF exists. Effect on the one real item
 measured: **~333 MB in 7 requests → ~13.4 MB in 2**.
 
+## Create collisions now adopt, orphaned links now re-create, 2026-09-20
+
+Two gaps the "never double-create" acceptance line only half-covered: a create
+`409` reported `duplicate` and dead-ended the upload; a replace whose backend
+record had vanished reported an error and left the item permanently stuck
+(`uploadMode()` returns "replace" for as long as `backendId` is set, and
+nothing ever cleared it). Both are now resolved automatically, and an operator
+can close a batch that did not fully upload.
+
+**A create `409` is always a COBISS-id collision.** `POST /api/items` only
+assigns an explicit (and therefore collidable) id when the metadata carries a
+`cobissId` (`backend/src/modules/items/items.service.ts:94-106`) — without one
+the backend mints a random id, so a `409` is impossible. The colliding id is a
+pure function of the COBISS id
+(`backend/src/shared/util/generateUuidFromCobissId.ts`): sha256 of
+`` `cobiss:${cobissId}` `` → hex → `BigInt('0x'+hex).toString(36)` →
+`('c' + base36).substring(0, 25)`. `services/api/deterministicId.ts` ports
+this computation so the archive can resolve a collision **without** a COBISS
+upstream round-trip. Because duplicating a backend algorithm client-side is a
+real coupling risk, no caller trusts the computed id blindly: the record is
+read back and adopted only when its own `metadata.cobissId` matches the
+item's — so a future drift between the two implementations degrades to "not
+resolved" (today's `duplicate` outcome), never "adopted the wrong record".
+
+**On a `409`, the archive adopts instead of dead-ending.** `uploadItem` reads
+the existing record's authoritative state (id, version, `targetState`,
+`visibilityStatus`, full metadata), writes it into the local mirror, then
+falls through into the **replace** path with that state — so the operator's
+one Upload press finishes the item rather than requiring a second attempt.
+Adoption deliberately does **not** apply the batch's own publish target or
+visibility to the adopted record (the archive did not create it — it may be a
+librarian's own draft or record — so silently re-publishing or hiding it would
+destroy someone else's decision); a `warnings[].code === "adopted-existing"`
+entry tells the operator instead, and the same code permanently excludes the
+record from the close-time cleanup below.
+
+**The two kinds of `404`** — see
+[02-architecture §Three consistency caveats](../02-architecture.md#three-consistency-caveats-the-archive-must-respect)
+for the general rule. Applied here: a replace's `PATCH /api/items/:id`
+returning `404` is authoritative (Postgres, not the CDC-lagged search index),
+so the record really is gone — deleted on the website after the archive
+linked to it. `replaceOnBackend` catches exactly that `404` and re-creates the
+record from the local copy (`recreateOrphaned`), pushing a
+`"recreated-orphaned"` warning. A COBISS item regenerates the same
+deterministic id, so the local link stays valid; a non-COBISS item mints a new
+one and the write-through records it. Nothing re-creates on a search `404` —
+that would double-create.
+
+**Closing a batch that did not fully upload.** The operator can close a batch
+whose items are not all `uploaded`, optionally deleting the records **this
+run created and did not finish** (`services/upload.cleanupUnfinishedRecords`,
+`removableBackendIds`). Provenance is an explicit `created` flag on
+`ItemUploadResult`, set only at the two sites that actually call create — the
+create branch of `uploadItem` and `recreateOrphaned` — and **never** inferred
+from `backendId`: that field is seeded from the item's persisted local link,
+which survives across sessions and means only "linked", not "made this run".
+Inferring creation from it would have let close-time cleanup hard-delete a
+live, curated record over a failed replace, a `blocked` item, or an
+`unauthenticated`/`forbidden` result — all of which carry a pre-existing
+`backendId` without having written anything this run. An adopted record is
+excluded the same way, belt-and-braces with the `created` flag: its
+`"adopted-existing"` warning keeps it un-removable even if a later code path
+were to set `created` on its way through. `DELETE /api/items` is
+all-or-nothing, so the removable ids are sent in one request; a failure to
+delete is reported back rather than thrown, so closing the batch itself never
+fails because cleanup did.
+
 ## Acceptance
 
 - A ready batch uploads (record/draft + all selected web PDFs + images + OCR text

@@ -161,7 +161,7 @@ endpoint). The P3 filed by Epic 09 — relation writes bumping the parent's
 (required in `CreateItemDto`), so the batch's Public/Private/Hidden choice maps
 straight to `visibilityStatus` — no backend change needed.
 
-### Two consistency caveats the archive must respect
+### Three consistency caveats the archive must respect
 
 1. **Read-after-write lag.** `GET /api/search/:id` reads OpenSearch, which is
    fed asynchronously by the pgsync CDC daemon. After a write, **trust the
@@ -176,6 +176,15 @@ straight to `visibilityStatus` — no backend change needed.
    `POST /api/relations/connect` and `POST /api/items/transition` both bump
    `version` **without returning it**, so a cached version can go stale without
    the archive touching the item (Epic 09).
+3. **Two kinds of `404`, only one of them trustworthy.** `GET /api/search/:id`
+   reads OpenSearch behind the same CDC lag as caveat 1 — its `404` can just
+   mean "not indexed yet" and is **not authoritative**. `PATCH /api/items/:id`
+   reads Postgres directly (`backend/src/modules/items/items.service.ts:190-196`),
+   so its `404` **is** authoritative: the record is really gone. This
+   distinction is load-bearing for the upload path's orphan re-create
+   ([07-upload-and-publish](tasks/07-upload-and-publish.md)) — only a `PATCH`
+   `404` triggers re-creating the record; re-creating on a search `404` would
+   double-create it.
 
 ## Auth
 

@@ -197,6 +197,20 @@ them so they are chosen deliberately rather than rediscovered.
   used by 2 files.
   - [ ] Pick one: barrels everywhere with aliases that resolve them, or no
         barrels. The current state is one barrel by accident.
+- **The upload-path orphaned-record hard lock is resolved — the Overview badge
+  is not.** A replace whose `PATCH /api/items/:id` 404s used to be permanent:
+  nothing ever cleared `backendId`, and `uploadMode()` returns `"replace"` for
+  as long as it is set. Since 2026-09-20 that `404` is read as authoritative
+  ([`docs/02-architecture.md` §"Three consistency caveats"](02-architecture.md#three-consistency-caveats-the-archive-must-respect),
+  caveat 3) and the upload path re-creates the record from the local copy in
+  the same run
+  ([`docs/tasks/07-upload-and-publish.md`](tasks/07-upload-and-publish.md#create-collisions-now-adopt-orphaned-links-now-re-create-2026-09-20)).
+  This is a **different** mechanism from the Sync-derived "orphaned" flag
+  (Epic 08, `domain/sync.isOrphaned`, confirmed only over repeated
+  *non-authoritative* `GET /api/search/:id` misses): that flag, its
+  **Overview badge**, and its missing **resolve action**
+  (`FRONTEND-TODO.md` §3B "Orphaned badge na Overview (brez resolve akcije)")
+  are untouched by this work and remain open — tracked there, not here.
 
 ---
 
