@@ -81,4 +81,44 @@ describe("useUpload.closeBatch", () => {
 
     expect(store.error).toBe("The batch could not be archived.");
   });
+
+  // Regression coverage for the fix: closeBatch() must reset `error` on entry,
+  // and a caller (useProcessing.closeBatch) must only toast success when
+  // `error` is still null afterwards — otherwise a failed close reports
+  // "Batch closed." and a successful close after a prior failure inherits a
+  // stale error and wrongly reports failure.
+
+  it("a failed close surfaces the failure rather than leaving error unset", async () => {
+    const batches = useBatchesStore();
+    batches.batches = [makeBatch()];
+    vi.spyOn(batches, "update").mockResolvedValue({} as never);
+    vi.spyOn(batches, "archive").mockRejectedValue(new Error("archive failed"));
+    const store = useUploadStore();
+
+    await store.closeBatch("b1");
+
+    // This is what useProcessing.closeBatch() checks to decide between a
+    // success and an error toast — it must be non-null here.
+    expect(store.error).not.toBeNull();
+  });
+
+  it("a close that succeeds after a prior failed close reports success, not the stale error", async () => {
+    const batches = useBatchesStore();
+    batches.batches = [makeBatch()];
+    vi.spyOn(batches, "update").mockResolvedValue({} as never);
+    const archive = vi.spyOn(batches, "archive");
+    archive.mockRejectedValueOnce(new Error("first close failed"));
+    archive.mockResolvedValueOnce({} as never);
+    const store = useUploadStore();
+
+    await store.closeBatch("b1");
+    expect(store.error).toBe("The batch could not be archived.");
+
+    await store.closeBatch("b1");
+
+    // Proves closeBatch() resets `error` on entry: without that reset, this
+    // second, successful close would still show the first call's error and
+    // useProcessing.closeBatch() would wrongly toast failure.
+    expect(store.error).toBeNull();
+  });
 });

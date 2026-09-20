@@ -475,7 +475,11 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
     const b = batch.value;
     if (!b) return;
     await uploadStore.closeBatch(b.id);
-    toasts.push("Batch closed.", "success");
+    if (uploadError.value) {
+      toasts.push(uploadError.value, "error");
+    } else {
+      toasts.push("Batch closed.", "success");
+    }
   }
 
   async function init(): Promise<void> {

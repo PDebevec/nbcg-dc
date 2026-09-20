@@ -70,6 +70,7 @@ export const useUploadStore = defineStore("upload", () => {
    * with no way out, since this is the only archive call site in the app.
    */
   async function closeBatch(batchId: string): Promise<void> {
+    error.value = null;
     const batches = useBatchesStore();
     const batch = batches.get(batchId);
     if (batch) {
