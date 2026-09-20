@@ -36,6 +36,7 @@ import type { UploadRecordDto } from "@ipc/bindings";
 import { ApiError } from "./api/client";
 import {
   createItem as apiCreateItem,
+  deleteItems as apiDeleteItems,
   updateItem as apiUpdateItem,
 } from "./api/items";
 import {
@@ -1444,4 +1445,81 @@ export async function uploadBatch(
     options.onProgress?.({ itemId: item.id, phase: "done", index, total });
   }
   return { results, allUploaded: results.every((r) => r.status === "uploaded") };
+}
+
+// ─── close-time cleanup ──────────────────────────────────────────────────────
+
+/**
+ * Backend ids this batch CREATED and did not finish — the only records a
+ * close may remove.
+ *
+ * Three exclusions, each load-bearing:
+ *  - `uploaded` items are legitimately published; in a mixed batch the
+ *    operator is closing because of some *other* item.
+ *  - an `"adopted-existing"` warning means the record pre-dated this batch
+ *    (see `adoptExistingRecord`). It may be a librarian's own record —
+ *    deleting it would destroy third-party data.
+ *  - no `backendId` means nothing was ever created.
+ *
+ * `"recreated-orphaned"` is deliberately NOT excluded: that warning means
+ * *this run* re-created a record the backend had authoritatively lost
+ * (`recreateOrphaned`), so if the run then failed, deleting it only returns
+ * things to the state before the run — Task 5 re-creates it on the next
+ * upload.
+ */
+export function removableBackendIds(
+  results: Iterable<ItemUploadResult>,
+): string[] {
+  const out: string[] = [];
+  for (const r of results) {
+    if (r.status === "uploaded") continue;
+    if (!r.backendId) continue;
+    if (r.warnings.some((w) => w.code === "adopted-existing")) continue;
+    out.push(r.backendId);
+  }
+  return out;
+}
+
+/** The one primitive {@link cleanupUnfinishedRecords} needs, injectable so it
+ * can be tested without a network — mirrors the {@link UploadDeps} seam
+ * pattern at a smaller scale. Defaults to the real `DELETE /api/items`. */
+export interface CleanupDeps {
+  deleteItems: (ids: string[]) => Promise<void>;
+}
+
+function defaultCleanupDeps(): CleanupDeps {
+  return { deleteItems: (ids) => apiDeleteItems({ ids }) };
+}
+
+/**
+ * Best-effort removal of the backend records {@link removableBackendIds}
+ * says this batch created and left unfinished.
+ *
+ * Calls `deleteItems` **once** with every removable id — `DELETE /api/items`
+ * is all-or-nothing (docs/PROJECT-KNOWLEDGE §"DELETE /api/items": a `404` on
+ * any id deletes nothing), so the caller must send only ids it is confident
+ * exist, in a single request. A failure here must not stop the close the
+ * operator asked for, so it is logged rather than thrown.
+ *
+ * The local link is left alone on purpose: the next upload's authoritative
+ * `404` re-creates the record (Task 5). Clearing it would need a `dto.rs`
+ * change (`UploadRecordDto.backend_id` is a non-null `String`), which this
+ * plan deliberately avoids.
+ */
+export async function cleanupUnfinishedRecords(
+  results: Iterable<ItemUploadResult>,
+  depsOverride?: Partial<CleanupDeps>,
+): Promise<void> {
+  const deps = { ...defaultCleanupDeps(), ...depsOverride };
+  const ids = removableBackendIds(results);
+  if (ids.length === 0) return;
+  try {
+    await deps.deleteItems(ids);
+  } catch (err) {
+    logger.warn(
+      "upload",
+      `Closed the batch but could not remove ${ids.length} unfinished record(s).`,
+      err,
+    );
+  }
 }

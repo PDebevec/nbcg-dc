@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
 import { BatchStage, newBatchFields, type Batch } from "@domain/batch";
 import { ItemState } from "@domain/item";
+import type { ItemUploadResult } from "@services/upload";
 
 // ── fixtures ─────────────────────────────────────────────────────────────
 
@@ -15,6 +16,14 @@ function makeBatch(over: Partial<Batch> = {}): Batch {
     ...over,
   };
 }
+
+// The real deleteItems is mocked at its api module so this pins the whole
+// path end to end: services/upload.cleanupUnfinishedRecords calling a
+// rejecting delete must not stop useUpload.closeBatch from archiving.
+vi.mock("@services/api/items", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@services/api/items")>();
+  return { ...actual, deleteItems: vi.fn().mockRejectedValue(new Error("boom")) };
+});
 
 const { useUploadStore } = await import("./useUpload");
 const { useBatchesStore } = await import("./useBatches");
@@ -108,5 +117,35 @@ describe("useUpload.closeBatch", () => {
     // second, successful close would still show the first call's error and
     // useProcessing.closeBatch() would wrongly toast failure.
     expect(store.error).toBeNull();
+  });
+});
+
+// The exclusion policy itself (which records are removable) is pure and lives
+// in — and is tested in — services/upload.test.ts (`removableBackendIds`,
+// `cleanupUnfinishedRecords`). This suite covers only the store-level
+// integration: closing must still succeed when that best-effort delete fails.
+describe("useUpload.closeBatch — cleanup", () => {
+  it("still archives when the cleanup delete fails", async () => {
+    const batches = useBatchesStore();
+    batches.batches = [makeBatch()];
+    vi.spyOn(batches, "update").mockResolvedValue({} as never);
+    const archive = vi.spyOn(batches, "archive").mockResolvedValue({} as never);
+    const store = useUploadStore();
+    const unfinished: ItemUploadResult = {
+      itemId: "i1",
+      status: "error",
+      backendId: "b2",
+      blockers: [],
+      warnings: [],
+      fieldErrors: [],
+      relationErrors: [],
+      parentStates: [],
+      message: null,
+    };
+    store.results = new Map([["b1", new Map([["i1", unfinished]])]]);
+
+    await store.closeBatch("b1", { cleanup: true });
+
+    expect(archive).toHaveBeenCalledWith("b1");
   });
 });

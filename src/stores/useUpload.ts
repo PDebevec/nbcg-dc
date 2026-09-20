@@ -14,6 +14,7 @@ import { computed, ref } from "vue";
 import { BatchStage } from "@domain/batch";
 import type { Item } from "@domain/item";
 import {
+  cleanupUnfinishedRecords,
   uploadBatch,
   type ItemUploadResult,
   type UploadItemContext,
@@ -68,9 +69,22 @@ export const useUploadStore = defineStore("upload", () => {
    * that legitimately cannot upload (duplicate that only needs a Sync, a blocked
    * folder they will redo later) would otherwise pin the batch "In progress"
    * with no way out, since this is the only archive call site in the app.
+   *
+   * `options.cleanup` additionally removes the backend records this batch
+   * created and left unfinished (see `services/upload.removableBackendIds`) —
+   * a create that succeeded but whose asset upload didn't, stranding a record
+   * on the live website with metadata and no files. Cleanup is best-effort
+   * (`cleanupUnfinishedRecords` never throws): the close the operator asked
+   * for must still complete even if the delete fails.
    */
-  async function closeBatch(batchId: string): Promise<void> {
+  async function closeBatch(
+    batchId: string,
+    options: { cleanup?: boolean } = {},
+  ): Promise<void> {
     error.value = null;
+    if (options.cleanup) {
+      await cleanupUnfinishedRecords(resultsFor(batchId).values());
+    }
     const batches = useBatchesStore();
     const batch = batches.get(batchId);
     if (batch) {

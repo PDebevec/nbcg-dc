@@ -48,7 +48,12 @@ import {
 } from "@domain/steps";
 import { planItemUpload, type UploadBlocker, type UploadWarning } from "@domain/upload";
 import { procFromProcessing, seedProcFromItems } from "@services/pipeline";
-import type { ItemUploadResult, ItemUploadStatus, UploadItemContext } from "@services/upload";
+import {
+  removableBackendIds,
+  type ItemUploadResult,
+  type ItemUploadStatus,
+  type UploadItemContext,
+} from "@services/upload";
 
 export type RunStatus = ItemRunStatus;
 
@@ -374,6 +379,17 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
       && uploadStore.resultsFor(batch.value?.id ?? "").size > 0,
   );
 
+  /** What a close would do, for the confirm dialog. `removable` is the count of
+   * unfinished records this batch created that cleanup would delete. */
+  const closableSummary = computed(() => {
+    const res = uploadStore.resultsFor(batch.value?.id ?? "");
+    const all = Array.from(res.values());
+    return {
+      total: all.filter((r) => r.status !== "uploaded").length,
+      removable: removableBackendIds(res.values()).length,
+    };
+  });
+
   const publishLabel = computed(() => {
     const b = batch.value;
     if (!b) return "";
@@ -502,6 +518,7 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
     canUpload,
     showCancel,
     showClose,
+    closableSummary,
     blockedNote,
     publishLabel,
     visibilityLabel,

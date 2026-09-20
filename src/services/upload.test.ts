@@ -4,8 +4,11 @@ import {
   uploadItem,
   uploadBatch,
   resolveExistingRecordWith,
+  removableBackendIds,
+  cleanupUnfinishedRecords,
   type UploadDeps,
   type UploadItemContext,
+  type ItemUploadResult,
 } from "./upload";
 import type { UploadFile } from "./api/files";
 import { discoverAsset, type DiscoveredAsset } from "@domain/files";
@@ -1243,5 +1246,148 @@ describe("resolveExistingRecord (default dep)", () => {
     );
     expect(found).toBeNull();
     expect(findById).not.toHaveBeenCalled();
+  });
+});
+
+// ── close-time cleanup ───────────────────────────────────────────────────
+
+/** An `ItemUploadResult` fixture — defaults to an unfinished, created item
+ * (the removable shape), overridable per test. */
+function uploadResult(over: Partial<ItemUploadResult> = {}): ItemUploadResult {
+  return {
+    itemId: "i",
+    status: "error",
+    backendId: null,
+    blockers: [],
+    warnings: [],
+    fieldErrors: [],
+    relationErrors: [],
+    parentStates: [],
+    message: null,
+    ...over,
+  };
+}
+
+describe("removableBackendIds", () => {
+  it("includes an item this batch created and did not finish", () => {
+    const ids = removableBackendIds([
+      uploadResult({ itemId: "i2", status: "error", backendId: "b2" }),
+    ]);
+    expect(ids).toEqual(["b2"]);
+  });
+
+  it("excludes an item that reached uploaded", () => {
+    // Non-vacuous against removing the `status === "uploaded"` check: without
+    // it "b1" would be included alongside "b2".
+    const ids = removableBackendIds([
+      uploadResult({ itemId: "i1", status: "uploaded", backendId: "b1" }),
+      uploadResult({ itemId: "i2", status: "error", backendId: "b2" }),
+    ]);
+    expect(ids).toEqual(["b2"]);
+  });
+
+  it("excludes an adopted-existing record, even though the item failed", () => {
+    // Non-vacuous against removing the `adopted-existing` warning check:
+    // without it "b3" — someone else's pre-existing record — would be
+    // included.
+    const ids = removableBackendIds([
+      uploadResult({
+        itemId: "i3",
+        status: "error",
+        backendId: "b3",
+        warnings: [{ code: "adopted-existing", message: "" }],
+      }),
+    ]);
+    expect(ids).toEqual([]);
+  });
+
+  it("excludes an item with no backendId — nothing was ever created", () => {
+    // Non-vacuous against removing the `!r.backendId` check: without it a
+    // null id would be pushed onto the result.
+    const ids = removableBackendIds([
+      uploadResult({ itemId: "i4", status: "blocked", backendId: null }),
+    ]);
+    expect(ids).toEqual([]);
+  });
+
+  it("does NOT exclude a recreated-orphaned record — that one is removable", () => {
+    // Non-vacuous against over-broadening the warning-code check: if
+    // "recreated-orphaned" were folded into the exclusion (as it must not
+    // be — see the doc comment on `removableBackendIds`), "b5" would be
+    // dropped.
+    const ids = removableBackendIds([
+      uploadResult({
+        itemId: "i5",
+        status: "error",
+        backendId: "b5",
+        warnings: [{ code: "recreated-orphaned", message: "" }],
+      }),
+    ]);
+    expect(ids).toEqual(["b5"]);
+  });
+
+  it("applies all three exclusions independently across a mixed batch", () => {
+    const results = [
+      uploadResult({ itemId: "i1", status: "uploaded", backendId: "b1" }),
+      uploadResult({ itemId: "i2", status: "error", backendId: "b2" }),
+      uploadResult({
+        itemId: "i3",
+        status: "error",
+        backendId: "b3",
+        warnings: [{ code: "adopted-existing", message: "" }],
+      }),
+      uploadResult({ itemId: "i4", status: "blocked", backendId: null }),
+    ];
+    expect(removableBackendIds(results)).toEqual(["b2"]);
+  });
+});
+
+describe("cleanupUnfinishedRecords", () => {
+  it("calls deleteItems once with exactly the removable ids", async () => {
+    const deleteItems = vi.fn(async () => {});
+    const results = [
+      uploadResult({ itemId: "i1", status: "uploaded", backendId: "b1" }),
+      uploadResult({ itemId: "i2", status: "error", backendId: "b2" }),
+      uploadResult({
+        itemId: "i3",
+        status: "error",
+        backendId: "b3",
+        warnings: [{ code: "adopted-existing", message: "" }],
+      }),
+    ];
+
+    await cleanupUnfinishedRecords(results, { deleteItems });
+
+    expect(deleteItems).toHaveBeenCalledTimes(1);
+    expect(deleteItems).toHaveBeenCalledWith(["b2"]);
+  });
+
+  it("does not call deleteItems when nothing is removable", async () => {
+    // Non-vacuous against dropping the `ids.length === 0` guard: without it
+    // deleteItems would be called with an empty array.
+    const deleteItems = vi.fn(async () => {});
+
+    await cleanupUnfinishedRecords(
+      [uploadResult({ itemId: "i1", status: "uploaded", backendId: "b1" })],
+      { deleteItems },
+    );
+
+    expect(deleteItems).not.toHaveBeenCalled();
+  });
+
+  it("is best-effort: a rejected delete does not throw", async () => {
+    // Non-vacuous against removing the try/catch: without it the rejection
+    // would propagate and this assertion would fail.
+    const deleteItems = vi.fn(async () => {
+      throw new Error("boom");
+    });
+
+    await expect(
+      cleanupUnfinishedRecords(
+        [uploadResult({ itemId: "i2", status: "error", backendId: "b2" })],
+        { deleteItems },
+      ),
+    ).resolves.toBeUndefined();
+    expect(deleteItems).toHaveBeenCalledWith(["b2"]);
   });
 });
