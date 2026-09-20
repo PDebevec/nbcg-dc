@@ -20,6 +20,8 @@ const {
   showUpload,
   canUpload,
   showCancel,
+  showClose,
+  closableSummary,
   blockedNote,
   publishLabel,
   visibilityLabel,
@@ -30,10 +32,32 @@ const {
   rerunAllFailed,
   cancel,
   upload,
+  closeBatch,
 } = useProcessing(() => props.batchId);
 
 const pct = computed(() => `${Math.round(ratio.value * 100)}%`);
 const logOpen = ref(false);
+
+// ── close batch ─────────────────────────────────────────
+//
+// Closing is irreversible: an archived batch has no unlock (`requiresUnlock`
+// returns false for one), so this always goes through the dialog rather than
+// firing on the button. The cleanup checkbox defaults OFF for the same reason —
+// stacking a second irreversible act behind the same click, pre-ticked, is how
+// operators lose records they meant to keep.
+const closeOpen = ref(false);
+const cleanupChecked = ref(false);
+
+function openClose(): void {
+  cleanupChecked.value = false;
+  closeOpen.value = true;
+}
+
+async function confirmClose(): Promise<void> {
+  const cleanup = cleanupChecked.value;
+  closeOpen.value = false;
+  await closeBatch({ cleanup });
+}
 
 const statusGlyphs: Record<string, string> = {
   idle: "○",
@@ -141,6 +165,9 @@ function runStep(row: ProcessingItemView, step: StepView): void {
           @click="start()"
         >
           ▶ Start processing
+        </button>
+        <button v-if="showClose" class="close-btn" @click="openClose()">
+          Close batch
         </button>
         <button
           v-if="showUpload"
@@ -279,7 +306,14 @@ function runStep(row: ProcessingItemView, step: StepView): void {
           <div v-for="e in row.upload.fieldErrors" :key="e" class="note hard indent">
             {{ e }}
           </div>
-          <div v-for="w in row.upload.warnings" :key="w" class="note soft indent">
+          <!-- Keyed by index, not by the message: since warnings now survive
+               onto a *failed* result too, one row can legitimately carry the
+               same text twice, and keying on it would collide. -->
+          <div
+            v-for="(w, wi) in row.upload.warnings"
+            :key="`${row.id}-w${wi}`"
+            class="note soft indent"
+          >
             <span class="note-glyph">⚠</span>{{ w }}
           </div>
         </div>
@@ -311,6 +345,44 @@ function runStep(row: ProcessingItemView, step: StepView): void {
         Web PDF · thumbnail · OCR text · metadata per item are uploaded. Source
         scans and the archival master stay local; the folder moves to
         /processed.
+      </div>
+    </div>
+
+    <!-- Close batch: a batch only archives itself when every item uploaded, so
+         one item that cannot be finished would otherwise pin it In progress
+         forever. Both acts here are irreversible, hence the confirm. -->
+    <div v-if="closeOpen" class="peek-backdrop" @click.self="closeOpen = false">
+      <div class="peek-panel close-panel">
+        <div class="peek-head">
+          <span>Close this batch?</span>
+          <button class="peek-close" title="Cancel" @click="closeOpen = false">✕</button>
+        </div>
+        <div class="close-body">
+          <p class="close-line">
+            <b>{{ closableSummary.total }}</b>
+            {{ closableSummary.total === 1 ? "item" : "items" }} did not upload.
+            Closing is permanent — the batch cannot be reopened.
+          </p>
+          <label v-if="closableSummary.removable > 0" class="close-check">
+            <input v-model="cleanupChecked" type="checkbox" />
+            <span>
+              Also remove the
+              <b>{{ closableSummary.removable }}</b>
+              unfinished
+              {{ closableSummary.removable === 1 ? "record" : "records" }}
+              this batch created from the backend.
+            </span>
+          </label>
+          <p class="close-note">
+            Your scans and processed files are never deleted. Records that
+            uploaded successfully, and any record that already existed on the
+            backend, are never touched.
+          </p>
+        </div>
+        <div class="close-actions">
+          <button class="close-cancel" @click="closeOpen = false">Cancel</button>
+          <button class="close-confirm" @click="confirmClose()">Close batch</button>
+        </div>
       </div>
     </div>
   </div>
@@ -453,6 +525,144 @@ function runStep(row: ProcessingItemView, step: StepView): void {
 .upload-btn:disabled {
   background: var(--c-disabled-btn);
   cursor: default;
+}
+
+/* Neutral on purpose — closing is a deliberate giving-up, never the action the
+   eye lands on next to Upload. */
+.close-btn {
+  height: 38px;
+  padding: 0 15px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  color: var(--c-text-muted);
+  font-weight: 600;
+  font-size: 13px;
+  flex: none;
+}
+
+.close-btn:hover {
+  color: var(--c-text-strong);
+  border-color: var(--c-text-dim);
+}
+
+/* ── close-batch confirm ────────────────────────────────────────────── */
+/* Mirrors the view-contents peek panel in OverviewView.vue; styles are scoped
+   per file, so the shared shell is repeated rather than imported. */
+.peek-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 22, 34, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+  animation: fadein 0.12s;
+}
+
+.peek-panel {
+  width: 520px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 96px);
+  display: flex;
+  flex-direction: column;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-menu);
+  overflow: hidden;
+}
+
+.peek-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--c-border-row);
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--c-text-strong);
+}
+
+.peek-close {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+  color: #9aa1bb;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.close-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.close-line {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--c-text-strong);
+  line-height: 1.5;
+}
+
+.close-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 12px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  background: var(--c-surface-input);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--c-text-strong);
+  cursor: pointer;
+}
+
+.close-check input {
+  margin-top: 2px;
+  flex: none;
+}
+
+.close-note {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--c-text-muted);
+  line-height: 1.5;
+}
+
+.close-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  padding: 13px 16px;
+  border-top: 1px solid var(--c-border-row);
+}
+
+.close-cancel {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  color: var(--c-text-muted);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.close-confirm {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--c-danger-border);
+  background: #fdf0ee;
+  color: var(--c-danger-text);
+  font-weight: 600;
+  font-size: 13px;
 }
 
 .uploading-pill {
