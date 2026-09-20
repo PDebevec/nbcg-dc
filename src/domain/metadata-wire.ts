@@ -16,6 +16,12 @@
  *  - {@link toFormValue}  wire → form  (`{code:"cnr",…}` → `"cnr"`)
  *  - {@link toWireValue}  form → wire  (`"cnr"` → `{code:"cnr", en:…, cnr:…}`)
  *
+ * **That rule has two exceptions**, and they are not visible in the schema —
+ * see {@link BARE_CODE_ENUM_KEYS}. `authors[].responsibility` and
+ * `corporateBodies[].responsibility` are declared as ordinary enums by
+ * `GET /api/schema/record`, but the backend's write validator wants the bare
+ * code string for those two and a `ResolvedCode` for the other twelve.
+ *
  * `number` fields are coerced on the way out (`"3"` → `3`), because the backend's
  * `collectionType` validator is `typeof v === "number"`; an unparsable string is
  * left alone for the validator to flag.
@@ -43,6 +49,36 @@ function codeOf(value: unknown): unknown {
   return value;
 }
 
+/**
+ * Enum fields the backend validates as a **bare code string**, not a
+ * {@link ResolvedCode} — the exceptions to this module's general rule.
+ *
+ * The schema endpoint describes these identically to every other enum
+ * (`type: "enum"` with `allowedValues`), so there is nothing in the schema
+ * that distinguishes them; the difference lives only in the backend's write
+ * validator, `DOMAIN_RECORD_SHAPE` in
+ * `nbcg/backend/src/modules/import/cobiss/cobiss-util/cobiss.types.ts`:
+ *
+ * ```ts
+ * const authorValidator = sanitizeObj({
+ *   role:           resolvedCode,   // { code, en, cnr }
+ *   responsibility,                 // 'primary' | 'alternative' | 'secondary'
+ * });
+ * ```
+ *
+ * Verified 2026-09-20 against the running backend: of the 14 enum fields the
+ * schema declares, 12 want a `ResolvedCode` and exactly these two want a bare
+ * string — `authors[].responsibility` and `corporateBodies[].responsibility`.
+ * Both are nested object children, so matching on the child key is
+ * unambiguous: the three top-level fields whose names contain
+ * "responsibility" (`firstResponsibility`, `subsequentResponsibility`,
+ * `seriesResponsibility`) are all plain strings, never enums.
+ *
+ * Sending the expanded object here fails the upload with
+ * `[0]: expected "primary" | "alternative" | "secondary"`.
+ */
+const BARE_CODE_ENUM_KEYS: ReadonlySet<string> = new Set(["responsibility"]);
+
 /** A bare code → the schema's `ResolvedCode` (unknown codes get a self-labelled
  * stub so the value is never silently dropped). */
 function resolveCode(field: FieldDescriptor, value: unknown): unknown {
@@ -50,6 +86,22 @@ function resolveCode(field: FieldDescriptor, value: unknown): unknown {
   if (typeof value !== "string" || value === "") return value;
   const known = field.allowedValues?.find((c) => c.code === value);
   return known ?? { code: value, en: value, cnr: value };
+}
+
+/**
+ * One enum value, form → wire: a `ResolvedCode` for most fields, a bare code
+ * for the {@link BARE_CODE_ENUM_KEYS} exceptions.
+ *
+ * `codeOf` rather than a pass-through, so a value that is *already* a
+ * `ResolvedCode` is unwrapped back down to its code. That matters for repair,
+ * not just for new edits: a `metadata.json` written by an earlier build holds
+ * the expanded object, and this is what turns it back into something the
+ * backend accepts on the next upload.
+ */
+function toWireEnum(field: FieldDescriptor, form: unknown): unknown {
+  return BARE_CODE_ENUM_KEYS.has(field.key)
+    ? codeOf(form)
+    : resolveCode(field, form);
 }
 
 /** Convert one field's **wire** value into the editor's **form** shape. */
@@ -82,7 +134,7 @@ export function toWireValue(field: FieldDescriptor, form: unknown): unknown {
 
   switch (field.type) {
     case "enum":
-      return resolveCode(field, form);
+      return toWireEnum(field, form);
     case "number": {
       if (typeof form === "string") {
         const trimmed = form.trim();
@@ -94,7 +146,7 @@ export function toWireValue(field: FieldDescriptor, form: unknown): unknown {
     }
     case "array": {
       if (!Array.isArray(form)) return form;
-      if (field.itemType === "enum") return form.map((v) => resolveCode(field, v));
+      if (field.itemType === "enum") return form.map((v) => toWireEnum(field, v));
       if (field.itemType === "object") {
         return form.map((entry) =>
           isPlainObject(entry) ? toWireObject(field.objectShape ?? [], entry) : entry,

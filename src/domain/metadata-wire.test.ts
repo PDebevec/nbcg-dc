@@ -44,6 +44,11 @@ const authors = field({
   objectShape: [
     field({ key: "familyName" }),
     field({ key: "role", type: "enum", allowedValues: [{ code: "aut", en: "Author", cnr: "Autor" }] }),
+    field({
+      key: "responsibility",
+      type: "enum",
+      allowedValues: [{ code: "primary", en: "Primary", cnr: "Primarni" }],
+    }),
   ],
 });
 
@@ -85,6 +90,38 @@ describe("toWireValue (form → wire)", () => {
     expect(toWireValue(authors, [{ familyName: "Njegoš", role: "aut" }])).toEqual([
       { familyName: "Njegoš", role: { code: "aut", en: "Author", cnr: "Autor" } },
     ]);
+  });
+});
+
+describe("responsibility — the bare-code enum exception", () => {
+  // Two sibling enums in the SAME object serialise differently, because the
+  // backend's `authorValidator` wants `resolvedCode` for `role` and a bare
+  // string for `responsibility`. Nothing in the schema says so.
+  it("sends responsibility as a bare code while role stays a ResolvedCode", () => {
+    const wire = toWireValue(authors, [
+      { familyName: "Paić", role: "aut", responsibility: "primary" },
+    ]) as Record<string, unknown>[];
+
+    expect(wire[0].role).toEqual({ code: "aut", en: "Author", cnr: "Autor" });
+    expect(wire[0].responsibility).toBe("primary");
+  });
+
+  it("unwraps a responsibility already expanded by an earlier build", () => {
+    // Repair path: a metadata.json written before 2026-09-20 holds the object.
+    const wire = toWireValue(authors, [
+      { responsibility: { code: "alternative", en: "Alternative", cnr: "Alternativni" } },
+    ]) as Record<string, unknown>[];
+
+    expect(wire[0].responsibility).toBe("alternative");
+  });
+
+  it("still reads a bare responsibility back into the form unchanged", () => {
+    const form = toFormValue(authors, [
+      { role: { code: "aut", en: "Author", cnr: "Autor" }, responsibility: "primary" },
+    ]) as Record<string, unknown>[];
+
+    expect(form[0].role).toBe("aut");
+    expect(form[0].responsibility).toBe("primary");
   });
 });
 
