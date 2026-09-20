@@ -477,42 +477,7 @@ export async function uploadItem(
       warnings.push(...textQualityWarnings(attachments));
     } else {
       // Replace (re-upload) — stable id, stays in `/processed`.
-      backendId = plan.backendId as string;
-      if (!mirror || mirror.version == null) {
-        // A connected item with no local version can't do optimistic-concurrency;
-        // don't silently write an unconfirmed mirror — ask for a re-sync.
-        return result(item.id, "error", {
-          backendId,
-          message:
-            "Local sync state is missing this item's version — re-sync it (Sync) before re-uploading.",
-        });
-      }
-      const prevMeta = (mirror.metadata ?? {}) as RecordMetadata;
-      version = await patchOnBackend(item, backendId, pruned, ctx, mirror, deps);
-      mirrorMetadata = { ...prevMeta, ...pruned };
-
-      // Persist the confirmed metadata/version FIRST (the PATCH already
-      // succeeded), then reconcile files. Only re-push blobs when a derived file
-      // actually changed (`flags.reupload`), and only the OCR text — no blob —
-      // when that's *all* that changed (`flags.reuploadTextOnly`); a
-      // metadata-only edit still uploads any file the backend is missing, but
-      // never re-PUTs unchanged ones.
-      await writeThrough(item, deps, {
-        backendId,
-        version,
-        targetState: ctx.targetState,
-        visibility: ctx.visibility,
-        metadata: mirrorMetadata,
-      });
-
-      const attachments = await pushReplaceAssets(
-        backendId,
-        plan,
-        deps,
-        replaceKindFor(item.flags),
-        warnings,
-      );
-      warnings.push(...textQualityWarnings(attachments));
+      return await replaceOnBackend(item, ctx, plan, pruned, mirror, deps, warnings);
     }
 
     // Link parents (idempotent server-side); a per-parent failure doesn't undo
@@ -546,6 +511,87 @@ export async function uploadItem(
   } catch (err) {
     return mapUploadError(item.id, backendId, err, fieldKeys);
   }
+}
+
+/**
+ * Replace (re-upload) path of {@link uploadItem} — stable id, stays in
+ * `/processed`. Extracted so a later step can fall through into it from a
+ * failed create.
+ */
+async function replaceOnBackend(
+  item: Item,
+  ctx: UploadItemContext,
+  plan: ItemUploadPlan,
+  pruned: RecordMetadataInput,
+  mirror: LocalMetadataFile | null,
+  deps: UploadDeps,
+  warnings: UploadWarning[],
+): Promise<ItemUploadResult> {
+  const backendId = plan.backendId as string;
+  if (!mirror || mirror.version == null) {
+    // A connected item with no local version can't do optimistic-concurrency;
+    // don't silently write an unconfirmed mirror — ask for a re-sync.
+    return result(item.id, "error", {
+      backendId,
+      message:
+        "Local sync state is missing this item's version — re-sync it (Sync) before re-uploading.",
+    });
+  }
+  const prevMeta = (mirror.metadata ?? {}) as RecordMetadata;
+  const version = await patchOnBackend(item, backendId, pruned, ctx, mirror, deps);
+  const mirrorMetadata = { ...prevMeta, ...pruned };
+
+  // Persist the confirmed metadata/version FIRST (the PATCH already
+  // succeeded), then reconcile files. Only re-push blobs when a derived file
+  // actually changed (`flags.reupload`), and only the OCR text — no blob —
+  // when that's *all* that changed (`flags.reuploadTextOnly`); a
+  // metadata-only edit still uploads any file the backend is missing, but
+  // never re-PUTs unchanged ones.
+  await writeThrough(item, deps, {
+    backendId,
+    version,
+    targetState: ctx.targetState,
+    visibility: ctx.visibility,
+    metadata: mirrorMetadata,
+  });
+
+  const attachments = await pushReplaceAssets(
+    backendId,
+    plan,
+    deps,
+    replaceKindFor(item.flags),
+    warnings,
+  );
+  warnings.push(...textQualityWarnings(attachments));
+
+  // Link parents (idempotent server-side); a per-parent failure doesn't undo
+  // the upload — record it and continue. Each success reports the parent's new
+  // version, which the caller needs to keep that parent's mirror usable.
+  const { errors: relationErrors, states: parentStates } = await connectParents(
+    backendId,
+    ctx.parentIds,
+    deps,
+  );
+
+  // Each connect bumped the parent's version server-side; adopt it now or the
+  // parent's next PATCH 409s. Never throws — see `applyParentStates`.
+  await applyParentStates(parentStates, deps);
+
+  // Reposition to `/processed` on first upload (a replace already lives there).
+  if (item.root === "unprocessed") {
+    try {
+      await deps.moveToProcessed(item);
+    } catch (err) {
+      logger.warn("upload", `Uploaded ${item.id} but failed to move to /processed.`, err);
+    }
+  }
+
+  return result(item.id, "uploaded", {
+    backendId,
+    warnings,
+    relationErrors,
+    parentStates,
+  });
 }
 
 /** A backend record that already exists at the id this item would have created.
