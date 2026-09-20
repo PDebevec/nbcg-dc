@@ -346,6 +346,18 @@ describe("uploadItem — error outcomes", () => {
     expect(res.message).toMatch(/write access/i);
   });
 
+  it("maps 401 to unauthenticated, not forbidden", async () => {
+    // A 401 means no usable token was sent at all — fixed in Settings, not by
+    // changing the account's roles. Reporting it as "no write access" sends
+    // the operator to Keycloak to audit permissions that were never at fault.
+    const deps = fakeDeps({
+      createItem: vi.fn(async () => { throw apiError("unauthorized", 401); }),
+    });
+    const res = await uploadItem(makeItem(), CTX, deps);
+    expect(res.status).toBe("unauthenticated");
+    expect(res.message).toMatch(/settings/i);
+  });
+
   it("maps a create 409 to duplicate", async () => {
     const deps = fakeDeps({ createItem: vi.fn(async () => { throw apiError("conflict", 409); }) });
     const res = await uploadItem(makeItem(), CTX, deps);

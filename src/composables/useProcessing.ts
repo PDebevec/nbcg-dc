@@ -107,6 +107,7 @@ const STATUS_LABELS: Record<RunStatus, string> = {
 const UPLOAD_LABELS: Record<ItemUploadStatus, string> = {
   uploaded: "Uploaded",
   blocked: "Blocked",
+  unauthenticated: "Not signed in",
   forbidden: "No write access",
   duplicate: "Already on backend",
   error: "Upload failed",

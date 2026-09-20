@@ -71,7 +71,11 @@ export type CobissPreviewOutcome =
   /** `404` — the record was not found **or** the COBISS upstream is
    * unreachable/timed out (the backend conflates the two). */
   | { status: "not-found"; message: string }
-  /** `401`/`403` — the static token lacks `import:execute`. */
+  /** `401` — no valid session; Settings has no (or bad) Keycloak credentials.
+   * Distinct from `forbidden` for the same reason as in `services/upload.ts`:
+   * one is fixed in Settings, the other in the account's roles. */
+  | { status: "unauthenticated"; message: string }
+  /** `403` — the account lacks `import:execute`. */
   | { status: "forbidden"; message: string }
   /** Transport failure — the backend host itself is unreachable. */
   | { status: "offline"; message: string }
@@ -108,10 +112,15 @@ export async function fetchCobissPreview(
               "No COBISS record found for that ID (or COBISS is temporarily unreachable).",
           };
         case "unauthorized":
+          return {
+            status: "unauthenticated",
+            message:
+              "Not signed in — check the Keycloak username and password in Settings.",
+          };
         case "forbidden":
           return {
             status: "forbidden",
-            message: "This token is not allowed to import from COBISS.",
+            message: "This account is not allowed to import from COBISS (import:execute).",
           };
         default:
           return { status: "error", message: err.message };

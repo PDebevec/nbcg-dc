@@ -185,7 +185,21 @@ export type ItemUploadStatus =
   | "uploaded"
   /** A hard gate stopped it before any backend call (see `blockers`). */
   | "blocked"
-  /** The token lacks the required manage scope (`403`). */
+  /**
+   * No valid session — the request reached the backend without an acceptable
+   * bearer token (`401`).
+   *
+   * Deliberately distinct from {@link ItemUploadStatus} `"forbidden"`: the two
+   * are fixed in completely different places. A `401` means Settings has no
+   * (or bad) Keycloak credentials, so `keycloakAuth.getValidAccessToken()`
+   * returned `null` and no `Authorization` header was ever sent. A `403` means
+   * the credentials worked and the *account* lacks a manage scope. Collapsing
+   * them — as this did until 2026-09-20 — reports an unconfigured app as a
+   * permissions problem and sends the operator to Keycloak to check roles that
+   * were never the cause.
+   */
+  | "unauthenticated"
+  /** The account lacks the required manage scope (`403`). */
   | "forbidden"
   /** A create collided with an existing (deterministic) id (`409`). */
   | "duplicate"
@@ -1080,10 +1094,18 @@ function mapUploadError(
   fieldKeys: string[],
 ): ItemUploadResult {
   if (err instanceof ApiError) {
-    if (err.kind === "forbidden" || err.kind === "unauthorized") {
+    if (err.kind === "unauthorized") {
+      return result(itemId, "unauthenticated", {
+        backendId,
+        message:
+          "Not signed in — the request carried no valid token. Check the Keycloak username and password in Settings.",
+      });
+    }
+    if (err.kind === "forbidden") {
       return result(itemId, "forbidden", {
         backendId,
-        message: "This token lacks write access to the backend.",
+        message:
+          "Signed in, but this account lacks write access (records:manage / drafts:manage).",
       });
     }
     if (err.kind === "conflict") {

@@ -87,11 +87,15 @@ describe("fetchCobissPreview", () => {
     expect(out.status).toBe("not-found");
   });
 
-  it("maps 403/401 to forbidden", async () => {
+  it("separates 401 (not signed in) from 403 (no scope)", async () => {
+    // These are fixed in different places — Settings vs. the account's roles —
+    // so they must not collapse into one outcome. See `CobissPreviewOutcome`.
     const forbidden = harness(() => status(403));
     expect((await fetchCobissPreview("x", { client: forbidden.client })).status).toBe("forbidden");
     const unauth = harness(() => status(401));
-    expect((await fetchCobissPreview("x", { client: unauth.client })).status).toBe("forbidden");
+    expect((await fetchCobissPreview("x", { client: unauth.client })).status).toBe(
+      "unauthenticated",
+    );
   });
 
   it("maps a transport failure to offline", async () => {
