@@ -489,7 +489,31 @@ export async function uploadItem(
           mode: "replace",
           backendId: adopted.backendId,
         };
-        return replaceOnBackend(item, adoptedCtx, adoptedPlan, pruned, adopted, deps, warnings);
+        // Hoisted `backendId` must reflect the adopted record from here on: a
+        // failure inside `replaceOnBackend` (a PATCH 409, a 403, an exhausted
+        // retry, a `pushReplaceAssets` failure) rejects up to this function's own
+        // `catch`, and `mapUploadError` reports `duplicate` with no id whenever
+        // `backendId` still reads the pre-adoption `null` — masking a real,
+        // already-identified record as an unresolvable collision.
+        backendId = adopted.backendId;
+        // `await` (not a bare return): this statement is textually inside a
+        // `catch`, but that `catch` is itself nested inside `uploadItem`'s outer
+        // `try`. A bare `return replaceOnBackend(...)` settles this function's
+        // promise directly from the returned promise, bypassing the outer
+        // `catch` — so any rejection here would reject `uploadItem` itself
+        // instead of folding into a mapped `ItemUploadResult`, which in turn
+        // rejects `uploadBatch` and discards every already-uploaded item's
+        // result in the run.
+        return await replaceOnBackend(
+          item,
+          adoptedCtx,
+          adoptedPlan,
+          pruned,
+          adopted,
+          deps,
+          warnings,
+          { suppressVisibility: true },
+        );
       }
       backendId = created.id;
       version = created.version;
@@ -548,6 +572,19 @@ export async function uploadItem(
   }
 }
 
+/** Options that tune how {@link replaceOnBackend} PATCHes, without changing
+ * what it writes through to the local mirror. */
+interface ReplaceOnBackendOptions {
+  /** Never let `visibilityStatus` onto the PATCH body, no matter what `ctx` or
+   * `mirror` say. Set by the adoption path in {@link uploadItem}: the archive
+   * did not create the record it just adopted, so its own batch-level
+   * publish/visibility settings must never reach that record's PATCH — not
+   * even when the backend's visibility happens to be unknown (`null` from a
+   * search hit that omitted the field, {@link hitToRemote}) and would
+   * otherwise take the "unknown → treat as changed" branch below. */
+  suppressVisibility?: boolean;
+}
+
 /**
  * Replace (re-upload) path of {@link uploadItem} — stable id, stays in
  * `/processed`. Extracted so a later step can fall through into it from a
@@ -561,6 +598,7 @@ async function replaceOnBackend(
   mirror: LocalMetadataFile | null,
   deps: UploadDeps,
   warnings: UploadWarning[],
+  options: ReplaceOnBackendOptions = {},
 ): Promise<ItemUploadResult> {
   const backendId = plan.backendId as string;
   if (!mirror || mirror.version == null) {
@@ -573,7 +611,7 @@ async function replaceOnBackend(
     });
   }
   const prevMeta = (mirror.metadata ?? {}) as RecordMetadata;
-  const version = await patchOnBackend(item, backendId, pruned, ctx, mirror, deps);
+  const version = await patchOnBackend(item, backendId, pruned, ctx, mirror, deps, options);
   const mirrorMetadata = { ...prevMeta, ...pruned };
 
   // Persist the confirmed metadata/version FIRST (the PATCH already
@@ -772,6 +810,11 @@ async function createOnBackend(
  * handled outcome. Falling back to the prior version costs nothing: against an
  * old backend a no-op left the version unchanged anyway, and a real change still
  * reports one.
+ *
+ * `options.suppressVisibility` forces `visibilityChanged` to `false` — used by
+ * the adoption path so the batch's visibility never overwrites a record the
+ * archive did not create, regardless of whether the backend's own value is
+ * known (see {@link ReplaceOnBackendOptions}).
  */
 async function patchOnBackend(
   _item: Item,
@@ -780,12 +823,15 @@ async function patchOnBackend(
   ctx: UploadItemContext,
   mirror: LocalMetadataFile,
   deps: UploadDeps,
+  options: ReplaceOnBackendOptions = {},
 ): Promise<number> {
   const prevMeta = (mirror.metadata ?? {}) as RecordMetadata;
   const changed = changedMetadata(pruned, prevMeta);
-  const visibilityChanged = mirror.visibilityStatus
-    ? mirror.visibilityStatus !== ctx.visibility
-    : true;
+  const visibilityChanged = options.suppressVisibility
+    ? false
+    : mirror.visibilityStatus
+      ? mirror.visibilityStatus !== ctx.visibility
+      : true;
   const priorVersion = mirror.version as number;
 
   if (Object.keys(changed).length === 0 && !visibilityChanged) {

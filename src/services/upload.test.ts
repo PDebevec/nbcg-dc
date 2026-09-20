@@ -349,10 +349,11 @@ describe("create collision — adoption", () => {
 
   it("keeps the BACKEND's targetState and visibility, and warns", async () => {
     const recordUpload = vi.fn(async () => {});
+    const updateItem = vi.fn(async () => ({ version: 8 }));
     const deps = fakeDeps({
       createItem: vi.fn(async () => conflict()),
       resolveExistingRecord: vi.fn(async () => existing),
-      updateItem: vi.fn(async () => ({ version: 8 })),
+      updateItem,
       recordUpload,
     });
     // The batch says DRAFT/PRIVATE; the live record is RECORD/PUBLIC.
@@ -362,10 +363,84 @@ describe("create collision — adoption", () => {
       deps,
     );
 
-    const [, dto] = (recordUpload as any).mock.calls[0];
+    // `recordUpload` is called twice on this path: once by `adoptExistingRecord`
+    // (built literally from `existing.*`, so it can't carry ctx and proves
+    // nothing about a leak), and once more by `replaceOnBackend`'s write-through
+    // AFTER the PATCH — that LAST call is the one `adoptedCtx` actually feeds,
+    // so it's the one that would show DRAFT/PRIVATE if the batch's settings
+    // leaked back onto an adopted record.
+    const calls = (recordUpload as any).mock.calls;
+    const [, dto] = calls[calls.length - 1];
     expect(dto.targetState).toBe("RECORD");
     expect(dto.visibilityStatus).toBe("PUBLIC");
     expect(res.warnings.some((w) => w.code === "adopted-existing")).toBe(true);
+  });
+
+  it("never PATCHes visibilityStatus on the adoption path, even when the batch's known differs from the backend's", async () => {
+    // Ruling: on the adoption path the PATCH body must NEVER carry
+    // `visibilityStatus` — not merely when the backend's is unknown.
+    // `existing.visibilityStatus` is a known "PUBLIC" here (not null), so this
+    // is the case a null-check-only fix would still get wrong: the backend's
+    // value is known and DOES differ from the batch's, yet it must still never
+    // be offered to the PATCH.
+    const updateItem = vi.fn(async () => ({ version: 8 }));
+    const deps = fakeDeps({
+      createItem: vi.fn(async () => conflict()),
+      resolveExistingRecord: vi.fn(async () => existing), // visibilityStatus: "PUBLIC"
+      updateItem,
+    });
+    const res = await uploadItem(
+      makeItem(),
+      { ...CTX, metadata: { title: "New title" }, visibility: "PRIVATE" },
+      deps,
+    );
+
+    expect(res.status).toBe("uploaded");
+    expect(updateItem).toHaveBeenCalledTimes(1);
+    const [, body] = (updateItem as any).mock.calls[0];
+    expect(body).not.toHaveProperty("visibilityStatus");
+  });
+
+  it("never PATCHes visibilityStatus when the adopted record's own visibility is unknown", async () => {
+    // A search hit that omitted `visibilityStatus` (`hitToRemote` yields `null`
+    // for it). The ruling: on the adoption path the PATCH body must NEVER carry
+    // `visibilityStatus` — not only when it's unknown — but this is the case
+    // that would leak the batch's own visibility if that guarantee weren't
+    // threaded as an explicit flag.
+    const updateItem = vi.fn(async () => ({ version: 8 }));
+    const deps = fakeDeps({
+      createItem: vi.fn(async () => conflict()),
+      resolveExistingRecord: vi.fn(async () => ({ ...existing, visibilityStatus: null })),
+      updateItem,
+    });
+    const res = await uploadItem(
+      makeItem(),
+      { ...CTX, metadata: { title: "New title" }, visibility: "PRIVATE" },
+      deps,
+    );
+
+    expect(res.status).toBe("uploaded");
+    expect(updateItem).toHaveBeenCalledTimes(1);
+    const [, body] = (updateItem as any).mock.calls[0];
+    expect(body).not.toHaveProperty("visibilityStatus");
+  });
+
+  it("resolves (never rejects) when the PATCH after adoption itself 409s, carrying the adopted backendId", async () => {
+    // The same CDC lag that motivates adoption can just as well make the
+    // follow-up PATCH lose the optimistic-concurrency race. A bare
+    // `return replaceOnBackend(...)` inside the create branch's `catch` would
+    // let that rejection escape `uploadItem`'s own `catch` (and `mapUploadError`
+    // with it) straight up to `uploadBatch`, which awaits each item with no
+    // try/catch — discarding every already-uploaded item's result in the run.
+    const deps = fakeDeps({
+      createItem: vi.fn(async () => conflict()),
+      resolveExistingRecord: vi.fn(async () => existing),
+      updateItem: vi.fn(async () => conflict()),
+    });
+    const res = await uploadItem(makeItem(), { ...CTX, metadata: { title: "New title" } }, deps);
+
+    expect(res.status).not.toBe("uploaded");
+    expect(res.backendId).toBe(existing.id);
   });
 
   it("degrades to duplicate when the record cannot be resolved", async () => {
