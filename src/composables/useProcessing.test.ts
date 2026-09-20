@@ -168,6 +168,7 @@ const uploadFake = {
   error: ref<string | null>(null),
   run: async () => true,
   resultsFor: () => new Map(),
+  closeBatch: vi.fn(async (_batchId: string) => {}),
 };
 vi.mock("@stores/useUpload", () => ({ useUploadStore: () => uploadFake }));
 
@@ -199,6 +200,8 @@ beforeEach(() => {
   itemsFake.refreshCalls = 0;
   metadataFake.ready = true;
   uploadFake.results.value = new Map();
+  uploadFake.error.value = null;
+  uploadFake.closeBatch = vi.fn(async (_batchId: string) => {});
 });
 
 describe("showCancel", () => {
@@ -233,6 +236,53 @@ describe("cancel", () => {
     expect(
       toasts.toasts.some((t) => t.message === "native cancel failed" && t.kind === "error"),
     ).toBe(true);
+  });
+});
+
+describe("closeBatch", () => {
+  // Pins the toast branch fixed in round 1: the store's closeBatch() can
+  // "succeed" (resolve) while still leaving `error` set (the archive failed
+  // and the store swallowed it) — the composable must read that signal and
+  // toast accordingly, not just toast success because nothing threw.
+
+  it("toasts an error, not success, when the store's close leaves error set", async () => {
+    seed(makeBatch(["nb"], { stage: BatchStage.Processing }), [
+      makeItem({ id: "nb", folderName: "nb" }),
+    ]);
+    uploadFake.closeBatch = vi.fn(async () => {
+      uploadFake.error.value = "The batch could not be archived.";
+    });
+    const toasts = useToastsStore();
+    const view = useProcessing(() => "b1");
+
+    await view.closeBatch();
+
+    expect(uploadFake.closeBatch).toHaveBeenCalledWith("b1");
+    expect(
+      toasts.toasts.some(
+        (t) => t.kind === "error" && t.message === "The batch could not be archived.",
+      ),
+    ).toBe(true);
+    expect(toasts.toasts.some((t) => t.message === "Batch closed.")).toBe(false);
+  });
+
+  it("toasts success when the store's close leaves no error", async () => {
+    seed(makeBatch(["nb"], { stage: BatchStage.Processing }), [
+      makeItem({ id: "nb", folderName: "nb" }),
+    ]);
+    uploadFake.closeBatch = vi.fn(async () => {
+      uploadFake.error.value = null;
+    });
+    const toasts = useToastsStore();
+    const view = useProcessing(() => "b1");
+
+    await view.closeBatch();
+
+    expect(uploadFake.closeBatch).toHaveBeenCalledWith("b1");
+    expect(
+      toasts.toasts.some((t) => t.kind === "success" && t.message === "Batch closed."),
+    ).toBe(true);
+    expect(toasts.toasts.some((t) => t.kind === "error")).toBe(false);
   });
 });
 

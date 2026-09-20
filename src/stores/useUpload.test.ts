@@ -82,25 +82,13 @@ describe("useUpload.closeBatch", () => {
     expect(store.error).toBe("The batch could not be archived.");
   });
 
-  // Regression coverage for the fix: closeBatch() must reset `error` on entry,
-  // and a caller (useProcessing.closeBatch) must only toast success when
-  // `error` is still null afterwards — otherwise a failed close reports
-  // "Batch closed." and a successful close after a prior failure inherits a
-  // stale error and wrongly reports failure.
-
-  it("a failed close surfaces the failure rather than leaving error unset", async () => {
-    const batches = useBatchesStore();
-    batches.batches = [makeBatch()];
-    vi.spyOn(batches, "update").mockResolvedValue({} as never);
-    vi.spyOn(batches, "archive").mockRejectedValue(new Error("archive failed"));
-    const store = useUploadStore();
-
-    await store.closeBatch("b1");
-
-    // This is what useProcessing.closeBatch() checks to decide between a
-    // success and an error toast — it must be non-null here.
-    expect(store.error).not.toBeNull();
-  });
+  // Regression coverage for the fix: closeBatch() must reset `error` on entry
+  // — otherwise a successful close following a prior failure would inherit
+  // the stale error and useProcessing.closeBatch() would wrongly report
+  // failure. (The "failure surfaces" half of the fix — error ends up set,
+  // not left unset — is already covered above by "a rejecting archive sets
+  // an error rather than throwing"; the toast branch itself is pinned at the
+  // composable layer, in useProcessing.test.ts.)
 
   it("a close that succeeds after a prior failed close reports success, not the stale error", async () => {
     const batches = useBatchesStore();
