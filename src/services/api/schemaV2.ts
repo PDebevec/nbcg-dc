@@ -113,6 +113,12 @@ async function fetchSchema(
   } catch (err) {
     if (cached) {
       logger.warn("schema", `v2 schema fetch failed (${describeError(err)}); serving the cached copy.`);
+      // A kept copy means there is something to settle on: mark the session
+      // checked so later non-forced reads use memory instead of re-hitting an
+      // unreachable backend (and waiting out its timeout) on every call. With
+      // no kept copy (the `throw err` below) this stays false so the next read
+      // retries the network.
+      checkedThisSession = true;
       return { schema: cached.schema, outcome: "cache-offline" };
     }
     throw err;
@@ -177,6 +183,17 @@ export async function refreshRecordSchemaV2(
         stale: true,
         cache,
         message: "Could not reach the backend — keeping the cached metadata schema.",
+      };
+    }
+    // The backend answered but with no usable fields — a backend fault, not a
+    // real schema (see fetchSchema's empty-fields guard). The kept copy is
+    // still in use, so this is "stale", not a successful refresh.
+    if (outcome === "rejected-empty") {
+      return {
+        ok: false,
+        stale: true,
+        cache,
+        message: "The backend returned an empty metadata schema — keeping the cached copy.",
       };
     }
     return {

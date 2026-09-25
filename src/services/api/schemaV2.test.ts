@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiClient, type FetchLike } from "./client";
 import {
   clearRecordSchemaV2Cache,
@@ -45,8 +45,30 @@ function networkError(): Response {
   throw new TypeError("Failed to fetch");
 }
 
+/** A minimal `Storage` double, so a test can simulate booting with a schema
+ * persisted from a previous session (Tauri / the dev server) — this project's
+ * plain Node test environment has no real `localStorage` (see schemaV2.ts's
+ * module doc). */
+function fakeLocalStorage(): Storage {
+  const store = new Map<string, string>();
+  return {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => void store.set(key, value),
+    removeItem: (key: string) => void store.delete(key),
+    clear: () => store.clear(),
+    key: () => null,
+    get length() {
+      return store.size;
+    },
+  } as Storage;
+}
+
 beforeEach(() => {
   clearRecordSchemaV2Cache();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("getRecordSchemaV2", () => {
@@ -81,6 +103,26 @@ describe("getRecordSchemaV2", () => {
     expect((await getRecordSchemaV2({ client, forceRefresh: true })).fields).toHaveLength(1);
     expect(peekRecordSchemaV2()?.fields).toHaveLength(1);
   });
+
+  it("settles into memory once a failed first read falls back to a persisted copy", async () => {
+    // Simulates booting offline with a schema persisted from a previous
+    // session: `cached` is already populated (via `localStorage` hydration)
+    // before this session's very first read ever reaches the backend, so a
+    // failed first attempt must still mark the session checked — otherwise
+    // every later non-forced read hits the network again and waits out its
+    // timeout instead of settling on the copy it already has.
+    vi.stubGlobal("localStorage", fakeLocalStorage());
+    localStorage.setItem(
+      "nbcg-dc.schema.v2",
+      JSON.stringify({ schema: SCHEMA, etag: '"v2"', fetchedAt: new Date().toISOString() }),
+    );
+
+    const { client, calls } = harness([networkError, networkError]);
+    expect(await getRecordSchemaV2({ client })).toEqual(SCHEMA);
+    expect(await getRecordSchemaV2({ client })).toEqual(SCHEMA);
+
+    expect(calls).toHaveLength(1);
+  });
 });
 
 describe("refreshRecordSchemaV2", () => {
@@ -97,6 +139,14 @@ describe("refreshRecordSchemaV2", () => {
     const { client } = harness([() => ok(SCHEMA), networkError]);
     await getRecordSchemaV2({ client });
     expect(await refreshRecordSchemaV2({ client })).toMatchObject({ ok: false, stale: true });
+  });
+
+  it("says stale, not refreshed, when the backend's answer was empty", async () => {
+    const { client } = harness([() => ok(SCHEMA), () => ok(schemaV2([]), '"empty"')]);
+    await getRecordSchemaV2({ client });
+    const result = await refreshRecordSchemaV2({ client });
+    expect(result).toMatchObject({ ok: false, stale: true, cache: { fieldCount: 1 } });
+    expect(result.message).toMatch(/empty/i);
   });
 
   it("reports an error when there is nothing to fall back to", async () => {
