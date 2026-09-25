@@ -111,19 +111,16 @@ vi.mock("@services/api", () => ({
       checkedAt: new Date().toISOString(),
     };
   },
-  refreshRecordSchema: async () => {
+  refreshRecordSchemaV2: async () => {
     calls.refreshSchema += 1;
     return {
       ok: true,
       stale: false,
-      levels: [
-        { level: "main" as const, fieldCount: 41, fetchedAt: null, etag: null, fresh: true },
-        { level: "child" as const, fieldCount: 31, fetchedAt: null, etag: null, fresh: true },
-      ],
-      message: "Metadata schema refreshed (main 41, child 31 fields).",
+      cache: { fieldCount: 43, fetchedAt: null, etag: null },
+      message: "Metadata schema refreshed (43 fields).",
     };
   },
-  recordSchemaCacheInfo: () => [],
+  recordSchemaV2CacheInfo: () => ({ fieldCount: null, fetchedAt: null, etag: null }),
 }));
 
 const { useSettingsStore } = await import("./useSettings");
@@ -428,13 +425,13 @@ describe("testConnection", () => {
 });
 
 describe("refreshSchema", () => {
-  it("refreshes both levels and records the cache state", async () => {
+  it("re-checks the schema and records the cache state", async () => {
     const store = await loadedStore();
     const result = await store.refreshSchema();
 
     expect(calls.refreshSchema).toBe(1);
     expect(result?.ok).toBe(true);
-    expect(store.schemaCache.map((l) => l.fieldCount)).toEqual([41, 31]);
+    expect(store.schemaCache.fieldCount).toBe(43);
     expect(store.refreshingSchema).toBe(false);
   });
 });

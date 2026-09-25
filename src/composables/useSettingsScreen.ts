@@ -175,8 +175,8 @@ export function useSettingsScreen() {
 
   async function refreshSchema(): Promise<void> {
     const result = await store.refreshSchema();
-    if (result) toasts.push("Metadata schema refreshed.", "success");
-    else toasts.push("Couldn't refresh the schema.", "error");
+    if (result?.ok) toasts.push(result.message, "success");
+    else toasts.push(result?.message ?? "Couldn't refresh the schema.", "error");
   }
 
   // ── Data tab (fixed naming convention, read-only) ────────────────────────

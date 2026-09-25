@@ -49,10 +49,10 @@ import { configureApiClient, createApiClient } from "@services/backend";
 import { configureKeycloakAuth, getKeycloakAuth, KeycloakAuthError } from "@services/keycloakAuth";
 import {
   checkConnection,
-  refreshRecordSchema,
-  recordSchemaCacheInfo,
-  type SchemaCacheInfo,
-  type SchemaRefreshResult,
+  refreshRecordSchemaV2,
+  recordSchemaV2CacheInfo,
+  type SchemaV2CacheInfo,
+  type SchemaV2RefreshResult,
 } from "@services/api";
 import { APP_VERSION } from "@app/config";
 import { logger } from "@lib/logger";
@@ -99,9 +99,9 @@ export const useSettingsStore = defineStore("settings", () => {
   const appVersion = ref(APP_VERSION);
   const testResult = ref<ReachabilityResult | null>(null);
   const testing = ref(false);
-  const schemaCache = ref<SchemaCacheInfo[]>(recordSchemaCacheInfo());
+  const schemaCache = ref<SchemaV2CacheInfo>(recordSchemaV2CacheInfo());
   const refreshingSchema = ref(false);
-  const schemaRefresh = ref<SchemaRefreshResult | null>(null);
+  const schemaRefresh = ref<SchemaV2RefreshResult | null>(null);
 
   const hasCredentials = computed(() => Boolean(config.value.kcUsername && kcPassword.value));
   const configured = computed(() => isConfigured(config.value));
@@ -356,13 +356,13 @@ export const useSettingsStore = defineStore("settings", () => {
 
   // ── Refresh metadata schema ───────────────────────────────────────────────
 
-  /** Re-fetch the record schema for both levels and update the cache display. */
-  async function refreshSchema(): Promise<SchemaRefreshResult | null> {
+  /** Re-check the metadata schema with the backend and update the cache display. */
+  async function refreshSchema(): Promise<SchemaV2RefreshResult | null> {
     refreshingSchema.value = true;
     try {
-      const result = await refreshRecordSchema();
+      const result = await refreshRecordSchemaV2();
       schemaRefresh.value = result;
-      schemaCache.value = result.levels;
+      schemaCache.value = result.cache;
       return result;
     } catch (err) {
       logger.error("settings", "Schema refresh failed unexpectedly.", err);
