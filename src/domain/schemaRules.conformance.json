@@ -1,0 +1,551 @@
+{
+  "description": "Metadata schema v2 conformance cases. Every copy of evaluate.ts (web frontend, archive app) must pass all of them. Contract: docs/shared/plans/metadata-schema-v2.md. How to read: 'expected' is keyed by dotted field path; only the listed properties are compared; 'unit' is the unit code or null; 'label' and 'help' are the English text (or null).",
+
+  "isEmpty": [
+    { "value": null, "expected": true },
+    { "value": "", "expected": true },
+    { "value": "   ", "expected": true },
+    { "value": [], "expected": true },
+    { "value": {}, "expected": true },
+    { "value": 0, "expected": false },
+    { "value": false, "expected": false },
+    { "value": "x", "expected": false },
+    { "value": [""], "expected": false },
+    { "value": { "value": 0 }, "expected": false }
+  ],
+
+  "buildContext": [
+    {
+      "name": "recordType and bibliographicLevel fall back to the material type code",
+      "metadata": { "title": "T", "materialType": { "code": "am", "en": "Book", "cnr": "Knjiga" } },
+      "parents": [],
+      "itemState": "DRAFT",
+      "targetState": "DRAFT",
+      "expected": { "materialType": "am", "recordType": "a", "bibliographicLevel": "m", "collectionType": 0, "isChild": false, "parentCollectionType": [], "itemState": "DRAFT", "targetState": "DRAFT" }
+    },
+    {
+      "name": "an explicit recordType wins over the fallback",
+      "metadata": { "materialType": { "code": "am", "en": "Book", "cnr": "Knjiga" }, "recordType": { "code": "b", "en": "x", "cnr": "x" }, "collectionType": 3 },
+      "parents": [],
+      "itemState": "RECORD",
+      "targetState": "RECORD",
+      "expected": { "materialType": "am", "recordType": "b", "bibliographicLevel": "m", "collectionType": 3, "isChild": false, "parentCollectionType": [], "itemState": "RECORD", "targetState": "RECORD" }
+    },
+    {
+      "name": "every parent contributes its collectionType; a parent without one counts as 0",
+      "metadata": {},
+      "parents": [{ "collectionType": 4 }, {}],
+      "itemState": "NEW",
+      "targetState": "RECORD",
+      "expected": { "materialType": null, "recordType": null, "bibliographicLevel": null, "collectionType": 0, "isChild": true, "parentCollectionType": [4, 0], "itemState": "NEW", "targetState": "RECORD" }
+    },
+    {
+      "name": "a collectionType that is not a number counts as 0 (strict)",
+      "metadata": { "collectionType": "4" },
+      "parents": [{ "collectionType": "4" }],
+      "itemState": "DRAFT",
+      "targetState": "DRAFT",
+      "expected": { "collectionType": 0, "parentCollectionType": [0] }
+    },
+    {
+      "name": "targetState is passed through: a new item saved as a draft",
+      "metadata": { "title": "T" },
+      "parents": [],
+      "itemState": "NEW",
+      "targetState": "DRAFT",
+      "expected": { "itemState": "NEW", "targetState": "DRAFT" }
+    }
+  ],
+
+  "mechanics": {
+    "description": "The rule language on a synthetic field list, independent of the record rule table.",
+    "contextDefaults": { "x": null, "arr": [], "s": null },
+    "fields": [
+      {
+        "key": "hiddenWins", "type": "string", "multiple": false, "label": { "en": "hiddenWins", "cnr": "hiddenWins" },
+        "required": false, "visible": true, "readOnly": false,
+        "rules": [
+          { "when": { "ref": "x", "eq": 1 }, "set": { "required": true } },
+          { "when": { "ref": "x", "eq": 1 }, "set": { "visible": false } }
+        ]
+      },
+      {
+        "key": "laterWins", "type": "string", "multiple": false, "label": { "en": "base", "cnr": "base" },
+        "required": false, "visible": true, "readOnly": false,
+        "rules": [
+          { "when": { "ref": "x", "in": [1, 2] }, "set": { "label": { "en": "first", "cnr": "first" } } },
+          { "when": { "ref": "x", "eq": 2 }, "set": { "label": { "en": "second", "cnr": "second" } } }
+        ]
+      },
+      {
+        "key": "strict", "type": "string", "multiple": false, "label": { "en": "strict", "cnr": "strict" },
+        "required": false, "visible": false, "readOnly": false,
+        "rules": [ { "when": { "ref": "x", "eq": 4 }, "set": { "visible": true } } ]
+      },
+      {
+        "key": "anyElement", "type": "string", "multiple": false, "label": { "en": "anyElement", "cnr": "anyElement" },
+        "required": false, "visible": false, "readOnly": false,
+        "rules": [ { "when": { "ref": "arr", "in": [4, 5] }, "set": { "visible": true } } ]
+      },
+      {
+        "key": "emptyCheck", "type": "string", "multiple": false, "label": { "en": "emptyCheck", "cnr": "emptyCheck" },
+        "required": false, "visible": true, "readOnly": false,
+        "rules": [ { "when": { "ref": "arr", "empty": true }, "set": { "readOnly": true } } ]
+      },
+      {
+        "key": "combinators", "type": "string", "multiple": false, "label": { "en": "combinators", "cnr": "combinators" },
+        "required": false, "visible": false, "readOnly": false,
+        "rules": [
+          { "when": { "all": [ { "ref": "x", "eq": 1 }, { "not": { "ref": "s", "eq": "no" } }, { "any": [ { "ref": "arr", "eq": 1 }, { "ref": "arr", "empty": true } ] } ] },
+            "set": { "visible": true } }
+        ]
+      },
+      {
+        "key": "merged", "type": "string", "multiple": false, "label": { "en": "merged", "cnr": "merged" },
+        "required": false, "visible": true, "readOnly": false,
+        "constraints": { "minLength": 1, "maxLength": 10 },
+        "rules": [ { "when": { "ref": "x", "eq": 1 }, "set": { "constraints": { "maxLength": 5 } } } ]
+      },
+      {
+        "key": "box", "type": "object", "multiple": false, "label": { "en": "box", "cnr": "box" },
+        "required": false, "visible": false, "readOnly": false,
+        "rules": [ { "when": { "ref": "x", "eq": 1 }, "set": { "visible": true } } ],
+        "objectShape": [
+          { "key": "inner", "type": "string", "multiple": false, "label": { "en": "inner", "cnr": "inner" },
+            "required": true, "visible": true, "readOnly": false }
+        ]
+      }
+    ],
+    "cases": [
+      {
+        "name": "no rule matches: base values, hidden object hides its required child",
+        "context": {},
+        "expected": {
+          "hiddenWins": { "visible": true, "required": false },
+          "laterWins": { "label": "base" },
+          "strict": { "visible": false },
+          "anyElement": { "visible": false },
+          "emptyCheck": { "readOnly": true },
+          "merged": { "constraints": { "minLength": 1, "maxLength": 10 } },
+          "box": { "visible": false },
+          "box.inner": { "visible": false, "required": false }
+        }
+      },
+      {
+        "name": "hidden is never required, even when a rule made it required",
+        "context": { "x": 1 },
+        "expected": { "hiddenWins": { "visible": false, "required": false } }
+      },
+      {
+        "name": "later matching rule wins",
+        "context": { "x": 2 },
+        "expected": { "laterWins": { "label": "second" } }
+      },
+      {
+        "name": "earlier rule applies when the later one does not match",
+        "context": { "x": 1 },
+        "expected": { "laterWins": { "label": "first" } }
+      },
+      {
+        "name": "comparison is strict: \"4\" does not equal 4",
+        "context": { "x": "4" },
+        "expected": { "strict": { "visible": false } }
+      },
+      {
+        "name": "a number matches a number",
+        "context": { "x": 4 },
+        "expected": { "strict": { "visible": true } }
+      },
+      {
+        "name": "array context: in matches when any element matches",
+        "context": { "arr": [1, 5] },
+        "expected": { "anyElement": { "visible": true }, "emptyCheck": { "readOnly": false } }
+      },
+      {
+        "name": "array context: no element matches",
+        "context": { "arr": [1, 2] },
+        "expected": { "anyElement": { "visible": false } }
+      },
+      {
+        "name": "all / not / any combine",
+        "context": { "x": 1, "s": "yes", "arr": [] },
+        "expected": { "combinators": { "visible": true } }
+      },
+      {
+        "name": "not blocks the all",
+        "context": { "x": 1, "s": "no", "arr": [] },
+        "expected": { "combinators": { "visible": false } }
+      },
+      {
+        "name": "constraints merge key by key",
+        "context": { "x": 1 },
+        "expected": { "merged": { "constraints": { "minLength": 1, "maxLength": 5 } } }
+      },
+      {
+        "name": "a visible object exposes its required child",
+        "context": { "x": 1 },
+        "expected": { "box": { "visible": true }, "box.inner": { "visible": true, "required": true } }
+      }
+    ]
+  },
+
+  "record": {
+    "description": "The record rule table, run against the fields of GET /api/schema/v2/record. contextDefaults saves to RECORD (the publish rules); the draft cases set targetState DRAFT.",
+    "contextDefaults": { "materialType": null, "recordType": null, "bibliographicLevel": null, "collectionType": 0, "isChild": false, "parentCollectionType": [], "itemState": "DRAFT", "targetState": "RECORD" },
+    "cases": [
+      {
+        "name": "book (am), not a collection",
+        "context": { "materialType": "am", "recordType": "a", "bibliographicLevel": "m" },
+        "expected": {
+          "title": { "visible": true, "required": true },
+          "materialType": { "visible": true, "required": true },
+          "collectionType": { "visible": true, "required": true },
+          "extent": { "visible": true, "required": true, "unit": "pages", "label": "Number of pages" },
+          "textualMaterialCodes": { "visible": true },
+          "cartographicMathematicalData": { "visible": false, "required": false },
+          "isbn": { "visible": true },
+          "issn": { "visible": false },
+          "ismn": { "visible": false },
+          "numberingAndDates": { "visible": false },
+          "issue": { "visible": false },
+          "issue.number": { "visible": false, "required": false },
+          "authors": { "visible": true },
+          "keywords": { "visible": true },
+          "summaryNote": { "visible": true }
+        }
+      },
+      {
+        "name": "collection of books: extent shown but not required (it lives on the children)",
+        "context": { "materialType": "am", "recordType": "a", "bibliographicLevel": "m", "collectionType": 3 },
+        "expected": { "extent": { "visible": true, "required": false, "unit": "pages" } }
+      },
+      {
+        "name": "video (gm): duration in minutes, required",
+        "context": { "materialType": "gm", "recordType": "g", "bibliographicLevel": "m" },
+        "expected": {
+          "extent": { "visible": true, "required": true, "unit": "minutes", "label": "Duration" },
+          "textualMaterialCodes": { "visible": false },
+          "musicEditionStatement": { "visible": false }
+        }
+      },
+      {
+        "name": "musical sound recording (jm)",
+        "context": { "materialType": "jm", "recordType": "j", "bibliographicLevel": "m" },
+        "expected": {
+          "extent": { "visible": true, "required": true, "unit": "minutes" },
+          "musicEditionStatement": { "visible": true },
+          "ismn": { "visible": false }
+        }
+      },
+      {
+        "name": "printed music (cm): pages, not required; ISMN shown",
+        "context": { "materialType": "cm", "recordType": "c", "bibliographicLevel": "m" },
+        "expected": {
+          "extent": { "visible": true, "required": false, "unit": "pages" },
+          "ismn": { "visible": true },
+          "musicEditionStatement": { "visible": true }
+        }
+      },
+      {
+        "name": "printed map (em): scale required with its own caption, extent in sheets",
+        "context": { "materialType": "em", "recordType": "e", "bibliographicLevel": "m" },
+        "expected": {
+          "cartographicMathematicalData": { "visible": true, "required": true, "label": "Scale", "help": "e.g. 1:25 000" },
+          "extent": { "visible": true, "required": false, "unit": "sheets", "label": "Number of sheets" }
+        }
+      },
+      {
+        "name": "manuscript map inside a collection still needs its scale",
+        "context": { "materialType": "fm", "recordType": "f", "bibliographicLevel": "m", "collectionType": 3 },
+        "expected": { "cartographicMathematicalData": { "visible": true, "required": true } }
+      },
+      {
+        "name": "graphic (km): sheets, not required",
+        "context": { "materialType": "km", "recordType": "k", "bibliographicLevel": "m" },
+        "expected": { "extent": { "visible": true, "required": false, "unit": "sheets" } }
+      },
+      {
+        "name": "electronic resource (lm) and 3-D object (rm) have no extent",
+        "context": { "materialType": "lm", "recordType": "l", "bibliographicLevel": "m" },
+        "expected": { "extent": { "visible": false, "required": false, "unit": null } }
+      },
+      {
+        "name": "3-D object (rm)",
+        "context": { "materialType": "rm", "recordType": "r", "bibliographicLevel": "m" },
+        "expected": { "extent": { "visible": false }, "textualMaterialCodes": { "visible": false } }
+      },
+      {
+        "name": "serial (as): ISSN and numbering instead of ISBN",
+        "context": { "materialType": "as", "recordType": "a", "bibliographicLevel": "s" },
+        "expected": {
+          "isbn": { "visible": false },
+          "issn": { "visible": true },
+          "numberingAndDates": { "visible": true }
+        }
+      },
+      {
+        "name": "serial collection (collectionType 4)",
+        "context": { "materialType": "as", "recordType": "a", "bibliographicLevel": "s", "collectionType": 4 },
+        "expected": {
+          "issn": { "visible": true },
+          "numberingAndDates": { "visible": true },
+          "extent": { "visible": true, "required": false },
+          "issue": { "visible": false }
+        }
+      },
+      {
+        "name": "collectionType 4 alone shows ISSN, even without a material type",
+        "context": { "collectionType": 4 },
+        "expected": { "issn": { "visible": true }, "numberingAndDates": { "visible": true } }
+      },
+      {
+        "name": "issue: child of a serial collection",
+        "context": { "materialType": "am", "recordType": "a", "bibliographicLevel": "m", "isChild": true, "parentCollectionType": [4] },
+        "expected": {
+          "issue": { "visible": true, "required": false },
+          "issue.number": { "visible": true, "required": true },
+          "issue.date": { "visible": true, "required": true },
+          "issue.volume": { "visible": true, "required": false },
+          "collectionType": { "visible": false, "required": false },
+          "isbn": { "visible": false },
+          "issn": { "visible": true },
+          "authors": { "visible": false },
+          "corporateBodies": { "visible": false },
+          "edition": { "visible": false },
+          "titleByAnotherAuthor": { "visible": false },
+          "textualMaterialCodes": { "visible": false },
+          "title": { "visible": true, "required": true },
+          "extent": { "visible": true, "required": true }
+        }
+      },
+      {
+        "name": "the serial-issue hide wins over the map rule, and a hidden field is not required",
+        "context": { "materialType": "em", "recordType": "e", "bibliographicLevel": "m", "isChild": true, "parentCollectionType": [4] },
+        "expected": { "cartographicMathematicalData": { "visible": false, "required": false } }
+      },
+      {
+        "name": "child of a primary collection keeps its own fields",
+        "context": { "materialType": "am", "recordType": "a", "bibliographicLevel": "m", "isChild": true, "parentCollectionType": [1] },
+        "expected": {
+          "issue": { "visible": false },
+          "authors": { "visible": true },
+          "collectionType": { "visible": true },
+          "isbn": { "visible": true },
+          "textualMaterialCodes": { "visible": true }
+        }
+      },
+      {
+        "name": "two parents, one of them serial: array match on any element",
+        "context": { "isChild": true, "parentCollectionType": [1, 4] },
+        "expected": { "issue": { "visible": true }, "issue.number": { "required": true } }
+      },
+      {
+        "name": "no material type yet: type-specific fields hidden, materialType required",
+        "context": {},
+        "expected": {
+          "materialType": { "required": true },
+          "extent": { "visible": false, "required": false },
+          "cartographicMathematicalData": { "visible": false },
+          "textualMaterialCodes": { "visible": false },
+          "isbn": { "visible": true },
+          "issn": { "visible": false }
+        }
+      },
+      {
+        "name": "bibliographicLevel s alone hides ISBN",
+        "context": { "bibliographicLevel": "s" },
+        "expected": { "isbn": { "visible": false }, "issn": { "visible": true } }
+      },
+      {
+        "name": "cobissId is editable on a new item",
+        "context": { "itemState": "NEW" },
+        "expected": { "cobissId": { "readOnly": false, "help": "Optional. Locks the item to this COBISS record." } }
+      },
+      {
+        "name": "cobissId is read-only once the item exists",
+        "context": { "itemState": "RECORD" },
+        "expected": { "cobissId": { "readOnly": true, "help": "Cannot be changed after creation." } }
+      },
+      {
+        "name": "book saved as a draft: extent shown, not required; title, material type and collection type still are",
+        "context": { "materialType": "am", "recordType": "a", "bibliographicLevel": "m", "targetState": "DRAFT" },
+        "expected": {
+          "title": { "visible": true, "required": true },
+          "materialType": { "visible": true, "required": true },
+          "collectionType": { "visible": true, "required": true },
+          "extent": { "visible": true, "required": false, "unit": "pages", "label": "Number of pages" }
+        }
+      },
+      {
+        "name": "video saved as a draft: duration not required",
+        "context": { "materialType": "gm", "recordType": "g", "bibliographicLevel": "m", "targetState": "DRAFT" },
+        "expected": { "extent": { "visible": true, "required": false, "unit": "minutes" } }
+      },
+      {
+        "name": "map saved as a draft: scale shown with its caption, not required",
+        "context": { "materialType": "em", "recordType": "e", "bibliographicLevel": "m", "targetState": "DRAFT" },
+        "expected": { "cartographicMathematicalData": { "visible": true, "required": false, "label": "Scale", "help": "e.g. 1:25 000" } }
+      },
+      {
+        "name": "issue saved as a draft: issue data shown, not required",
+        "context": { "materialType": "am", "recordType": "a", "bibliographicLevel": "m", "isChild": true, "parentCollectionType": [4], "targetState": "DRAFT" },
+        "expected": {
+          "issue": { "visible": true },
+          "issue.number": { "visible": true, "required": false },
+          "issue.date": { "visible": true, "required": false },
+          "collectionType": { "visible": false, "required": false }
+        }
+      }
+    ]
+  },
+
+  "check": {
+    "description": "checkMetadata() against the record schema: the save check. Context comes from buildContext(metadata, parents, itemState, targetState). Only paths and constraint names are compared, in order.",
+    "cases": [
+      {
+        "name": "a title alone is missing its material type",
+        "metadata": { "title": "T", "collectionType": 0 },
+        "parents": [],
+        "itemState": "DRAFT",
+        "targetState": "RECORD",
+        "expected": { "missing": ["materialType"], "violations": [] }
+      },
+      {
+        "name": "a book needs its number of pages",
+        "metadata": { "title": "T", "collectionType": 0, "materialType": { "code": "am", "en": "Book", "cnr": "Knjiga" } },
+        "parents": [],
+        "itemState": "DRAFT",
+        "targetState": "RECORD",
+        "expected": { "missing": ["extent"], "violations": [] }
+      },
+      {
+        "name": "a complete book passes",
+        "metadata": { "title": "T", "collectionType": 0, "materialType": { "code": "am", "en": "Book", "cnr": "Knjiga" }, "extent": { "value": 253, "unit": "pages" } },
+        "parents": [],
+        "itemState": "DRAFT",
+        "targetState": "RECORD",
+        "expected": { "missing": [], "violations": [] }
+      },
+      {
+        "name": "pages stored on a video: the unit no longer fits",
+        "metadata": { "title": "T", "collectionType": 0, "materialType": { "code": "gm", "en": "Video / Film", "cnr": "Video / Film" }, "extent": { "value": 95, "unit": "pages" } },
+        "parents": [],
+        "itemState": "DRAFT",
+        "targetState": "RECORD",
+        "expected": { "missing": [], "violations": [{ "path": "extent", "constraint": "unit" }] }
+      },
+      {
+        "name": "a hidden field is never checked, whatever it holds",
+        "metadata": { "title": "T", "collectionType": 0, "materialType": { "code": "lm", "en": "Electronic resource", "cnr": "Elektronski izvor" }, "extent": { "value": 1, "unit": "pages" } },
+        "parents": [],
+        "itemState": "DRAFT",
+        "targetState": "RECORD",
+        "expected": { "missing": [], "violations": [] }
+      },
+      {
+        "name": "an issue of a serial without its issue data",
+        "metadata": { "title": "T", "collectionType": 0, "materialType": { "code": "as", "en": "Journal / Serial", "cnr": "Časopis / Serijska publikacija" }, "extent": { "value": 12, "unit": "pages" } },
+        "parents": [{ "collectionType": 4 }],
+        "itemState": "DRAFT",
+        "targetState": "RECORD",
+        "expected": { "missing": ["issue.number", "issue.date"], "violations": [] }
+      },
+      {
+        "name": "a malformed issue date is a pattern violation",
+        "metadata": { "title": "T", "collectionType": 0, "materialType": { "code": "as", "en": "Journal / Serial", "cnr": "Časopis / Serijska publikacija" }, "extent": { "value": 12, "unit": "pages" }, "issue": { "number": "3", "date": "1905-3" } },
+        "parents": [{ "collectionType": 4 }],
+        "itemState": "DRAFT",
+        "targetState": "RECORD",
+        "expected": { "missing": [], "violations": [{ "path": "issue.date", "constraint": "pattern" }] }
+      },
+      {
+        "name": "required sub-fields of repeatable objects are checked per element",
+        "metadata": { "title": "T", "collectionType": 3, "materialType": { "code": "am", "en": "Book", "cnr": "Knjiga" }, "corporateBodies": [ { "name": "A" }, { "responsibility": "primary" } ], "electronicLocation": [ { "url": " " } ] },
+        "parents": [],
+        "itemState": "RECORD",
+        "targetState": "RECORD",
+        "expected": { "missing": ["corporateBodies[1].name", "electronicLocation[0].url"], "violations": [] }
+      },
+      {
+        "name": "a map needs its scale",
+        "metadata": { "title": "T", "collectionType": 0, "materialType": { "code": "em", "en": "Printed map", "cnr": "Štampana karta" } },
+        "parents": [],
+        "itemState": "DRAFT",
+        "targetState": "RECORD",
+        "expected": { "missing": ["cartographicMathematicalData"], "violations": [] }
+      },
+      {
+        "name": "a draft still needs its material type",
+        "metadata": { "title": "T", "collectionType": 0 },
+        "parents": [],
+        "itemState": "NEW",
+        "targetState": "DRAFT",
+        "expected": { "missing": ["materialType"], "violations": [] }
+      },
+      {
+        "name": "a draft still needs its title",
+        "metadata": { "collectionType": 0, "materialType": { "code": "am", "en": "Book", "cnr": "Knjiga" } },
+        "parents": [],
+        "itemState": "NEW",
+        "targetState": "DRAFT",
+        "expected": { "missing": ["title"], "violations": [] }
+      },
+      {
+        "name": "a draft book without its number of pages is fine",
+        "metadata": { "title": "T", "collectionType": 0, "materialType": { "code": "am", "en": "Book", "cnr": "Knjiga" } },
+        "parents": [],
+        "itemState": "NEW",
+        "targetState": "DRAFT",
+        "expected": { "missing": [], "violations": [] }
+      },
+      {
+        "name": "a draft map without its scale is fine",
+        "metadata": { "title": "T", "collectionType": 0, "materialType": { "code": "em", "en": "Printed map", "cnr": "Štampana karta" } },
+        "parents": [],
+        "itemState": "DRAFT",
+        "targetState": "DRAFT",
+        "expected": { "missing": [], "violations": [] }
+      },
+      {
+        "name": "a draft issue without its issue data is fine",
+        "metadata": { "title": "T", "collectionType": 0, "materialType": { "code": "am", "en": "Book", "cnr": "Knjiga" } },
+        "parents": [{ "collectionType": 4 }],
+        "itemState": "NEW",
+        "targetState": "DRAFT",
+        "expected": { "missing": [], "violations": [] }
+      },
+      {
+        "name": "a draft still checks formats: a malformed issue date",
+        "metadata": { "title": "T", "collectionType": 0, "materialType": { "code": "am", "en": "Book", "cnr": "Knjiga" }, "issue": { "number": "3", "date": "1905-3" } },
+        "parents": [{ "collectionType": 4 }],
+        "itemState": "DRAFT",
+        "targetState": "DRAFT",
+        "expected": { "missing": [], "violations": [{ "path": "issue.date", "constraint": "pattern" }] }
+      },
+      {
+        "name": "a draft still rejects pages stored on a video",
+        "metadata": { "title": "T", "collectionType": 0, "materialType": { "code": "gm", "en": "Video / Film", "cnr": "Video / Film" }, "extent": { "value": 95, "unit": "pages" } },
+        "parents": [],
+        "itemState": "DRAFT",
+        "targetState": "DRAFT",
+        "expected": { "missing": [], "violations": [{ "path": "extent", "constraint": "unit" }] }
+      },
+      {
+        "name": "a draft still needs a name in each organisation entry",
+        "metadata": { "title": "T", "collectionType": 0, "materialType": { "code": "am", "en": "Book", "cnr": "Knjiga" }, "corporateBodies": [{ "name": "A" }, { "responsibility": "primary" }] },
+        "parents": [],
+        "itemState": "NEW",
+        "targetState": "DRAFT",
+        "expected": { "missing": ["corporateBodies[1].name"], "violations": [] }
+      },
+      {
+        "name": "moving a record back to draft: the draft rules apply",
+        "metadata": { "title": "T", "collectionType": 0, "materialType": { "code": "am", "en": "Book", "cnr": "Knjiga" } },
+        "parents": [],
+        "itemState": "RECORD",
+        "targetState": "DRAFT",
+        "expected": { "missing": [], "violations": [] }
+      }
+    ]
+  }
+}
