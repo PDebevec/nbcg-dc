@@ -8,6 +8,7 @@ export * from "./client";
 export * from "./health";
 export * from "./schema";
 export * from "./schemaV2";
+export * from "./hints";
 export * from "./cobiss";
 export * from "./search";
 export * from "./collections";
