@@ -3,68 +3,38 @@ import { ref } from "vue";
 import type { FieldView } from "@composables/useMetadataForm";
 import MetaInput from "./MetaInput.vue";
 
-const props = defineProps<{ field: FieldView; editable: boolean }>();
+/**
+ * One schema field with its caption, provenance tag and source picker. Every
+ * edit is emitted with the path it belongs to (`title`, `publication.place`,
+ * `authors[1].role`); the composable writes it into the right place.
+ */
+defineProps<{ field: FieldView; editable: boolean }>();
 
 const emit = defineEmits<{
-  change: [key: string, value: unknown];
+  change: [path: string, value: unknown];
+  add: [key: string];
+  remove: [key: string, index: number];
   pickSource: [key: string, parentId: string];
   manual: [key: string];
 }>();
 
 const menuOpen = ref(false);
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** A primitive top-level field: pass the value straight through. */
-function onPrimitive(value: unknown): void {
-  emit("change", props.field.key, value);
-}
-
-/** An object field: patch one child key on the current object value. */
-function onChild(childKey: string, value: unknown): void {
-  const base = isObject(props.field.raw) ? { ...props.field.raw } : {};
-  base[childKey] = value;
-  emit("change", props.field.key, base);
-}
-
-/** An object-list field: patch one child key on one entry. */
-function onEntryChild(index: number, childKey: string, value: unknown): void {
-  const list = Array.isArray(props.field.raw) ? [...props.field.raw] : [];
-  const entry = isObject(list[index]) ? { ...(list[index] as Record<string, unknown>) } : {};
-  entry[childKey] = value;
-  list[index] = entry;
-  emit("change", props.field.key, list);
-}
-
-function addEntry(): void {
-  const list = Array.isArray(props.field.raw) ? [...props.field.raw] : [];
-  list.push({});
-  emit("change", props.field.key, list);
-}
-
-function removeEntry(index: number): void {
-  const list = Array.isArray(props.field.raw) ? [...props.field.raw] : [];
-  list.splice(index, 1);
-  emit("change", props.field.key, list);
-}
-
-function pick(parentId: string): void {
+function pick(key: string, parentId: string): void {
   menuOpen.value = false;
-  emit("pickSource", props.field.key, parentId);
+  emit("pickSource", key, parentId);
 }
 
-function manual(): void {
+function manual(key: string): void {
   menuOpen.value = false;
-  emit("manual", props.field.key);
+  emit("manual", key);
 }
 </script>
 
 <template>
   <div class="field" :class="{ wide: field.wide }">
     <div class="head">
-      <label>{{ field.label }}</label>
+      <label :title="field.help || undefined">{{ field.label }}</label>
       <span v-if="field.required" class="req">*</span>
       <span
         v-if="field.provLabel && field.sourceOptions.length === 0"
@@ -92,7 +62,7 @@ function manual(): void {
             :key="opt.parentId"
             class="src-opt"
             :class="{ selected: opt.selected }"
-            @click="pick(opt.parentId)"
+            @click="pick(field.key, opt.parentId)"
           >
             <span class="radio" :class="{ selected: opt.selected }">
               <span class="radio-dot" />
@@ -105,7 +75,7 @@ function manual(): void {
           <button
             class="src-opt manual-opt"
             :class="{ selected: field.manualSelected }"
-            @click="manual()"
+            @click="manual(field.key)"
           >
             <span class="radio" :class="{ selected: field.manualSelected }">
               <span class="radio-dot" />
@@ -115,17 +85,19 @@ function manual(): void {
         </div>
       </div>
     </div>
+    <div v-if="field.help" class="help">{{ field.help }}</div>
 
-    <!-- object: a sub-form of primitive children -->
+    <!-- object: a sub-form -->
     <div v-if="field.kind === 'object'" class="sub-form" :class="{ invalid: field.error }">
-      <div v-for="child in field.children" :key="child.key" class="sub-field">
-        <span class="sub-label">{{ child.label }}</span>
+      <div v-for="child in field.children" :key="child.path" class="sub-field">
+        <span class="sub-label">{{ child.label }}<span v-if="child.required" class="req"> *</span></span>
         <MetaInput
           :field="child"
           :editable="editable"
           compact
-          @change="onChild(child.key, $event)"
+          @change="emit('change', child.path, $event)"
         />
+        <div v-if="child.error" class="error">{{ child.error }}</div>
       </div>
     </div>
 
@@ -135,38 +107,38 @@ function manual(): void {
         <div class="entry-head">
           <span class="entry-no">#{{ i + 1 }}</span>
           <button
-            v-if="editable"
+            v-if="editable && !field.readOnly"
             class="entry-remove"
             title="Remove"
-            @click="removeEntry(i)"
+            @click="emit('remove', field.key, i)"
           >
             ×
           </button>
         </div>
         <div class="sub-form">
-          <div v-for="child in entry" :key="child.key" class="sub-field">
-            <span class="sub-label">{{ child.label }}</span>
+          <div v-for="child in entry" :key="child.path" class="sub-field">
+            <span class="sub-label">{{ child.label }}<span v-if="child.required" class="req"> *</span></span>
             <MetaInput
               :field="child"
               :editable="editable"
               compact
-              @change="onEntryChild(i, child.key, $event)"
+              @change="emit('change', child.path, $event)"
             />
+            <div v-if="child.error" class="error">{{ child.error }}</div>
           </div>
         </div>
       </div>
-      <button v-if="editable" class="add-entry" @click="addEntry()">
-        + Add {{ field.label.toLowerCase().replace(/s$/, "") }}
+      <button v-if="editable && !field.readOnly" class="add-entry" @click="emit('add', field.key)">
+        + Add
       </button>
       <span v-else-if="field.entries.length === 0" class="none">—</span>
     </div>
 
-    <!-- primitives -->
     <MetaInput
       v-else
       :field="field"
       :editable="editable"
-      @change="onPrimitive"
+      @change="emit('change', field.path, $event)"
     />
 
     <div v-if="field.error" class="error">{{ field.error }}</div>
@@ -474,5 +446,11 @@ label {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.help {
+  font-size: 11.5px;
+  color: var(--c-text-faint);
+  margin: -3px 0 6px;
 }
 </style>

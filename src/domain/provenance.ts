@@ -27,11 +27,17 @@
  * the (deferred, GUI-shaped) metadata store/composable.
  */
 
-import type { FieldDescriptor } from "./schema";
 import type { ItemLevel } from "./item";
 import type { MetadataValues, Provenance } from "./metadata";
-import { isEmptyValue } from "./metadata-form";
 import type { ParentRecord } from "./parent";
+import { isEmpty } from "./schemaRules";
+
+/** The part of a schema field the provenance rules read (a v2 `FieldV2` fits). */
+export interface ProvenanceField {
+  key: string;
+  parentInheritable: boolean;
+  issueIdentifying: boolean;
+}
 
 // ─── the core fill rule ──────────────────────────────────────────────────────
 
@@ -93,7 +99,7 @@ export function fillValues(
 
   for (const [key, next] of Object.entries(incoming)) {
     const existing = values[key];
-    const existingEmpty = !existing || isEmptyValue(existing.value);
+    const existingEmpty = !existing || isEmpty(existing.value);
 
     if (existingEmpty) {
       values[key] = { ...next };
@@ -137,14 +143,14 @@ export function fillValues(
  * provenance (with `sourceParentId`), dropping empties. */
 export function parentInheritableValues(
   parent: ParentRecord,
-  fields: readonly FieldDescriptor[],
+  fields: readonly ProvenanceField[],
 ): MetadataValues {
   const out: MetadataValues = {};
   for (const field of fields) {
     if (!field.parentInheritable) continue;
     if (field.issueIdentifying) continue; // per-issue — never inherited
     const value = parent.metadata[field.key];
-    if (isEmptyValue(value)) continue;
+    if (isEmpty(value)) continue;
     out[field.key] = { value, provenance: "parent", sourceParentId: parent.id };
   }
   return out;
@@ -155,13 +161,13 @@ export function parentInheritableValues(
  * shares the schema's COMARC field keys; unknown keys are ignored.) */
 export function cobissValues(
   record: Record<string, unknown>,
-  fields: readonly FieldDescriptor[],
+  fields: readonly ProvenanceField[],
 ): MetadataValues {
   const known = new Set(fields.map((f) => f.key));
   const out: MetadataValues = {};
   for (const [key, value] of Object.entries(record)) {
     if (!known.has(key)) continue;
-    if (isEmptyValue(value)) continue;
+    if (isEmpty(value)) continue;
     out[key] = { value, provenance: "cobiss" };
   }
   return out;
@@ -185,7 +191,7 @@ export interface ApplyParentResult extends FillOutcome {
 export function applyParentFields(
   current: MetadataValues,
   parent: ParentRecord,
-  fields: readonly FieldDescriptor[],
+  fields: readonly ProvenanceField[],
 ): ApplyParentResult {
   const incoming = parentInheritableValues(parent, fields);
   // A parent copy only ever fills empties — it never overwrites and never
@@ -206,7 +212,7 @@ export function applyParentFields(
 export function applySerialParent(
   current: MetadataValues,
   parent: ParentRecord,
-  fields: readonly FieldDescriptor[],
+  fields: readonly ProvenanceField[],
 ): ApplyParentResult {
   return applyParentFields(current, parent, fields);
 }
@@ -226,7 +232,7 @@ export type CobissApplyMode = "fill-empty" | "overwrite-all";
 export function applyCobiss(
   current: MetadataValues,
   record: Record<string, unknown>,
-  fields: readonly FieldDescriptor[],
+  fields: readonly ProvenanceField[],
   mode: CobissApplyMode = "fill-empty",
 ): FillOutcome {
   const incoming = cobissValues(record, fields);
@@ -255,7 +261,7 @@ export interface FieldSourceOption {
  * more parents could supply the same field (docs/tasks/05 §per-field source).
  */
 export function fieldSourceOptions(
-  field: FieldDescriptor,
+  field: ProvenanceField,
   current: MetadataValues,
   parents: readonly ParentRecord[],
 ): FieldSourceOption[] {
@@ -263,7 +269,7 @@ export function fieldSourceOptions(
   if (field.parentInheritable) {
     for (const parent of parents) {
       const value = parent.metadata[field.key];
-      if (isEmptyValue(value)) continue;
+      if (isEmpty(value)) continue;
       options.push({ kind: "parent", parentId: parent.id, value });
     }
   }
@@ -302,19 +308,19 @@ export function chooseFieldSource(
 
 /** The issue-identifying fields (must be filled per child even with a parent). */
 export function issueFields(
-  fields: readonly FieldDescriptor[],
-): FieldDescriptor[] {
+  fields: readonly ProvenanceField[],
+): ProvenanceField[] {
   return fields.filter((f) => f.issueIdentifying);
 }
 
 /** The issue-identifying field keys still empty in `values` — the "Still to
  * fill" set for the serial/issue flow. */
 export function stillToFill(
-  fields: readonly FieldDescriptor[],
+  fields: readonly ProvenanceField[],
   values: MetadataValues,
 ): string[] {
   return issueFields(fields)
-    .filter((f) => isEmptyValue(values[f.key]?.value))
+    .filter((f) => isEmpty(values[f.key]?.value))
     .map((f) => f.key);
 }
 
@@ -354,4 +360,27 @@ export function caseBehavior(input: CaseRouteInput): {
   const primary: CasePrimaryPath =
     c === 1 ? "manual" : c === 4 ? "parent" : "cobiss";
   return { case: c, primary };
+}
+
+// ─── the provenance map ↔ plain values ───────────────────────────────────────
+
+/** The editor's provenance map as plain values (what the check and the wire see). */
+export function flattenValues(values: MetadataValues): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(values)) out[key] = field.value;
+  return out;
+}
+
+/** Wrap plain values in the provenance map; with `known`, other keys are dropped. */
+export function toMetadataValues(
+  record: Record<string, unknown>,
+  provenance: Provenance,
+  known?: ReadonlySet<string>,
+): MetadataValues {
+  const out: MetadataValues = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (known && !known.has(key)) continue;
+    out[key] = { value, provenance };
+  }
+  return out;
 }

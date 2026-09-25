@@ -1,10 +1,10 @@
 /**
  * `useMetadataForm` (Epic 04/05) — the view-model the batch **Metadata tab**
- * binds to (Seam 1). Schema-driven: the fields come from the backend record
- * schema for the item's level (`main`/`child`), values live in the metadata
- * store (provenance-tagged, autosaved to the folder mirror), validation and
- * readiness come from `domain/metadata-form`, prefill from COBISS / the
- * data-passing parent through `domain/provenance`.
+ * binds to (Seam 1). Schema-driven: the fields come from the backend's v2
+ * record schema; which show, which are required and whose rules apply come
+ * from the store's save check (`checkOf`), values live in the metadata store
+ * in their stored shape, prefill comes from COBISS / the data-passing parent
+ * through `domain/provenance`.
  */
 
 import {
@@ -31,90 +31,32 @@ import {
 } from "@domain/batch";
 import { PublishTarget, VisibilityStatus } from "@domain/enums";
 import type { Item } from "@domain/item";
-import type { FieldDescriptor } from "@domain/schema";
-import { PROVENANCE_LABELS, type MetadataValues, type Provenance } from "@domain/metadata";
+import { labelText, type FieldV2 } from "@domain/schema";
+import { isEmpty } from "@domain/schemaRules";
+import type { MetadataValues } from "@domain/metadata";
+import { fieldAtPath, splitByVisibility, statePathOf } from "@domain/schema-form";
 import {
   firstIncompleteIndex,
-  humanizeKey,
-  isEmptyValue,
-  optionLabel,
-  validateField,
-  type FieldError,
+  violationMessage,
+  type ItemCheck,
   type ItemReadiness,
-} from "@domain/metadata-form";
+} from "@domain/schema-check";
+import { numberFromText, quantityFromText, setAtPath, topKey } from "@domain/schema-values";
 import { fieldSourceOptions } from "@domain/provenance";
 import type { ParentRecord } from "@domain/parent";
-import { isBlankObject } from "@domain/metadata-wire";
+import { buildFieldViews, type FieldView } from "./metadataFieldViews";
 import { derivedOutputNames } from "@domain/naming";
 import { fetchCobissPreview, cobissCollisionMessage } from "@services/api/cobiss";
 import { useParentLinks } from "./useParentLinks";
 
 export type { ParentRowView, ParentSearchRow } from "./useParentLinks";
-
-/** How a field renders. Object shapes nest primitive kinds only. */
-export type FieldKind =
-  | "text"
-  | "number"
-  | "boolean"
-  | "enum"
-  | "multi"
-  | "multi-enum"
-  | "object"
-  | "object-list";
-
-export interface FieldOption {
-  value: string;
-  label: string;
-}
-
-/** A source option in a field's per-field source picker. */
-export interface FieldSourceOptionView {
-  parentId: string;
-  name: string;
-  /** Preview of the value this parent would supply. */
-  preview: string;
-  selected: boolean;
-}
-
-/** One schema-driven form field, shaped for rendering. */
-export interface FieldView {
-  key: string;
-  label: string;
-  kind: FieldKind;
-  required: boolean;
-  /** Spans both form columns. */
-  wide: boolean;
-  /** The raw current form value (the editor's shape) — composite kinds build
-   * their next value from this. */
-  raw: unknown;
-  /** Scalar rendering for text / number / enum / boolean ('' when unset). */
-  value: string;
-  /** Multi kinds: the chips (codes for multi-enum). */
-  chips: string[];
-  /** Display labels for the chips (option labels for multi-enum). */
-  chipLabels: string[];
-  /** Options for enum / multi-enum / boolean. */
-  options: FieldOption[];
-  /** `object`: one view per child field, values filled. */
-  children: FieldView[];
-  /** `object-list`: child-field views per entry. */
-  entries: FieldView[][];
-  provenance: Provenance | "none";
-  /** Provenance-tag copy ("COBISS" / "From parent" / "Edited"), '' = no tag. */
-  provLabel: string;
-  /** Per-field source picker (2+ parents can supply this field). */
-  sourceOptions: FieldSourceOptionView[];
-  /** Manual entry is the active source. */
-  manualSelected: boolean;
-  /** Validation message once validation shows, else ''. */
-  error: string;
-  /** "Still to fill" hint on empty per-issue fields, else ''. */
-  flag: string;
-  /** Schema group key + label; `groupStart` marks the first field of a group. */
-  group: string;
-  groupLabel: string;
-  groupStart: boolean;
-}
+export type {
+  FieldKind,
+  FieldOption,
+  FieldSourceOptionView,
+  FieldView,
+  HintSource,
+} from "./metadataFieldViews";
 
 /** One entry in the item navigator dropdown. */
 export interface NavItemView {
@@ -136,48 +78,6 @@ export interface FileChipView {
   local: boolean;
 }
 
-const BOOLEAN_OPTIONS: FieldOption[] = [
-  { value: "true", label: "Yes" },
-  { value: "false", label: "No" },
-];
-
-const ERROR_COPY: Record<FieldError["code"], string> = {
-  required: "This field is required.",
-  not_allowed: "Choose one of the allowed options.",
-  wrong_type: "This value has the wrong type.",
-};
-
-function kindOf(field: FieldDescriptor): FieldKind {
-  switch (field.type) {
-    case "enum":
-      return "enum";
-    case "number":
-      return "number";
-    case "boolean":
-      return "boolean";
-    case "object":
-      return "object";
-    case "array":
-      if (field.itemType === "enum") return "multi-enum";
-      if (field.itemType === "object") return "object-list";
-      return "multi";
-    default:
-      return "text";
-  }
-}
-
-function optionsOf(field: FieldDescriptor): FieldOption[] {
-  if (field.type === "boolean") return BOOLEAN_OPTIONS;
-  return (field.allowedValues ?? []).map((c) => ({ value: c.code, label: optionLabel(c) }));
-}
-
-function scalarString(value: unknown): string {
-  if (value === undefined || value === null) return "";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  return "";
-}
-
 function previewOf(value: unknown): string {
   if (value === undefined || value === null) return "";
   if (typeof value === "string") return value;
@@ -189,74 +89,6 @@ function previewOf(value: unknown): string {
       .join(" · ");
   }
   return String(value);
-}
-
-function fieldIsEmpty(field: FieldDescriptor, value: unknown): boolean {
-  if (isEmptyValue(value)) return true;
-  if (field.type === "object") return isBlankObject(value);
-  return false;
-}
-
-/** Build the nested child views of an object-shaped field (no provenance,
- * no source picker — those live on the top-level field). */
-function childViews(
-  shape: readonly FieldDescriptor[],
-  value: Record<string, unknown>,
-): FieldView[] {
-  return shape.map((child) => baseView(child, value[child.key], { nested: true }));
-}
-
-function baseView(
-  field: FieldDescriptor,
-  raw: unknown,
-  opts: { nested: boolean },
-): FieldView {
-  const kind = kindOf(field);
-  const options = optionsOf(field);
-  const optionLabelFor = (code: string) =>
-    options.find((o) => o.value === code)?.label ?? code;
-  const chips =
-    (kind === "multi" || kind === "multi-enum") && Array.isArray(raw)
-      ? raw.map((v) => scalarString(v))
-      : [];
-  const objectValue =
-    kind === "object" && raw && typeof raw === "object" && !Array.isArray(raw)
-      ? (raw as Record<string, unknown>)
-      : {};
-  const entries =
-    kind === "object-list" && Array.isArray(raw)
-      ? raw.map((entry) =>
-          childViews(
-            field.objectShape ?? [],
-            entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {},
-          ),
-        )
-      : [];
-  return {
-    key: field.key,
-    label: humanizeKey(field.key),
-    kind,
-    required: field.required,
-    wide:
-      !opts.nested &&
-      (kind === "object" || kind === "object-list" || kind === "multi" || kind === "multi-enum"),
-    raw,
-    value: scalarString(raw),
-    chips,
-    chipLabels: kind === "multi-enum" ? chips.map(optionLabelFor) : chips,
-    options,
-    children: kind === "object" ? childViews(field.objectShape ?? [], objectValue) : [],
-    entries,
-    provenance: "none",
-    provLabel: "",
-    sourceOptions: [],
-    manualSelected: false,
-    error: "",
-    flag: "",
-    group: field.group,
-    groupLabel: humanizeKey(field.group),
-    groupStart: false,
-  };
 }
 
 export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
@@ -305,7 +137,9 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
 
   const loading = computed(() => {
     const c = current.value;
-    return schemaLoading.value || (c != null && !loadedItems.value.has(c.id));
+    if (schemaLoading.value) return true;
+    if (c == null) return false;
+    return !loadedItems.value.has(c.id) || (metadata.schema != null && check.value == null);
   });
 
   watch(
@@ -319,11 +153,14 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
 
   // ── schema + values for the current item ─────────────────────────────────
 
-  const fields = computed<FieldDescriptor[]>(() =>
-    current.value ? metadata.fieldsFor(current.value.level) : [],
-  );
+  const fields = computed<FieldV2[]>(() => metadata.fields);
   const values = computed<MetadataValues>(() =>
     current.value ? (allValues.value.get(current.value.id) ?? {}) : {},
+  );
+  /** Whose rules apply to the current item and what they still need; null
+   * while the schema or the batch's parents are still loading. */
+  const check = computed<ItemCheck | null>(() =>
+    current.value ? metadata.checkOf(current.value) : null,
   );
 
   function readinessOf(item: Item): ItemReadiness {
@@ -386,31 +223,30 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
 
   // ── fields ───────────────────────────────────────────────────────────────
 
-  const fieldViews = computed<FieldView[]>(() => {
-    const c = current.value;
-    if (!c) return [];
+  /** Validation messages by path — shown once the operator tried to move on. */
+  const errors = computed<Record<string, string>>(() => {
+    const c = check.value;
+    if (!showValidation.value || !c) return {};
+    const out: Record<string, string> = {};
+    for (const m of c.missing) out[m.path] = "This field is required.";
+    for (const v of c.violations) out[v.path] = violationMessage(v);
+    return out;
+  });
+
+  /** Adds what needs the linked parents: the "Still to fill" flag and the
+   * per-field source picker (shown when 2+ parents can supply the field). */
+  function decorate(list: FieldView[]): FieldView[] {
     const vals = values.value;
     const parentsForPicker: ParentRecord[] = links.linkedRecords.value;
     const hasPassingParent = links.passingParent.value != null;
-    let lastGroup: string | null = null;
-    return fields.value.map((field) => {
+    const byKey = new Map(fields.value.map((f) => [f.key, f]));
+    return list.map((view) => {
+      const field = byKey.get(view.key);
+      if (!field) return view;
       const entry = vals[field.key];
-      const raw = entry?.value;
-      const view = baseView(field, raw, { nested: false });
-      const empty = fieldIsEmpty(field, raw);
-      const prov: Provenance | "none" = entry && !empty ? entry.provenance : "none";
-      view.provenance = prov;
-      view.provLabel = prov === "none" ? "" : PROVENANCE_LABELS[prov];
-      if (showValidation.value) {
-        const err = validateField(field, raw);
-        view.error = err ? ERROR_COPY[err.code] : "";
-      }
-      if (field.issueIdentifying && empty && hasPassingParent) view.flag = "Still to fill";
-      // Per-field source picker — shown when 2+ parents could supply the field.
+      if (field.issueIdentifying && isEmpty(entry?.value) && hasPassingParent) view.flag = "Still to fill";
       if (field.parentInheritable && parentsForPicker.length >= 2) {
-        const opts = fieldSourceOptions(field, vals, parentsForPicker).filter(
-          (o) => o.kind === "parent",
-        );
+        const opts = fieldSourceOptions(field, vals, parentsForPicker).filter((o) => o.kind === "parent");
         if (opts.length >= 2) {
           view.sourceOptions = opts.map((o) => {
             const record = parentsForPicker.find((p) => p.id === o.parentId);
@@ -418,23 +254,34 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
               parentId: o.parentId as string,
               name: record?.title ?? (o.parentId as string),
               preview: previewOf(o.value),
-              selected: prov === "parent" && entry?.sourceParentId === o.parentId,
+              selected: view.provenance === "parent" && entry?.sourceParentId === o.parentId,
             };
           });
-          view.manualSelected = prov === "user";
+          view.manualSelected = view.provenance === "user";
         }
       }
-      view.groupStart = field.group !== lastGroup;
-      lastGroup = field.group;
       return view;
     });
+  }
+
+  /** The fields to show, and the hidden ones that still hold a value. */
+  const views = computed<{ shown: FieldView[]; other: FieldView[] }>(() => {
+    const s = metadata.schema;
+    const c = check.value;
+    const cur = current.value;
+    if (!s || !c || !cur) return { shown: [], other: [] };
+    const split = splitByVisibility(fields.value, c.states, metadata.plainValues(cur.id));
+    const build = (list: FieldV2[]) =>
+      decorate(buildFieldViews({ schema: s, fields: list, states: c.states, values: values.value, errors: errors.value }));
+    return { shown: build(split.shown), other: build(split.other) };
   });
 
+  const fieldViews = computed(() => views.value.shown);
+  const otherFieldViews = computed(() => views.value.other);
+
   const missing = computed(() => {
-    const c = current.value;
-    if (!c) return 0;
-    const vals = metadata.plainValues(c.id);
-    return fields.value.filter((f) => validateField(f, vals[f.key]) != null).length;
+    const c = check.value;
+    return c ? c.missing.length + c.violations.length : 0;
   });
 
   const validationBanner = computed(() =>
@@ -449,10 +296,37 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
 
   // ── field edits ──────────────────────────────────────────────────────────
 
-  function setField(key: string, value: unknown): void {
+  /** Set a value at a path (`title`, `publication.place`, `authors[1].role`)
+   * as an operator edit. A number box's text is stored as a number, a
+   * quantity box's as `{ value, unit }` with the unit the rules chose. */
+  function setField(path: string, value: unknown): void {
     const c = current.value;
-    if (!c || !editable.value) return;
-    metadata.setFieldValue(c.id, key, value);
+    const s = metadata.schema;
+    if (!c || !s || !editable.value) return;
+    const field = fieldAtPath(s.fields, path);
+    if (!field) return;
+    let next = value;
+    if (typeof value === "string") {
+      if (field.type === "integer" || field.type === "number") next = numberFromText(value);
+      else if (field.type === "quantity") {
+        next = quantityFromText(value, check.value?.states[statePathOf(path)] ?? { unit: null });
+      }
+    }
+    const key = topKey(path);
+    const stored = key === path ? next : setAtPath(values.value[key]?.value, path.slice(key.length), next);
+    metadata.setFieldValue(c.id, key, stored);
+  }
+
+  /** Add an empty entry to a repeatable object field. */
+  function addEntry(key: string): void {
+    const raw = values.value[key]?.value;
+    setField(key, [...(Array.isArray(raw) ? raw : []), {}]);
+  }
+
+  /** Remove one entry of a repeatable object field. */
+  function removeEntry(key: string, index: number): void {
+    const raw = values.value[key]?.value;
+    setField(key, (Array.isArray(raw) ? raw : []).filter((_, i) => i !== index));
   }
 
   function setFieldSource(key: string, parentId: string): void {
@@ -562,7 +436,9 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
       const result = metadata.applyCobissTo(c.id, record, "fill-empty");
       if (result.conflicts.length > 0) {
         pendingCobiss = record;
-        const labels = result.conflicts.map((k) => humanizeKey(k.key));
+        const labels = result.conflicts.map(
+          (k) => labelText(fields.value.find((f) => f.key === k.key)?.label) || k.key,
+        );
         overwritePrompt.value =
           labels.length <= 2
             ? labels.join(" and ")
@@ -653,6 +529,7 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
     nav,
     files,
     fields: fieldViews,
+    otherFields: otherFieldViews,
     editable,
     loading,
     schemaError,
@@ -667,6 +544,8 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
     next,
     // field edits
     setField,
+    addEntry,
+    removeEntry,
     setFieldSource,
     setFieldManual,
     // COBISS

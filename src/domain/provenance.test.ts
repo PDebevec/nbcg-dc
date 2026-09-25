@@ -15,6 +15,8 @@ import {
   stillToFill,
   routeCase,
   caseBehavior,
+  flattenValues,
+  toMetadataValues,
 } from "./provenance";
 
 function field(over: Partial<FieldDescriptor> & { key: string }): FieldDescriptor {
@@ -269,5 +271,13 @@ describe("case routing", () => {
     expect(caseBehavior({ level: "main", hasCobissId: true }).primary).toBe("cobiss");
     expect(caseBehavior({ level: "child", hasCobissId: true }).primary).toBe("cobiss");
     expect(caseBehavior({ level: "child", hasCobissId: false })).toEqual({ case: 4, primary: "parent" });
+  });
+});
+
+describe("flattenValues / toMetadataValues", () => {
+  it("round-trips values, keeping only known keys", () => {
+    const wrapped = toMetadataValues({ title: "T", bogus: 1 }, "user", new Set(["title"]));
+    expect(wrapped).toEqual({ title: { value: "T", provenance: "user" } });
+    expect(flattenValues(wrapped)).toEqual({ title: "T" });
   });
 });

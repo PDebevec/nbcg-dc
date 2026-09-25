@@ -27,6 +27,8 @@ const {
   prev,
   next,
   setField,
+  addEntry,
+  removeEntry,
   setFieldSource,
   setFieldManual,
   cobissId,
@@ -291,6 +293,8 @@ const enumLabel: Record<string, string> = {
               :field="field"
               :editable="editable"
               @change="setField"
+              @add="addEntry"
+              @remove="removeEntry"
               @pick-source="setFieldSource"
               @manual="setFieldManual"
             />

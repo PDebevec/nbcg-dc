@@ -48,7 +48,7 @@ import {
 } from "./api/files";
 import { connectParent as apiConnectParent } from "./api/relations";
 import { previewCobiss } from "./api/cobiss";
-import { getRecordSchema } from "./api/schema";
+import { getRecordSchemaV2 } from "./api/schemaV2";
 import { deterministicItemId } from "./api/deterministicId";
 import { findById, hitToRemote, type SearchHit } from "./api/search";
 import { listIndex, readItemMetadata, writeItemMetadata } from "./indexing";
@@ -60,8 +60,8 @@ import type {
   UpdateItemDto,
 } from "./api/dto";
 import type { ItemType, VisibilityStatus } from "@domain/enums";
-import type { FieldLevel, RecordSchema } from "@domain/schema";
-import { fieldsForLevel, pruneToSchema } from "@domain/metadata-form";
+import type { RecordSchemaV2 } from "@domain/schema";
+import { pruneForUpload } from "@domain/schema-values";
 import type {
   LocalMetadataFile,
   RecordMetadata,
@@ -135,8 +135,8 @@ export interface UploadDeps {
    * locally-mirrored item so its bumped version can be adopted (see
    * {@link applyParentStates}). */
   listItems: () => Promise<Item[]>;
-  /** Fetch (cached) the record schema for a level, to prune metadata. */
-  getSchema: (level: FieldLevel) => Promise<RecordSchema>;
+  /** Fetch (cached) the v2 record schema, to prune metadata. */
+  getSchema: () => Promise<RecordSchemaV2>;
   /** Current ISO timestamp (injectable for deterministic tests). */
   now: () => string;
   /** Sleep between retries (injectable — tests pass a no-op). */
@@ -166,7 +166,7 @@ function defaultDeps(): UploadDeps {
       await ipc.fs.moveToProcessed(item.id);
     },
     listItems: () => listIndex(),
-    getSchema: (level) => getRecordSchema(level),
+    getSchema: () => getRecordSchemaV2(),
     now: () => new Date().toISOString(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   };
@@ -180,7 +180,7 @@ function withDefaults(overrides?: Partial<UploadDeps>): UploadDeps {
 
 /** The publish decisions + working values for one item's upload — resolved by
  * the caller from the batch defaults/overrides (`domain/batch`) and the metadata
- * form (`domain/metadata-form`). */
+ * store (`stores/useMetadata`). */
 export interface UploadItemContext {
   /** Publish target (DRAFT/RECORD) — the batch default or the item override. */
   targetState: ItemType;
@@ -191,7 +191,7 @@ export interface UploadItemContext {
   /** The working metadata to publish. Defaults to the folder mirror's metadata
    * when omitted (the persisted pre-upload working source of truth). */
   metadata?: RecordMetadataInput;
-  /** Whether the metadata validates (caller computes via metadata-form). */
+  /** Whether the metadata validates (caller computes via the metadata store's save check). */
   metadataReady: boolean;
   /** The chosen primary-thumbnail filename, or null. */
   primaryThumbnail: string | null;
@@ -415,18 +415,15 @@ async function buildExtractedTexts(
 
 // ─── metadata assembly ──────────────────────────────────────────────────────
 
-/** The schema-valid, non-empty metadata to send, given the working values and
- * the item level. */
+/** The schema-known, non-blank metadata to send, given the working values. */
 async function prunedMetadata(
   values: RecordMetadataInput,
-  level: FieldLevel,
   deps: UploadDeps,
 ): Promise<{ metadata: RecordMetadataInput; fieldKeys: string[] }> {
-  const schema = await deps.getSchema(level);
-  const fields = fieldsForLevel(schema, level);
+  const schema = await deps.getSchema();
   return {
-    metadata: pruneToSchema(values, fields),
-    fieldKeys: fields.map((f) => f.key),
+    metadata: pruneForUpload(schema, values),
+    fieldKeys: schema.fields.map((f) => f.key),
   };
 }
 
@@ -453,11 +450,11 @@ async function prunedMetadata(
  *    item's metadata and given this batch's files.
  *
  * It stays as the fallback because a re-upload whose form never loaded the
- * field (schema without `cobissId`, so `pruneToSchema` drops it) still has a
+ * field (schema without `cobissId`, so `pruneForUpload` drops it) still has a
  * genuine indexed id, and using it is strictly better than resolving nothing.
  */
 function collidingCobissId(pruned: RecordMetadataInput, item: Item): string | null {
-  // `pruneToSchema` drops empty values, so a present key is a non-empty string;
+  // `pruneForUpload` drops empty values, so a present key is a non-empty string;
   // the type guard is belt-and-braces against a non-string sneaking through an
   // unusual schema.
   const sent = (pruned as { cobissId?: unknown }).cobissId;
@@ -597,11 +594,11 @@ export async function uploadItem(
 
   try {
     // Resolve the working metadata (ctx override, else the folder mirror) and the
-    // schema-valid subset to send. Inside the try: `getRecordSchema` rethrows on a
+    // schema-valid subset to send. Inside the try: `getRecordSchemaV2` rethrows on a
     // cold cache + backend error, and that must become an error result.
     const mirror = await deps.readMirror(item);
     const workingValues = ctx.metadata ?? mirror?.metadata ?? {};
-    const pruneResult = await prunedMetadata(workingValues, item.level, deps);
+    const pruneResult = await prunedMetadata(workingValues, deps);
     const pruned = pruneResult.metadata;
     fieldKeys = pruneResult.fieldKeys;
 

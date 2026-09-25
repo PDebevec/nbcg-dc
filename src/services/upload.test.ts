@@ -18,7 +18,7 @@ import { discoverAsset, type DiscoveredAsset } from "@domain/files";
 import { emptyStages, type Item, type ItemStages, type StageName } from "@domain/item";
 import type { ItemEntity, FileAttachment } from "./api/dto";
 import type { SearchHit } from "./api/search";
-import type { RecordSchema } from "@domain/schema";
+import { fieldV2, schemaV2 } from "@domain/schema.fixture";
 import type { LocalMetadataFile } from "@domain/metadata";
 import { MAX_FILES_PER_REQUEST } from "@domain/upload";
 
@@ -82,28 +82,18 @@ function makeItem(overrides: Partial<Item> = {}): Item {
   return { ...base, ...overrides };
 }
 
-const SCHEMA: RecordSchema = {
-  fields: [
-    { key: "title", type: "string", required: true, group: "basic", order: 0, parentInheritable: false, issueIdentifying: false, levels: ["main", "child"] },
-    { key: "year", type: "string", required: false, group: "basic", order: 1, parentInheritable: false, issueIdentifying: false, levels: ["main", "child"] },
-  ],
-};
+const SCHEMA = schemaV2([fieldV2({ key: "title", required: true }), fieldV2({ key: "year" })]);
 
 /**
  * `SCHEMA` plus `cobissId`.
  *
  * The app's real record schema carries the field; the fixture above does not,
- * and `pruneToSchema` drops every key the schema does not name. So a test
+ * and `pruneForUpload` drops every key the schema does not name. So a test
  * about *the COBISS id the create actually sent* has to use this one —
  * otherwise `pruned.cobissId` is absent, nothing collidable goes on the wire,
  * and the scenario cannot exist.
  */
-const COBISS_SCHEMA: RecordSchema = {
-  fields: [
-    ...SCHEMA.fields,
-    { key: "cobissId", type: "string", required: false, group: "basic", order: 2, parentInheritable: false, issueIdentifying: false, levels: ["main", "child"] },
-  ],
-};
+const COBISS_SCHEMA = schemaV2([...SCHEMA.fields, fieldV2({ key: "cobissId" })]);
 
 const ENTITY: ItemEntity = {
   id: "rec_1",

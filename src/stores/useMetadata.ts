@@ -3,11 +3,14 @@
  * the Metadata tab, shared with Setup (batch-wide prefill) and Processing &
  * Upload (readiness + the metadata to publish).
  *
- * Holds, per item id, the provenance-tagged {@link MetadataValues} the form
- * edits (in the editor's **bare-code** shape — see `domain/metadata-wire`), the
- * record schema per level, and a cache of fetched {@link ParentRecord}s for the
- * parent links. Persistence:
+ * Built on metadata schema v2 (`GET /api/schema/v2/record`): one schema for
+ * every item. Which fields show, which are required and whose rules apply come
+ * from the schema's rules (`domain/schemaRules`), evaluated against the item's
+ * values, its batch's parents and its state — a new item is checked against its
+ * Draft/Record choice, an uploaded one against the state it has on the backend.
+ * Values are kept in the shape the backend stores (`domain/schema-values`).
  *
+ * Persistence:
  *  - an item that has **not been uploaded yet** (no `backendId` in its
  *    `metadata.json`) writes its working values straight into the mirror's
  *    `metadata` — the documented pre-upload source of truth, which the upload
@@ -17,84 +20,87 @@
  *    working edits in memory for the session, handed to the upload as
  *    `ctx.metadata`.
  *
- * Loaded values come back as provenance `user` (a local/backend record is the
- * operator's — `domain/metadata-form.toMetadataValues`); COBISS / parent
- * provenance is stamped only by the apply-* actions within a session.
+ * Loaded values come back as provenance `user`; COBISS / parent provenance is
+ * stamped only by the apply-* actions within a session.
  */
 
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import type { Item, ItemLevel } from "@domain/item";
-import type { FieldDescriptor, FieldLevel, RecordSchema } from "@domain/schema";
+import type { Item } from "@domain/item";
+import type { FieldV2, RecordSchemaV2 } from "@domain/schema";
+import type { TargetState } from "@domain/schemaRules";
 import type { LocalMetadataFile, MetadataValues } from "@domain/metadata";
 import type { ParentRecord } from "@domain/parent";
-import {
-  buildFormModel,
-  flattenValues,
-  isItemValid,
-  itemReadiness,
-  pruneToSchema,
-  toMetadataValues,
-  type ItemReadiness,
-} from "@domain/metadata-form";
+import { resolveItemPublish } from "@domain/batch";
+import { orderedFields } from "@domain/schema-form";
+import { checkItem, type ItemCheck, type ItemReadiness } from "@domain/schema-check";
+import { defaultValues, isUntouched, normalizeRecord, pruneForUpload } from "@domain/schema-values";
 import {
   applyCobiss,
   applyParentFields,
   chooseFieldSource,
+  flattenValues,
+  toMetadataValues,
   type ApplyParentResult,
   type CobissApplyMode,
   type FieldSourceOption,
   type FillOutcome,
 } from "@domain/provenance";
-import { toFormRecord, toWireRecord } from "@domain/metadata-wire";
-import { getRecordSchema } from "@services/api/schema";
+import { getRecordSchemaV2 } from "@services/api/schemaV2";
 import { getParentById, searchParents } from "@services/api/collections";
 import { readItemMetadata, writeItemMetadata } from "@services/indexing";
 import { logger } from "@lib/logger";
+import { useBatchesStore } from "./useBatches";
 import { useItemsStore } from "./useItems";
 
 /** Autosave debounce for the `metadata.json` working mirror. */
 const SAVE_DEBOUNCE_MS = 800;
 
+/** A batch's parents as far as this session knows them. */
+export interface BatchParents {
+  /** The parents whose records have loaded. */
+  records: ParentRecord[];
+  /** Ids the backend answered 404 for. */
+  missing: string[];
+  /** Some are still loading, or failed to load without proving they are gone. */
+  pending: boolean;
+}
+
+/** The item's state on the backend, from its mirror; null before its first upload. */
+function backendStateOf(mirror: LocalMetadataFile | null): TargetState | null {
+  if (!mirror?.backendId) return null;
+  // A mirror written before targetState was recorded: assume the stricter rules.
+  return mirror.targetState ?? "RECORD";
+}
+
 export const useMetadataStore = defineStore("metadata", () => {
   // ── schema ────────────────────────────────────────────────────────────────
-  const schemas = ref<Partial<Record<FieldLevel, RecordSchema>>>({});
+  const schema = ref<RecordSchemaV2 | null>(null);
   const schemaLoading = ref(false);
   const schemaError = ref<string | null>(null);
-  const schemaPromises = new Map<FieldLevel, Promise<void>>();
+  let schemaPromise: Promise<void> | null = null;
 
-  /** Ordered, level-filtered fields per level (empty until the schema loads). */
-  const fieldsByLevel = computed<Record<FieldLevel, FieldDescriptor[]>>(() => ({
-    main: schemas.value.main ? buildFormModel(schemas.value.main, "main").fields : [],
-    child: schemas.value.child ? buildFormModel(schemas.value.child, "child").fields : [],
-  }));
+  /** Top-level fields in form order (empty until the schema loads). */
+  const fields = computed<FieldV2[]>(() => (schema.value ? orderedFields(schema.value) : []));
 
-  function fieldsFor(level: ItemLevel): FieldDescriptor[] {
-    return fieldsByLevel.value[level];
-  }
-
-  /** Fetch (cached / offline-tolerant) the schema for a level, once. */
-  function ensureSchema(level: FieldLevel): Promise<void> {
-    if (schemas.value[level]) return Promise.resolve();
-    const inFlight = schemaPromises.get(level);
-    if (inFlight) return inFlight;
-    const p = (async () => {
+  /** Fetch the schema once (revalidated per session, offline-tolerant). */
+  function ensureSchema(): Promise<void> {
+    if (schema.value) return Promise.resolve();
+    if (schemaPromise) return schemaPromise;
+    schemaPromise = (async () => {
       schemaLoading.value = true;
       try {
-        const schema = await getRecordSchema(level);
-        schemas.value = { ...schemas.value, [level]: schema };
+        schema.value = await getRecordSchemaV2();
         schemaError.value = null;
       } catch (err) {
-        schemaError.value =
-          (err as Error)?.message ?? "Couldn't load the metadata schema.";
-        logger.error("metadata", `Failed to load the ${level} schema.`, err);
+        schemaError.value = (err as Error)?.message ?? "Couldn't load the metadata schema.";
+        logger.error("metadata", "Failed to load the metadata schema.", err);
       } finally {
         schemaLoading.value = false;
-        schemaPromises.delete(level);
+        schemaPromise = null;
       }
     })();
-    schemaPromises.set(level, p);
-    return p;
+    return schemaPromise;
   }
 
   // ── per-item working values ───────────────────────────────────────────────
@@ -104,9 +110,11 @@ export const useMetadataStore = defineStore("metadata", () => {
   const loadingItems = ref<Set<string>>(new Set());
   const saving = ref<Set<string>>(new Set());
   const saveError = ref<string | null>(null);
+  /** Each loaded item's state on the backend (null = not uploaded yet). */
+  const backendStates = ref<Map<string, TargetState | null>>(new Map());
 
   /** The last-read `metadata.json` per item (null = none on disk). Not reactive:
-   * it only feeds the next write. */
+   * it only feeds the next write; its backend state lives in `backendStates`. */
   const mirrors = new Map<string, LocalMetadataFile | null>();
   /** The Item each loaded id refers to (folder path for the write). */
   const knownItems = new Map<string, Item>();
@@ -132,8 +140,7 @@ export const useMetadataStore = defineStore("metadata", () => {
     touched.value = next;
   }
 
-  /** Replace an item's whole value map (reassigns the Map so computeds re-run)
-   * and schedule an autosave. */
+  /** Replace an item's whole value map and schedule an autosave. */
   function setValues(itemId: string, next: MetadataValues): void {
     const map = new Map(values.value);
     map.set(itemId, next);
@@ -142,36 +149,53 @@ export const useMetadataStore = defineStore("metadata", () => {
     scheduleSave(itemId);
   }
 
-  /** Set one field as an operator edit (provenance `user`). */
+  /** Set one top-level field as an operator edit (provenance `user`). */
   function setFieldValue(itemId: string, key: string, value: unknown): void {
     const current = getValues(itemId);
     setValues(itemId, { ...current, [key]: { value, provenance: "user" } });
   }
 
-  /** Load an item's working values from its `metadata.json` (once per item;
-   * safe to call repeatedly). Loads the level's schema first so unknown keys
-   * can be dropped and enum values normalised. */
+  /** Record an item's mirror and the backend state it implies. */
+  function rememberMirror(itemId: string, mirror: LocalMetadataFile | null): void {
+    mirrors.set(itemId, mirror);
+    const map = new Map(backendStates.value);
+    map.set(itemId, backendStateOf(mirror));
+    backendStates.value = map;
+  }
+
+  function setLoading(itemId: string, on: boolean): void {
+    const next = new Set(loadingItems.value);
+    if (on) next.add(itemId);
+    else next.delete(itemId);
+    loadingItems.value = next;
+  }
+
+  /** Load an item's working values from its `metadata.json` (once per item). */
   function ensureItemLoaded(item: Item): Promise<void> {
     knownItems.set(item.id, item);
     if (loadedItems.value.has(item.id)) return Promise.resolve();
     const inFlight = loadPromises.get(item.id);
     if (inFlight) return inFlight;
     const p = (async () => {
-      const loading = new Set(loadingItems.value);
-      loading.add(item.id);
-      loadingItems.value = loading;
+      setLoading(item.id, true);
       try {
-        await ensureSchema(item.level);
+        await ensureSchema();
+        const s = schema.value;
+        // No schema, no form. Loading nothing also keeps a stray edit from
+        // autosaving an empty metadata.json over the real one.
+        if (!s) return;
         let mirror: LocalMetadataFile | null = null;
         try {
           mirror = await readItemMetadata(item);
         } catch (err) {
           logger.warn("metadata", `Couldn't read metadata.json for ${item.id}.`, err);
         }
-        mirrors.set(item.id, mirror);
-        const fields = fieldsFor(item.level);
-        const record = toFormRecord(fields, mirror?.metadata ?? {});
-        const loaded = toMetadataValues(record, "user", fields);
+        rememberMirror(item.id, mirror);
+        const stored = mirror?.metadata ?? {};
+        // A new item starts from the schema's defaults (collectionType → 0).
+        const start = mirror?.backendId ? stored : { ...defaultValues(s), ...stored };
+        const known = new Set(s.fields.map((f) => f.key));
+        const loaded = toMetadataValues(normalizeRecord(s, start), "user", known);
         // Don't clobber edits made while the read was in flight.
         if (!values.value.has(item.id)) {
           const map = new Map(values.value);
@@ -181,10 +205,9 @@ export const useMetadataStore = defineStore("metadata", () => {
         const done = new Set(loadedItems.value);
         done.add(item.id);
         loadedItems.value = done;
+        void ensureParents(batchParentIds(item));
       } finally {
-        const loading2 = new Set(loadingItems.value);
-        loading2.delete(item.id);
-        loadingItems.value = loading2;
+        setLoading(item.id, false);
         loadPromises.delete(item.id);
       }
     })();
@@ -206,17 +229,14 @@ export const useMetadataStore = defineStore("metadata", () => {
     );
   }
 
-  /** The schema-pruned **wire** metadata for an item (what gets published). */
+  /** What an upload sends for an item: schema keys only, without blanks. */
   function wireMetadata(itemId: string): Record<string, unknown> {
-    const item = knownItems.get(itemId);
-    const fields = item ? fieldsFor(item.level) : [];
-    return pruneToSchema(toWireRecord(fields, plainValues(itemId)), fields);
+    return schema.value ? pruneForUpload(schema.value, plainValues(itemId)) : {};
   }
 
   /**
    * Write an item's working values to its `metadata.json` — only for items not
-   * yet connected to a backend record (see the module doc). Connected items keep
-   * their mirror as the backend snapshot; their edits stay in memory.
+   * yet connected to a backend record (see the module doc).
    */
   async function saveItem(itemId: string): Promise<void> {
     const item = knownItems.get(itemId);
@@ -237,7 +257,7 @@ export const useMetadataStore = defineStore("metadata", () => {
     saving.value = s;
     try {
       await writeItemMetadata(item, file);
-      mirrors.set(itemId, file);
+      rememberMirror(itemId, file);
       saveError.value = null;
       // Keep the Overview's cached title in step without a rescan.
       const title = typeof metadata.title === "string" ? metadata.title : null;
@@ -256,8 +276,7 @@ export const useMetadataStore = defineStore("metadata", () => {
     }
   }
 
-  /** Flush any pending autosave for one item (or all) — call before an upload
-   * and when leaving the editor. */
+  /** Flush any pending autosave for one item (or all). */
   async function flush(itemId?: string): Promise<void> {
     const ids = itemId ? [itemId] : Array.from(saveTimers.keys());
     for (const id of ids) {
@@ -269,52 +288,83 @@ export const useMetadataStore = defineStore("metadata", () => {
     }
   }
 
-  // ── readiness ─────────────────────────────────────────────────────────────
+  // ── the save check + readiness ───────────────────────────────────────────
 
-  function readinessOf(item: Item): ItemReadiness {
-    const fields = fieldsFor(item.level);
-    if (fields.length === 0) return "untouched";
-    return itemReadiness(fields, plainValues(item.id), {
-      touched: isTouched(item.id) || undefined,
+  function batchOf(item: Item) {
+    return item.batchId ? useBatchesStore().get(item.batchId) : null;
+  }
+
+  function batchParentIds(item: Item): string[] {
+    return batchOf(item)?.parents.map((p) => p.id) ?? [];
+  }
+
+  /** The item's batch's parents, as far as this session knows them. */
+  function batchParentsOf(item: Item): BatchParents {
+    const records: ParentRecord[] = [];
+    const missing: string[] = [];
+    let pending = false;
+    for (const id of batchParentIds(item)) {
+      const record = parentRecords.value.get(id);
+      if (record) records.push(record);
+      else if (parentMissing.value.has(id)) missing.push(id);
+      else pending = true;
+    }
+    return { records, missing, pending };
+  }
+
+  /** Whose rules apply to the item and what they still need — null while the
+   * schema or the batch's parents are still loading. */
+  function checkOf(item: Item): ItemCheck | null {
+    const s = schema.value;
+    if (!s) return null;
+    const parents = batchParentsOf(item);
+    if (parents.pending) return null;
+    const batch = batchOf(item);
+    return checkItem({
+      schema: s,
+      values: plainValues(item.id),
+      parents: parents.records.map((p) => p.metadata),
+      backendState: backendStates.value.get(item.id) ?? null,
+      choice: batch ? resolveItemPublish(batch, item.id) : "DRAFT",
     });
   }
 
   function isReady(item: Item): boolean {
-    const fields = fieldsFor(item.level);
-    return fields.length > 0 && isItemValid(fields, plainValues(item.id));
+    const check = checkOf(item);
+    return check != null && check.ok && batchParentsOf(item).missing.length === 0;
+  }
+
+  function readinessOf(item: Item): ItemReadiness {
+    const s = schema.value;
+    if (!s) return "untouched";
+    if (!isTouched(item.id) && isUntouched(s, plainValues(item.id))) return "untouched";
+    return isReady(item) ? "ready" : "incomplete";
   }
 
   // ── prefill sources ───────────────────────────────────────────────────────
 
-  /** Apply a COBISS preview record onto an item (values normalised to the form
-   * shape first). Returns the outcome; the caller raises the overwrite prompt
-   * when `conflicts` is non-empty in `fill-empty` mode. */
+  /** Apply a COBISS preview record onto an item (values normalised first). */
   function applyCobissTo(
     itemId: string,
     record: Record<string, unknown>,
     mode: CobissApplyMode = "fill-empty",
   ): FillOutcome {
-    const item = knownItems.get(itemId);
-    const fields = item ? fieldsFor(item.level) : [];
-    const outcome = applyCobiss(
-      getValues(itemId),
-      toFormRecord(fields, record),
-      fields,
-      mode,
-    );
+    const s = schema.value;
+    if (!s) return { values: getValues(itemId), conflicts: [], applied: [], skipped: [] };
+    const outcome = applyCobiss(getValues(itemId), normalizeRecord(s, record), fields.value, mode);
     if (outcome.applied.length > 0) setValues(itemId, outcome.values);
     return outcome;
   }
 
   /** Copy a data-passing parent's inheritable fields into an item's empties. */
   function applyParentTo(itemId: string, parent: ParentRecord): ApplyParentResult {
-    const item = knownItems.get(itemId);
-    const fields = item ? fieldsFor(item.level) : [];
+    const s = schema.value;
+    if (!s) return { values: getValues(itemId), conflicts: [], applied: [], skipped: [], stillToFill: [] };
     const normalised: ParentRecord = {
       ...parent,
-      metadata: toFormRecord(fields, parent.metadata) as ParentRecord["metadata"],
+      metadata: normalizeRecord(s, parent.metadata) as ParentRecord["metadata"],
     };
-    const outcome = applyParentFields(getValues(itemId), normalised, fields);
+    const outcome = applyParentFields(getValues(itemId), normalised, fields.value);
     if (outcome.applied.length > 0) setValues(itemId, outcome.values);
     return outcome;
   }
@@ -327,16 +377,28 @@ export const useMetadataStore = defineStore("metadata", () => {
   // ── parent records (shared cache) ─────────────────────────────────────────
   const parentRecords = ref<Map<string, ParentRecord>>(new Map());
   const parentLoading = ref<Set<string>>(new Set());
+  /** Parents the backend answered 404 for (search; see `domain/parent`). */
+  const parentMissing = ref<Set<string>>(new Set());
   const parentPromises = new Map<string, Promise<void>>();
 
   function rememberParent(record: ParentRecord): void {
     const map = new Map(parentRecords.value);
     map.set(record.id, record);
     parentRecords.value = map;
+    if (parentMissing.value.has(record.id)) {
+      const next = new Set(parentMissing.value);
+      next.delete(record.id);
+      parentMissing.value = next;
+    }
   }
 
-  /** Fetch a parent record by id (once), for linked refs whose record we don't
-   * hold yet. Missing/404 leaves it absent — the link still renders by id. */
+  function markParentsMissing(ids: readonly string[]): void {
+    const next = new Set(parentMissing.value);
+    for (const id of ids) next.add(id);
+    parentMissing.value = next;
+  }
+
+  /** Fetch a parent record by id (once). A 404 marks it missing. */
   function ensureParent(id: string): Promise<void> {
     if (parentRecords.value.has(id)) return Promise.resolve();
     const inFlight = parentPromises.get(id);
@@ -348,6 +410,7 @@ export const useMetadataStore = defineStore("metadata", () => {
       try {
         const record = await getParentById(id);
         if (record) rememberParent(record);
+        else markParentsMissing([id]);
       } catch (err) {
         logger.warn("metadata", `Couldn't fetch parent ${id}.`, err);
       } finally {
@@ -374,11 +437,10 @@ export const useMetadataStore = defineStore("metadata", () => {
 
   return {
     // schema
-    schemas,
+    schema,
     schemaLoading,
     schemaError,
-    fieldsByLevel,
-    fieldsFor,
+    fields,
     ensureSchema,
     // values
     values,
@@ -387,6 +449,7 @@ export const useMetadataStore = defineStore("metadata", () => {
     loadingItems,
     saving,
     saveError,
+    backendStates,
     getValues,
     plainValues,
     isTouched,
@@ -395,7 +458,9 @@ export const useMetadataStore = defineStore("metadata", () => {
     ensureItemLoaded,
     wireMetadata,
     flush,
-    // readiness
+    // check + readiness
+    batchParentsOf,
+    checkOf,
     readinessOf,
     isReady,
     // prefill
@@ -405,6 +470,8 @@ export const useMetadataStore = defineStore("metadata", () => {
     // parents
     parentRecords,
     parentLoading,
+    parentMissing,
+    markParentsMissing,
     ensureParent,
     ensureParents,
     findParents,
