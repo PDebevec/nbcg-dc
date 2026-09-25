@@ -290,6 +290,25 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
       : "",
   );
 
+  /** The batch parents that failed to load (e.g. offline), '' = none. The
+   * form still works; the items are not ready until the parents load. A
+   * batch's parent ref carries only the id, so the id names the parent. */
+  const parentsBanner = computed(() => {
+    const c = current.value;
+    if (!c) return "";
+    const names = metadata.batchParentsOf(c).failed.map((id) => `'${id}'`);
+    if (names.length === 0) return "";
+    const list =
+      names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+    return `Couldn't load the parent${names.length === 1 ? "" : "s"} ${list}. Check the connection and retry.`;
+  });
+
+  /** Fetch the batch's parents again (after a failed load). */
+  function retryParents(): Promise<void> {
+    const b = batch.value;
+    return b ? metadata.ensureParents(b.parents.map((p) => p.id)) : Promise.resolve();
+  }
+
   const isLast = computed(() => index.value >= items.value.length - 1);
   const nextLabel = computed(() => (isLast.value ? "Go to processing →" : "Next item →"));
   const canNext = computed(() => current.value != null && readinessOf(current.value) === "ready");
@@ -535,6 +554,7 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
     schemaError,
     saving: computed(() => saving.value.size > 0),
     validationBanner,
+    parentsBanner,
     nextLabel,
     canNext,
     isLast,
@@ -567,6 +587,7 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
     linkParent: links.linkParent,
     removeParent: links.removeParent,
     togglePassesData: links.togglePassesData,
+    retryParents,
     // publish / visibility (per item)
     publish,
     visibility,

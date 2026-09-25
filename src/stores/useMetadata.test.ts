@@ -6,6 +6,8 @@ import type { LocalMetadataFile } from "@domain/metadata";
 
 const mirrors = new Map<string, LocalMetadataFile | null>();
 const backendParents = new Map<string, { id: string; title: string; collectionType: number | null; metadata: Record<string, unknown> }>();
+/** Parent ids whose fetch throws (offline), as opposed to a 404. */
+const unreachableParents = new Set<string>();
 const batch = {
   id: "b1",
   parents: [] as Array<{ id: string; passesData: boolean }>,
@@ -21,9 +23,13 @@ vi.mock("@services/indexing", () => ({
   },
 }));
 vi.mock("@services/api/collections", () => ({
-  getParentById: async (id: string) => backendParents.get(id) ?? null,
+  getParentById: async (id: string) => {
+    if (unreachableParents.has(id)) throw new Error("Network error");
+    return backendParents.get(id) ?? null;
+  },
   searchParents: async () => [],
 }));
+vi.mock("@lib/logger", () => ({ logger: { debug() {}, info() {}, warn() {}, error() {} } }));
 vi.mock("./useBatches", () => ({
   useBatchesStore: () => ({ get: (id: string) => (id === batch.id ? batch : null) }),
 }));
@@ -41,6 +47,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
   mirrors.clear();
   backendParents.clear();
+  unreachableParents.clear();
   batch.parents = [];
   batch.publish = "DRAFT";
   batch.overrides = {};
@@ -91,6 +98,46 @@ describe("useMetadataStore on schema v2", () => {
     store.setFieldValue("i1", "materialType", BOOK);
     expect(store.batchParentsOf(item()).missing).toEqual(["gone"]);
     expect(store.isReady(item())).toBe(false);
+  });
+
+  it("keeps the form open but not ready while a batch parent failed to load", async () => {
+    batch.parents = [{ id: "p1", passesData: false }];
+    unreachableParents.add("p1");
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    await store.ensureParents(["p1"]);
+    store.setFieldValue("i1", "title", "T");
+    store.setFieldValue("i1", "materialType", BOOK);
+    expect(store.batchParentsOf(item()).failed).toEqual(["p1"]);
+    expect(store.checkOf(item())).not.toBeNull();
+    expect(store.isReady(item())).toBe(false);
+  });
+
+  it("clears the failure when a retry loads the parent, and the item can become ready", async () => {
+    batch.parents = [{ id: "p1", passesData: false }];
+    unreachableParents.add("p1");
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    await store.ensureParents(["p1"]);
+    store.setFieldValue("i1", "title", "T");
+    store.setFieldValue("i1", "materialType", BOOK);
+    unreachableParents.clear();
+    backendParents.set("p1", { id: "p1", title: "Pobjeda", collectionType: null, metadata: {} });
+    await store.ensureParents(["p1"]);
+    expect(store.batchParentsOf(item()).failed).toEqual([]);
+    expect(store.parentFailed.has("p1")).toBe(false);
+    expect(store.isReady(item())).toBe(true);
+  });
+
+  it("normalises a value picked from a parent in the source picker", async () => {
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    store.chooseSource("i1", "language", { kind: "parent", parentId: "p1", value: ["cnr"] });
+    expect(store.getValues("i1").language).toEqual({
+      value: [{ code: "cnr", en: "cnr", cnr: "cnr" }],
+      provenance: "parent",
+      sourceParentId: "p1",
+    });
   });
 
   it("sends only schema keys, without blanks", async () => {

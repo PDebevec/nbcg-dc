@@ -62,7 +62,9 @@ export interface BatchParents {
   records: ParentRecord[];
   /** Ids the backend answered 404 for. */
   missing: string[];
-  /** Some are still loading, or failed to load without proving they are gone. */
+  /** Ids whose fetch failed without proving they are gone (e.g. offline). */
+  failed: string[];
+  /** Some have not been fetched yet (neither loaded, missing nor failed). */
   pending: boolean;
 }
 
@@ -302,18 +304,21 @@ export const useMetadataStore = defineStore("metadata", () => {
   function batchParentsOf(item: Item): BatchParents {
     const records: ParentRecord[] = [];
     const missing: string[] = [];
+    const failed: string[] = [];
     let pending = false;
     for (const id of batchParentIds(item)) {
       const record = parentRecords.value.get(id);
       if (record) records.push(record);
       else if (parentMissing.value.has(id)) missing.push(id);
+      else if (parentFailed.value.has(id)) failed.push(id);
       else pending = true;
     }
-    return { records, missing, pending };
+    return { records, missing, failed, pending };
   }
 
   /** Whose rules apply to the item and what they still need — null while the
-   * schema or the batch's parents are still loading. */
+   * schema or a batch parent is still loading. A parent that failed to load
+   * does not hold the form back: the rules run with the parents that did. */
   function checkOf(item: Item): ItemCheck | null {
     const s = schema.value;
     if (!s) return null;
@@ -329,9 +334,12 @@ export const useMetadataStore = defineStore("metadata", () => {
     });
   }
 
+  /** Ready to upload: the check passes and every batch parent loaded. */
   function isReady(item: Item): boolean {
     const check = checkOf(item);
-    return check != null && check.ok && batchParentsOf(item).missing.length === 0;
+    if (check == null || !check.ok) return false;
+    const parents = batchParentsOf(item);
+    return parents.missing.length === 0 && parents.failed.length === 0;
   }
 
   function readinessOf(item: Item): ItemReadiness {
@@ -369,9 +377,14 @@ export const useMetadataStore = defineStore("metadata", () => {
     return outcome;
   }
 
-  /** Apply a per-field source-picker choice. */
+  /** Apply a per-field source-picker choice (a parent's value normalised first). */
   function chooseSource(itemId: string, key: string, option: FieldSourceOption): void {
-    setValues(itemId, chooseFieldSource(getValues(itemId), key, option));
+    const s = schema.value;
+    const picked =
+      option.kind === "parent" && s
+        ? { ...option, value: normalizeRecord(s, { [key]: option.value })[key] }
+        : option;
+    setValues(itemId, chooseFieldSource(getValues(itemId), key, picked));
   }
 
   // ── parent records (shared cache) ─────────────────────────────────────────
@@ -379,26 +392,45 @@ export const useMetadataStore = defineStore("metadata", () => {
   const parentLoading = ref<Set<string>>(new Set());
   /** Parents the backend answered 404 for (search; see `domain/parent`). */
   const parentMissing = ref<Set<string>>(new Set());
+  /** Parents whose last fetch failed without an answer (e.g. offline); a later
+   * `ensureParent` fetches them again. */
+  const parentFailed = ref<Set<string>>(new Set());
   const parentPromises = new Map<string, Promise<void>>();
+
+  /** A copy of `set` without `id` (the same set when it isn't there). */
+  function without(set: Set<string>, id: string): Set<string> {
+    if (!set.has(id)) return set;
+    const next = new Set(set);
+    next.delete(id);
+    return next;
+  }
 
   function rememberParent(record: ParentRecord): void {
     const map = new Map(parentRecords.value);
     map.set(record.id, record);
     parentRecords.value = map;
-    if (parentMissing.value.has(record.id)) {
-      const next = new Set(parentMissing.value);
-      next.delete(record.id);
-      parentMissing.value = next;
-    }
+    parentMissing.value = without(parentMissing.value, record.id);
+    parentFailed.value = without(parentFailed.value, record.id);
   }
 
   function markParentsMissing(ids: readonly string[]): void {
     const next = new Set(parentMissing.value);
-    for (const id of ids) next.add(id);
+    for (const id of ids) {
+      next.add(id);
+      parentFailed.value = without(parentFailed.value, id);
+    }
     parentMissing.value = next;
   }
 
-  /** Fetch a parent record by id (once). A 404 marks it missing. */
+  function markParentFailed(id: string): void {
+    if (parentFailed.value.has(id)) return;
+    const next = new Set(parentFailed.value);
+    next.add(id);
+    parentFailed.value = next;
+  }
+
+  /** Fetch a parent record by id (once). A 404 marks it missing; any other
+   * failure marks it failed until a later fetch succeeds. */
   function ensureParent(id: string): Promise<void> {
     if (parentRecords.value.has(id)) return Promise.resolve();
     const inFlight = parentPromises.get(id);
@@ -413,6 +445,7 @@ export const useMetadataStore = defineStore("metadata", () => {
         else markParentsMissing([id]);
       } catch (err) {
         logger.warn("metadata", `Couldn't fetch parent ${id}.`, err);
+        markParentFailed(id);
       } finally {
         const l2 = new Set(parentLoading.value);
         l2.delete(id);
@@ -471,6 +504,7 @@ export const useMetadataStore = defineStore("metadata", () => {
     parentRecords,
     parentLoading,
     parentMissing,
+    parentFailed,
     markParentsMissing,
     ensureParent,
     ensureParents,

@@ -7,7 +7,7 @@ import { BatchStage, ItemRunStatus, type Batch } from "@domain/batch";
 import { PublishTarget, VisibilityStatus } from "@domain/enums";
 import type { BatchRunRequest } from "@ipc/bindings";
 import type { JobDoneEvent, JobProgressEvent, JobStageChangedEvent } from "@ipc/events";
-import type { ItemUploadResult } from "@services/upload";
+import type { ItemUploadResult, UploadItemContext } from "@services/upload";
 
 // This composable never touches the DOM: getCurrentInstance() is null outside
 // a mounted component, so onMounted(init) is simply skipped — no jsdom needed.
@@ -149,6 +149,7 @@ vi.mock("@stores/useItems", () => ({ useItemsStore: () => itemsFake }));
 const metadataFake = {
   ready: true,
   async ensureItemLoaded() {},
+  async ensureParents(_ids: readonly string[]) {},
   isReady(): boolean {
     return metadataFake.ready;
   },
@@ -166,7 +167,11 @@ const uploadFake = {
   progress: ref(null),
   results: ref(new Map<string, Map<string, ItemUploadResult>>()),
   error: ref<string | null>(null),
-  run: async () => true,
+  run: (async () => true) as (
+    batchId: string,
+    items: Item[],
+    resolveContext: (item: Item) => UploadItemContext,
+  ) => Promise<boolean>,
   resultsFor: () => new Map(),
   closeBatch: vi.fn(async (_batchId: string) => {}),
 };
@@ -199,6 +204,8 @@ beforeEach(() => {
   itemsFake.loaded = true;
   itemsFake.refreshCalls = 0;
   metadataFake.ready = true;
+  metadataFake.ensureParents = async () => {};
+  uploadFake.run = async () => true;
   uploadFake.results.value = new Map();
   uploadFake.error.value = null;
   uploadFake.closeBatch = vi.fn(async (_batchId: string) => {});
@@ -390,6 +397,40 @@ describe("canUpload", () => {
     metadataFake.ready = true;
     view = useProcessing(() => "b1");
     expect(view.canUpload.value).toBe(true);
+  });
+});
+
+describe("upload", () => {
+  it("waits for the batch's parents before building the upload contexts", async () => {
+    const item = makeItem({
+      id: "nb",
+      folderName: "nb",
+      assets: [asset("nb", "nb.pdf"), asset("nb", "cover.jpg")],
+      stages: stagesWith({ pdf: "done", thumbnail: "done", ocr: "done" }),
+    });
+    seed(
+      makeBatch(["nb"], {
+        stage: BatchStage.Processing,
+        proc: { nb: ItemRunStatus.Done },
+        parents: [{ id: "p1", passesData: false }],
+      }),
+      [item],
+    );
+    const events: string[] = [];
+    metadataFake.ensureParents = async (ids) => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      events.push(`parents loaded: ${ids.join(",")}`);
+    };
+    uploadFake.run = async (_batchId, members, resolveContext) => {
+      members.forEach(resolveContext);
+      events.push("contexts built");
+      return true;
+    };
+    const view = useProcessing(() => "b1");
+
+    await view.upload();
+
+    expect(events).toEqual(["parents loaded: p1", "contexts built"]);
   });
 });
 

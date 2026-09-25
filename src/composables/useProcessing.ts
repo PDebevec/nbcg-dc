@@ -466,6 +466,8 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
     if (!b || !canUpload.value) return;
     const members = items.value;
     await Promise.all(members.map((m) => metadata.ensureItemLoaded(m)));
+    // The gate reads the parents' state: wait for any still loading.
+    await metadata.ensureParents(b.parents.map((p) => p.id));
     await metadata.flush();
     const resolveContext = (item: Item): UploadItemContext => ({
       targetState: resolveItemPublish(b, item.id),

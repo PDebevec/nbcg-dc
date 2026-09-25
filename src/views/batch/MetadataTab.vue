@@ -21,6 +21,7 @@ const {
   schemaError,
   saving,
   validationBanner,
+  parentsBanner,
   nextLabel,
   canNext,
   jump,
@@ -48,6 +49,7 @@ const {
   linkParent,
   removeParent,
   togglePassesData,
+  retryParents,
   publish,
   visibility,
   publishOverridden,
@@ -173,6 +175,10 @@ const enumLabel: Record<string, string> = {
     </div>
     <div v-if="validationBanner" class="validation-banner">
       ✗ {{ validationBanner }}
+    </div>
+    <div v-if="parentsBanner" class="validation-banner">
+      ✗ {{ parentsBanner }}
+      <button class="banner-retry" @click="retryParents()">Retry</button>
     </div>
 
     <div v-if="nav.total === 0" class="card empty-card">
@@ -601,6 +607,18 @@ const enumLabel: Record<string, string> = {
   color: var(--c-danger-deep);
   font-size: 13px;
   font-weight: 500;
+}
+
+.banner-retry {
+  margin-left: auto;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--c-danger-border);
+  background: var(--c-surface);
+  color: var(--c-danger-deep);
+  font-weight: 600;
+  font-size: 12.5px;
 }
 
 .overwrite {
