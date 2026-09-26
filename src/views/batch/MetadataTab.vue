@@ -19,6 +19,7 @@ const {
   fields,
   otherFields,
   editable,
+  uploadingNote,
   loading,
   schemaError,
   saving,
@@ -124,6 +125,7 @@ const enumLabel: Record<string, string> = {
             Item {{ nav.total ? nav.index + 1 : 0 }} of {{ nav.total }} ·
             {{ nav.readyCount }}/{{ nav.total }} ready
             <span v-if="saving" class="saving">· saving…</span>
+            <span v-if="uploadingNote" class="saving">· {{ uploadingNote }}</span>
           </div>
           <div class="nav-title">{{ nav.title || "—" }}</div>
         </div>

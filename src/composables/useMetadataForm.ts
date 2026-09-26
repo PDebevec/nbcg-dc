@@ -23,6 +23,7 @@ import { useBatchWorkStore } from "@stores/useBatchWork";
 import { useItemsStore } from "@stores/useItems";
 import { useMetadataStore } from "@stores/useMetadata";
 import { useToastsStore } from "@stores/useToasts";
+import { useUploadStore } from "@stores/useUpload";
 import {
   resolveItemPublish,
   resolveItemVisibility,
@@ -103,6 +104,7 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
   const itemsStore = useItemsStore();
   const metadata = useMetadataStore();
   const toasts = useToastsStore();
+  const uploadStore = useUploadStore();
   const { readOnly } = storeToRefs(work);
   const { values: allValues, schemaLoading, schemaError, loadedItems, saving } =
     storeToRefs(metadata);
@@ -121,8 +123,27 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
   const showValidation = ref(false);
   const current = computed<Item | null>(() => items.value[index.value] ?? null);
 
+  /**
+   * Read-only while the batch is uploading, on top of the archived/locked
+   * checks below — `uploadBatch` writes each item's mirror as it finishes, one
+   * item at a time, and the store only reloads them once the whole run is
+   * done; an edit made in that window would autosave `backendId: null` over a
+   * mirror the upload just gave a backend link (bug spec decision 6).
+   */
   const editable = computed(
-    () => batch.value != null && batch.value.archivedAt == null && !readOnly.value,
+    () =>
+      batch.value != null &&
+      batch.value.archivedAt == null &&
+      !readOnly.value &&
+      uploadStore.activeBatchId !== batch.value.id,
+  );
+
+  /** Shown while `editable` is false specifically because this batch is
+   * uploading, so the operator knows the fields aren't stuck — just paused. */
+  const uploadingNote = computed(() =>
+    batch.value && uploadStore.activeBatchId === batch.value.id
+      ? "Uploading — editing is paused until the upload finishes."
+      : "",
   );
 
   // ── parents (batch-level links; data passes to the current item) ─────────
@@ -647,6 +668,7 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
     fields: fieldViews,
     otherFields: otherFieldViews,
     editable,
+    uploadingNote,
     loading,
     schemaError,
     saving: computed(() => saving.value.size > 0),
