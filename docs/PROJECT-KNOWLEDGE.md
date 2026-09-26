@@ -667,10 +667,13 @@ Added by Epic 09 (2026-08-07), all verified against the backend source:
     path, dropped by the PATCH sanitiser, never touched by a trigger, and never
     *read* by the website either (a type declaration in
     `nbcg/frontend/src/api/search.ts` and nothing more). It cannot be used to
-    mark child/issue items — but nothing needs it to: **the archive's main-vs-
-    child concept is local** (`ItemLevel` in `domain/item.ts`, driving
-    `domain/metadata-form.fieldsForLevel` and `domain/provenance`). Backend tech
-    debt, not an integration gap; no task filed.
+    mark child/issue items — but nothing needs it to: since schema v2 there is
+    no hand-set main/child level. An item's role — standalone record, in a
+    collection, or issue of a serial — is derived from its batch's parents'
+    `collectionType`s: `itemRole` in `domain/schema-check.ts` labels it for the
+    navigator, and `routeCase` in `domain/provenance.ts` takes the same
+    `parentCollectionTypes` to route prefill. Backend tech debt, not an
+    integration gap; no task filed.
 16. **Replacing a file wipes its text unless `extractedText` is re-sent**, and an
     empty-string `extractedTexts` entry on upload does *not* suppress Tika.
 17. **Schema `required` is a UI hint** — only a non-empty `title` is enforced.
