@@ -483,6 +483,7 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
       metadataReady: metadata.isReady(item),
       primaryThumbnail: null,
       missingParents: metadata.missingParentNamesOf(item),
+      emptied: metadata.emptiedKeys(item.id),
     });
     const ok = await uploadStore.run(b.id, members, resolveContext);
     if (ok) {

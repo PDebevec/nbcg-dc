@@ -9,6 +9,7 @@ import {
   uploadMode,
   changedMetadataKeys,
   changedMetadata,
+  keysToClear,
   mapValidationErrors,
   planItemUpload,
   isUploadable,
@@ -420,6 +421,16 @@ describe("changedMetadataKeys / changedMetadata", () => {
     const prev = { langs: ["cnr", "en"] };
     const next = { langs: ["en", "cnr"] };
     expect(changedMetadataKeys(next, prev)).toEqual(["langs"]);
+  });
+});
+
+describe("clearing emptied fields", () => {
+  it("clears only emptied keys the backend copy still holds", () => {
+    expect(keysToClear(["year", "notes"], { title: "T", year: "2020" })).toEqual(["year"]);
+  });
+
+  it("sends a cleared key as null", () => {
+    expect(changedMetadata({ title: "T" }, { title: "T", year: "2020" }, ["year"])).toEqual({ year: null });
   });
 });
 

@@ -156,6 +156,9 @@ const metadataFake = {
   missingParentNamesOf(): string[] {
     return [];
   },
+  emptiedKeys(): string[] {
+    return [];
+  },
   wireMetadata(): Record<string, unknown> {
     return {};
   },

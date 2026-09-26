@@ -463,15 +463,26 @@ export function changedMetadataKeys(
   return changed;
 }
 
-/** Project `next` down to only its changed keys (for the PATCH body). Returns an
- * empty object when nothing changed (the caller can then skip the PATCH). */
+/** Project `next` down to its changed keys (for the PATCH body), plus `null`
+ * for each `cleared` key — the backend's PATCH removes a key sent as null. */
 export function changedMetadata(
   next: Record<string, unknown>,
   prev: Record<string, unknown>,
+  cleared: readonly string[] = [],
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const key of changedMetadataKeys(next, prev)) out[key] = next[key];
+  for (const key of cleared) out[key] = null;
   return out;
+}
+
+/**
+ * The keys a re-upload must clear: ones the operator emptied in the editor
+ * that the backend copy still holds. Only emptied keys — a key the editor never
+ * loaded (a field added on the web since) is not the operator's to remove.
+ */
+export function keysToClear(emptied: readonly string[], prev: Record<string, unknown>): string[] {
+  return emptied.filter((key) => prev[key] !== undefined && prev[key] !== null);
 }
 
 // ─── backend validation-error mapping ────────────────────────────────────────

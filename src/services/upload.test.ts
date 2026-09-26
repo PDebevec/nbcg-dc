@@ -1054,6 +1054,19 @@ describe("uploadItem — replace", () => {
     expect(deps.uploadFiles).toHaveBeenCalledTimes(1);
   });
 
+  it("clears a field the operator emptied, on the backend and in the mirror", async () => {
+    const deps = fakeDeps({ readMirror: vi.fn(async () => MIRROR) });
+    const item = makeItem({ backendId: "rec_1", root: "processed", flags: { uploaded: true, reupload: true, reuploadTextOnly: false } });
+    await uploadItem(item, { ...CTX, metadata: { title: "Old title" }, emptied: ["year"] }, deps);
+    expect(deps.updateItem).toHaveBeenCalledWith(
+      "rec_1",
+      expect.objectContaining({ metadata: { year: null } }),
+      expect.anything(),
+    );
+    const written = vi.mocked(deps.writeMirror).mock.calls.find(([target]) => target.id === item.id)?.[1];
+    expect(written?.metadata).not.toHaveProperty("year");
+  });
+
   it("includes visibilityStatus in the PATCH when it changed", async () => {
     const deps = fakeDeps({
       readMirror: vi.fn(async () => MIRROR),

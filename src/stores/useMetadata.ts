@@ -236,6 +236,15 @@ export const useMetadataStore = defineStore("metadata", () => {
     return schema.value ? pruneForUpload(schema.value, plainValues(itemId)) : {};
   }
 
+  /** Schema keys the item holds in the editor but would not send (emptied). */
+  function emptiedKeys(itemId: string): string[] {
+    const s = schema.value;
+    if (!s) return [];
+    const known = new Set(s.fields.map((f) => f.key));
+    const sent = wireMetadata(itemId);
+    return Object.keys(getValues(itemId)).filter((key) => known.has(key) && !(key in sent));
+  }
+
   /**
    * Write an item's working values to its `metadata.json` — only for items not
    * yet connected to a backend record (see the module doc).
@@ -516,6 +525,7 @@ export const useMetadataStore = defineStore("metadata", () => {
     setFieldValue,
     ensureItemLoaded,
     wireMetadata,
+    emptiedKeys,
     flush,
     reloadMirror,
     reloadMirrors,

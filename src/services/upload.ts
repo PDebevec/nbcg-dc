@@ -75,6 +75,7 @@ import { resolveVersion } from "@domain/sync";
 import {
   changedMetadata,
   isUploadable,
+  keysToClear,
   mapValidationErrors,
   metadataValidationFailure,
   parentNotFoundIds,
@@ -201,6 +202,8 @@ export interface UploadItemContext {
   primaryThumbnail: string | null;
   /** Names of batch parents search could not find (a blocker). */
   missingParents?: string[];
+  /** Schema keys the operator emptied; a re-upload clears them on the backend. */
+  emptied?: string[];
 }
 
 export type ItemUploadStatus =
@@ -726,7 +729,7 @@ export async function uploadItem(
           deps,
           warnings,
           run,
-          { suppressVisibility: true },
+          { suppressVisibility: true, keepEmptied: true },
         );
       }
       backendId = created.id;
@@ -790,6 +793,8 @@ interface ReplaceOnBackendOptions {
    * search hit that omitted the field, {@link hitToRemote}) and would
    * otherwise take the "unknown → treat as changed" branch below. */
   suppressVisibility?: boolean;
+  /** Never clear keys (a taken-over record: the operator never saw its fields). */
+  keepEmptied?: boolean;
 }
 
 /**
@@ -831,9 +836,10 @@ async function replaceOnBackend(
     });
   }
   const prevMeta = (mirror.metadata ?? {}) as RecordMetadata;
+  const cleared = options.keepEmptied ? [] : keysToClear(ctx.emptied ?? [], prevMeta);
   let version: number;
   try {
-    version = await patchOnBackend(item, backendId, pruned, ctx, mirror, deps, options);
+    version = await patchOnBackend(item, backendId, pruned, ctx, mirror, deps, options, cleared);
   } catch (err) {
     // A PATCH 404 comes from Postgres, not the CDC-lagged search index
     // (backend items.service.ts:190-196), so it is authoritative: the record
@@ -859,7 +865,8 @@ async function replaceOnBackend(
     }
     throw err;
   }
-  const mirrorMetadata = { ...prevMeta, ...pruned };
+  const mirrorMetadata: RecordMetadata = { ...prevMeta, ...pruned };
+  for (const key of cleared) delete mirrorMetadata[key];
 
   // Persist the confirmed metadata/version FIRST (the PATCH already
   // succeeded), then reconcile files. Only re-push blobs when a derived file
@@ -1135,9 +1142,10 @@ async function patchOnBackend(
   mirror: LocalMetadataFile,
   deps: UploadDeps,
   options: ReplaceOnBackendOptions = {},
+  cleared: readonly string[] = [],
 ): Promise<number> {
   const prevMeta = (mirror.metadata ?? {}) as RecordMetadata;
-  const changed = changedMetadata(pruned, prevMeta);
+  const changed = changedMetadata(pruned, prevMeta, cleared);
   const visibilityChanged = options.suppressVisibility
     ? false
     : mirror.visibilityStatus
