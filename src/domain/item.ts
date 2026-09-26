@@ -14,9 +14,6 @@
 
 import type { DiscoveredAsset } from "./files";
 
-/** Which record level an item is catalogued at (drives the schema field-set). */
-export type ItemLevel = "main" | "child";
-
 /** The two scan roots an item folder can live under. */
 export type ScanRoot = "unprocessed" | "processed";
 
@@ -108,7 +105,6 @@ export interface Item {
    * see `domain/overview`'s hidden-row filtering). */
   hidden: boolean;
   root: ScanRoot;
-  level: ItemLevel;
   /** Discovered files in the folder, classified by naming convention. */
   assets: DiscoveredAsset[];
   stages: ItemStages;

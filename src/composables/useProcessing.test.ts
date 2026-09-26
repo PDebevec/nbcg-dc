@@ -36,7 +36,6 @@ function makeItem(over: Partial<Item> & { id: string; folderName: string }): Ite
     relativePath: over.relativePath ?? over.folderName,
     hidden: over.hidden ?? false,
     root: over.root ?? "unprocessed",
-    level: over.level ?? "main",
     assets: over.assets ?? [],
     stages: over.stages ?? emptyStages(),
     flags: over.flags ?? { uploaded: false, reupload: false, reuploadTextOnly: false },

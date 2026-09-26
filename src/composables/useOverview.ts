@@ -30,7 +30,6 @@ import {
   firstStageError,
   type Item,
   type ItemState,
-  type ItemLevel,
   type StageName,
   type StagePipStatus,
 } from "@domain/item";
@@ -61,7 +60,6 @@ export interface OverviewRow {
   depth: number;
   title: string | null;
   catalogueId: string | null;
-  level: ItemLevel;
   state: ItemState;
   stateLabel: string;
   pips: StagePipView[];
@@ -94,7 +92,6 @@ function toRow(item: Item, selected: boolean, selectable: boolean): OverviewRow 
     depth: depthOf(item.relativePath),
     title: item.title,
     catalogueId: item.catalogueId,
-    level: item.level,
     state,
     stateLabel: ITEM_STATE_LABELS[state],
     pips: STAGE_NAMES.map((stage) => ({

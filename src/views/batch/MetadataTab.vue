@@ -130,7 +130,7 @@ const enumLabel: Record<string, string> = {
           </div>
           <div class="nav-title">{{ nav.title || "—" }}</div>
         </div>
-        <span class="level-pill" :class="nav.level">{{ nav.levelLabel }}</span>
+        <span class="level-pill" :class="nav.role">{{ nav.roleLabel }}</span>
       </div>
 
       <div v-if="nav.total > 1" class="nav-body">
@@ -490,12 +490,17 @@ const enumLabel: Record<string, string> = {
   flex: none;
 }
 
-.level-pill.main {
+.level-pill.standalone {
   color: var(--c-primary);
   background: var(--c-primary-soft);
 }
 
 .level-pill.child {
+  color: var(--c-parent);
+  background: var(--c-parent-bg);
+}
+
+.level-pill.issue {
   color: var(--c-parent);
   background: var(--c-parent-bg);
 }

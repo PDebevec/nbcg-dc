@@ -19,7 +19,6 @@ function makeItem(overrides: Partial<Item> = {}): Item {
     relativePath: "folder",
     hidden: false,
     root: "unprocessed",
-    level: "main",
     assets: [],
     stages: emptyStages(),
     flags: { uploaded: false, reupload: false, reuploadTextOnly: false },

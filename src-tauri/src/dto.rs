@@ -41,30 +41,6 @@ impl ScanRoot {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ItemLevel {
-    Main,
-    Child,
-}
-
-impl ItemLevel {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ItemLevel::Main => "main",
-            ItemLevel::Child => "child",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "main" => Some(ItemLevel::Main),
-            "child" => Some(ItemLevel::Child),
-            _ => None,
-        }
-    }
-}
-
 /// The five pipeline stages, in run order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -284,9 +260,6 @@ pub struct IndexedItemDto {
     /// Operator-hidden from the default Overview list (never auto-set).
     pub hidden: bool,
     pub root: ScanRoot,
-    /// From the folder's `metadata.json`; null when undetermined (the logic
-    /// lane defaults to `main`).
-    pub level: Option<ItemLevel>,
     pub assets: Vec<IndexedAssetDto>,
     pub stages: HashMap<StageName, IndexedStageDto>,
     pub uploaded: bool,

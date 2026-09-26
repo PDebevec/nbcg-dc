@@ -21,7 +21,6 @@ function imagesOnlyDto(overrides: Partial<IndexedItemDto> = {}): IndexedItemDto 
     relativePath: "A watermarked map",
     hidden: false,
     root: "unprocessed",
-    level: "main",
     // The folder as it looks once processed: the one scan plus the thumbnail
     // this app generated. The _thumb.png must not count as a second sheet.
     assets: [

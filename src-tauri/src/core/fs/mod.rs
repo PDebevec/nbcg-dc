@@ -20,9 +20,7 @@ pub mod watcher;
 
 use std::path::{Path, PathBuf};
 
-use crate::dto::{
-    IndexedAssetDto, ItemLevel, ItemType, LocalMetadataFile, ScanRoot, VisibilityStatus,
-};
+use crate::dto::{IndexedAssetDto, ItemType, LocalMetadataFile, ScanRoot, VisibilityStatus};
 use crate::error::{AppError, Result};
 
 /// The mirror file inside each item folder.
@@ -89,7 +87,6 @@ pub struct DiscoveredFolder {
     /// The immediate parent folder's absolute path, `None` at depth 1.
     pub parent_path: Option<String>,
     pub root: ScanRoot,
-    pub level: Option<ItemLevel>,
     pub title: Option<String>,
     pub cobiss_id: Option<String>,
     pub backend_id: Option<String>,
@@ -334,7 +331,7 @@ pub fn describe_folder(folder: &Path, root: ScanRoot) -> Result<DiscoveredFolder
     // needs to fix.
     let mirror = read_metadata(folder).ok().flatten();
 
-    let (title, cobiss_id, level) = match mirror.as_ref() {
+    let (title, cobiss_id) = match mirror.as_ref() {
         Some(m) => (
             m.metadata
                 .get("title")
@@ -345,15 +342,8 @@ pub fn describe_folder(folder: &Path, root: ScanRoot) -> Result<DiscoveredFolder
                 serde_json::Value::Number(n) => Some(n.to_string()),
                 _ => None,
             }),
-            // `level` is the archive's own main-vs-child concept and is stored
-            // under a private key — the backend has no equivalent field
-            // (`jeGlavnoGradivo` is a dead constant, see PROJECT-KNOWLEDGE).
-            m.metadata
-                .get("_level")
-                .and_then(|v| v.as_str())
-                .and_then(ItemLevel::parse),
         ),
-        None => (None, None, None),
+        None => (None, None),
     };
 
     Ok(DiscoveredFolder {
@@ -363,7 +353,6 @@ pub fn describe_folder(folder: &Path, root: ScanRoot) -> Result<DiscoveredFolder
         folder_name,
         folder_path: folder.to_string_lossy().into_owned(),
         root,
-        level,
         title,
         cobiss_id,
         backend_id: mirror.as_ref().and_then(|m| m.backend_id.clone()),

@@ -67,7 +67,6 @@ function makeItem(overrides: Partial<Item> = {}): Item {
     relativePath: "gorski",
     hidden: false,
     root: "unprocessed",
-    level: "main",
     assets: ASSETS,
     stages: stagesDone(),
     flags: { uploaded: false, reupload: false, reuploadTextOnly: false },

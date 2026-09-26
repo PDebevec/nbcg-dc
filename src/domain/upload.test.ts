@@ -47,7 +47,6 @@ function makeItem(overrides: Partial<Item> = {}): Item {
     relativePath: "gorski",
     hidden: false,
     root: "unprocessed",
-    level: "main",
     assets,
     stages: stagesWith({
       pdf: { status: "done" },

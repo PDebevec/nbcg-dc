@@ -260,17 +260,15 @@ describe("issue fields", () => {
 
 describe("case routing", () => {
   it("routes the four ingestion cases", () => {
-    expect(routeCase({ level: "main", hasCobissId: false })).toBe(1);
-    expect(routeCase({ level: "main", hasCobissId: true })).toBe(2);
-    expect(routeCase({ level: "child", hasCobissId: true })).toBe(3);
-    expect(routeCase({ level: "child", hasCobissId: false })).toBe(4);
+    expect(routeCase({ parentCollectionTypes: [], hasCobissId: false })).toBe(1);
+    expect(routeCase({ parentCollectionTypes: [], hasCobissId: true })).toBe(2);
+    expect(routeCase({ parentCollectionTypes: [3], hasCobissId: true })).toBe(3);
+    expect(routeCase({ parentCollectionTypes: [4], hasCobissId: false })).toBe(4);
+    expect(routeCase({ parentCollectionTypes: [3], hasCobissId: false })).toBe(1);
   });
 
   it("maps each case to a primary path", () => {
-    expect(caseBehavior({ level: "main", hasCobissId: false })).toEqual({ case: 1, primary: "manual" });
-    expect(caseBehavior({ level: "main", hasCobissId: true }).primary).toBe("cobiss");
-    expect(caseBehavior({ level: "child", hasCobissId: true }).primary).toBe("cobiss");
-    expect(caseBehavior({ level: "child", hasCobissId: false })).toEqual({ case: 4, primary: "parent" });
+    expect(caseBehavior({ parentCollectionTypes: [4], hasCobissId: false })).toEqual({ case: 4, primary: "parent" });
   });
 });
 

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { SNAPSHOT } from "./schema.fixture";
-import { checkItem, firstIncompleteIndex, publishNote, violationMessage, type ItemCheckInput } from "./schema-check";
+import {
+  checkItem,
+  firstIncompleteIndex,
+  itemRole,
+  publishNote,
+  violationMessage,
+  type ItemCheckInput,
+} from "./schema-check";
 
 const BOOK = { code: "am", en: "Book", cnr: "Knjiga" };
 const SERIAL = { title: "Pobjeda", collectionType: 4 };
@@ -71,6 +78,15 @@ describe("firstIncompleteIndex", () => {
   it("finds the first item that is not ready", () => {
     expect(firstIncompleteIndex(["ready", "untouched", "incomplete"])).toBe(1);
     expect(firstIncompleteIndex(["ready"])).toBe(-1);
+  });
+});
+
+describe("itemRole", () => {
+  it("reads what the batch's parents make the item", () => {
+    const base = { title: "T", materialType: BOOK };
+    expect(itemRole(check(base))).toEqual({ role: "standalone", label: "Standalone record" });
+    expect(itemRole(check(base, { parents: [{ collectionType: 3 }] }))).toEqual({ role: "child", label: "In a collection" });
+    expect(itemRole(check(base, { parents: [SERIAL] }))).toEqual({ role: "issue", label: "Issue of a serial" });
   });
 });
 

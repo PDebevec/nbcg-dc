@@ -16,7 +16,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type { AppConfig } from "@domain/config";
-import type { ItemLevel, ScanRoot, StageName, StageStatus, ItemState } from "@domain/item";
+import type { ScanRoot, StageName, StageStatus, ItemState } from "@domain/item";
 import type { InputShape, RunnableStage } from "@domain/pipeline";
 import type { ItemType, PublishTarget, VisibilityStatus } from "@domain/enums";
 import type {
@@ -95,7 +95,7 @@ export type PersistedConfig = Partial<AppConfig>;
 // The raw shape the Rust `core/fs` scan + `core/db` SQLite index return for one
 // item folder. `services/indexing` maps these to the domain `Item` (classifying
 // assets by naming convention and filling any missing stages as `pending`).
-// Vocabulary (`ScanRoot`, `ItemLevel`, `StageName`, `StageStatus`) is shared
+// Vocabulary (`ScanRoot`, `StageName`, `StageStatus`) is shared
 // with `@domain/item` so the contract is single-sourced.
 
 /** One discovered file, as the native scan reports it (unclassified — the
@@ -139,9 +139,6 @@ export interface IndexedItemDto {
    * see `domain/overview`'s hidden-row filtering. */
   hidden: boolean;
   root: ScanRoot;
-  /** From the folder's `metadata.json`; null when undetermined (defaults to
-   * `main`). */
-  level: ItemLevel | null;
   assets: IndexedAssetDto[];
   stages: Partial<Record<StageName, IndexedStageDto>>;
   uploaded: boolean;

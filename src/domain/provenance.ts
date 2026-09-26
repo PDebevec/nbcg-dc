@@ -27,7 +27,6 @@
  * the (deferred, GUI-shaped) metadata store/composable.
  */
 
-import type { ItemLevel } from "./item";
 import type { MetadataValues, Provenance } from "./metadata";
 import type { ParentRecord } from "./parent";
 import { isEmpty } from "./schemaRules";
@@ -328,24 +327,28 @@ export function stillToFill(
 export type IngestionCase = 1 | 2 | 3 | 4;
 
 export interface CaseRouteInput {
-  level: ItemLevel;
+  /** `collectionType` of each of the batch's parents ([] when it has none). */
+  parentCollectionTypes: readonly number[];
   /** Whether a COBISS ID is set (per item, or the batch prefill). */
   hasCobissId: boolean;
 }
 
 /**
- * Route to the ingestion case from level + COBISS presence:
- *  1. Main · no COBISS  → fill manually;
- *  2. Main · COBISS      → COBISS prefill;
- *  3. Child · COBISS     → COBISS prefill (same as 2);
- *  4. Child · no COBISS  → link a serial parent, fill the per-issue fields.
+ * Route to the ingestion case from the batch's parents + COBISS presence:
+ *  1. No COBISS, no serial parent → fill manually;
+ *  2. No parent · COBISS          → COBISS prefill;
+ *  3. A parent · COBISS           → COBISS prefill (same as 2);
+ *  4. A serial parent · no COBISS → the per-issue fields; the rest comes from the serial.
+ * A non-serial parent without COBISS is case 1: under schema v2 such an item
+ * keeps its own author, ISBN etc. (fields are hidden only under a serial).
  *
  * COBISS and parents are **non-exclusive** prefillers — the case is a hint for
- * the primary path, never a gate (using one never blocks the other).
+ * the primary path, never a gate.
  */
 export function routeCase(input: CaseRouteInput): IngestionCase {
-  if (input.hasCobissId) return input.level === "main" ? 2 : 3;
-  return input.level === "main" ? 1 : 4;
+  const isChild = input.parentCollectionTypes.length > 0;
+  if (input.hasCobissId) return isChild ? 3 : 2;
+  return input.parentCollectionTypes.includes(4) ? 4 : 1;
 }
 
 /** The highlighted (primary) prefill path for a case — a UI hint only. */

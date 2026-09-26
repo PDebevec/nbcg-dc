@@ -117,6 +117,15 @@ export function firstIncompleteIndex(readinesses: readonly ItemReadiness[]): num
   return readinesses.findIndex((r) => r !== "ready");
 }
 
+/** What the batch's parents make the item — shown in the navigator. */
+export function itemRole(check: ItemCheck | null): { role: "standalone" | "child" | "issue"; label: string } {
+  const raw = check?.context.parentCollectionType;
+  const types = Array.isArray(raw) ? raw : [];
+  if (types.includes(4)) return { role: "issue", label: "Issue of a serial" };
+  if (types.length > 0) return { role: "child", label: "In a collection" };
+  return { role: "standalone", label: "Standalone record" };
+}
+
 /** The note under the Draft/Record switch. */
 export function publishNote(check: ItemCheck | null, backendState: TargetState | null): string {
   if (backendState) {

@@ -17,7 +17,6 @@ pub fn folder(name: &str, root: ScanRoot) -> DiscoveredFolder {
         relative_path: name.to_string(),
         parent_path: None,
         root,
-        level: None,
         title: None,
         cobiss_id: None,
         backend_id: None,

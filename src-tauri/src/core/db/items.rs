@@ -18,8 +18,8 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use crate::core::fs::DiscoveredFolder;
 use crate::dto::{
-    IndexedAssetDto, IndexedItemDto, IndexedStageDto, ItemLevel, ItemType, RebuildDowngradeDto,
-    ScanRoot, StageName, StageStatus, SyncRecordDto, UploadRecordDto, VisibilityStatus,
+    IndexedAssetDto, IndexedItemDto, IndexedStageDto, ItemType, RebuildDowngradeDto, ScanRoot,
+    StageName, StageStatus, SyncRecordDto, UploadRecordDto, VisibilityStatus,
 };
 use crate::error::{AppError, Result};
 
@@ -62,7 +62,6 @@ pub fn exists(conn: &Connection, item_id: &str) -> Result<bool> {
 
 fn base_from_row(row: &Row) -> Result<IndexedItemDto> {
     let root_raw: String = row.get("root")?;
-    let level_raw: Option<String> = row.get("level")?;
     Ok(IndexedItemDto {
         id: row.get("id")?,
         folder_name: row.get("folder_name")?,
@@ -71,7 +70,6 @@ fn base_from_row(row: &Row) -> Result<IndexedItemDto> {
         hidden: row.get::<_, Option<String>>("hidden_at")?.is_some(),
         root: ScanRoot::parse(&root_raw)
             .ok_or_else(|| AppError::Other(format!("unknown scan root {root_raw:?}")))?,
-        level: level_raw.as_deref().and_then(ItemLevel::parse),
         assets: Vec::new(),
         stages: HashMap::new(),
         uploaded: row.get::<_, i64>("uploaded")? != 0,
@@ -270,11 +268,10 @@ pub fn reconcile(conn: &Connection, discovered: &[DiscoveredFolder]) -> Result<(
             conn.execute(
                 "UPDATE items SET \
                    folder_name = ?2, folder_path = ?3, relative_path = ?4, root = ?5, \
-                   level      = COALESCE(?6, level), \
-                   title      = COALESCE(?7, title), \
-                   cobiss_id  = COALESCE(?8, cobiss_id), \
-                   backend_id = COALESCE(backend_id, ?9), \
-                   updated_at = ?10 \
+                   title      = COALESCE(?6, title), \
+                   cobiss_id  = COALESCE(?7, cobiss_id), \
+                   backend_id = COALESCE(backend_id, ?8), \
+                   updated_at = ?9 \
                  WHERE id = ?1",
                 params![
                     folder.id,
@@ -282,7 +279,6 @@ pub fn reconcile(conn: &Connection, discovered: &[DiscoveredFolder]) -> Result<(
                     folder.folder_path,
                     folder.relative_path,
                     folder.root.as_str(),
-                    folder.level.map(|l| l.as_str()),
                     folder.title,
                     folder.cobiss_id,
                     folder.backend_id,
@@ -292,17 +288,16 @@ pub fn reconcile(conn: &Connection, discovered: &[DiscoveredFolder]) -> Result<(
         } else {
             conn.execute(
                 "INSERT INTO items \
-                   (id, folder_name, folder_path, relative_path, root, level, uploaded, reupload, \
+                   (id, folder_name, folder_path, relative_path, root, uploaded, reupload, \
                     backend_id, version, target_state, visibility_status, batch_id, \
                     title, cobiss_id, miss_streak, synced_at, created_at, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, 0, ?7, ?8, ?9, ?10, NULL, ?11, ?12, 0, ?13, ?14, ?14)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, ?6, ?7, ?8, ?9, NULL, ?10, ?11, 0, ?12, ?13, ?13)",
                 params![
                     folder.id,
                     folder.folder_name,
                     folder.folder_path,
                     folder.relative_path,
                     folder.root.as_str(),
-                    folder.level.map(|l| l.as_str()),
                     folder.backend_id,
                     folder.version,
                     folder.target_state.map(|t| t.as_str()),
@@ -374,17 +369,16 @@ pub fn rebuild(conn: &Connection, discovered: &[DiscoveredFolder]) -> Result<()>
     for folder in discovered {
         conn.execute(
             "INSERT INTO items \
-               (id, folder_name, folder_path, relative_path, root, level, uploaded, reupload, \
+               (id, folder_name, folder_path, relative_path, root, uploaded, reupload, \
                 backend_id, version, target_state, visibility_status, batch_id, \
                 title, cobiss_id, miss_streak, synced_at, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10, ?11, NULL, ?12, ?13, 0, ?14, ?15, ?15)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10, NULL, ?11, ?12, 0, ?13, ?14, ?14)",
             params![
                 folder.id,
                 folder.folder_name,
                 folder.folder_path,
                 folder.relative_path,
                 folder.root.as_str(),
-                folder.level.map(|l| l.as_str()),
                 // An item with a connected backend id in its mirror has been
                 // uploaded — that is the whole point of the mirror.
                 folder.backend_id.is_some() as i64,

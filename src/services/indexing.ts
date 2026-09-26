@@ -86,7 +86,6 @@ export function toItem(dto: IndexedItemDto): Item {
     relativePath: dto.relativePath,
     hidden: dto.hidden,
     root: dto.root,
-    level: dto.level ?? "main",
     assets,
     stages: markNonApplicableSkipped(stages, plan),
     flags: {

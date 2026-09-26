@@ -67,10 +67,9 @@ export interface SystemMetadata {
    * (`items.service.create`, `import-queue.processor`), the sanitiser drops it
    * on PATCH, no trigger ever clears it, and the website never reads it either.
    * There is **no way to mark an item as non-main through the API** — and no
-   * need to: the archive's main-vs-child concept is local
-   * ({@link ItemLevel} in `domain/item.ts`, which drives
-   * `domain/metadata-form.fieldsForLevel` and `domain/provenance`). Do not build
-   * child/issue logic on this flag. See docs/tasks/09 → Backend gaps.
+   * need to: whether an item is a child comes from its actual parents (schema
+   * v2 rules), never from this flag. Do not build child/issue logic on this
+   * flag. See docs/tasks/09 → Backend gaps.
    */
   jeGlavnoGradivo: boolean;
   /** Server-owned — derived from the presence of `cobissId` on create. */

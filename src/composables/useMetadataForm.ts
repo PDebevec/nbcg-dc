@@ -38,6 +38,7 @@ import type { MetadataValues } from "@domain/metadata";
 import { fieldAtPath, splitByVisibility, statePathOf } from "@domain/schema-form";
 import {
   firstIncompleteIndex,
+  itemRole,
   publishNote,
   violationMessage,
   type ItemCheck,
@@ -203,8 +204,8 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
       index: index.value,
       total,
       title: c ? (c.title ?? c.folderName) : "",
-      level: c?.level ?? "main",
-      levelLabel: c?.level === "child" ? "Child record" : "Main record",
+      role: itemRole(check.value).role,
+      roleLabel: itemRole(check.value).label,
       readyCount: readinesses.value.filter((r) => r === "ready").length,
       status: c ? readinessOf(c) : ("untouched" as ItemReadiness),
       items: items.value.map<NavItemView>((item, i) => ({

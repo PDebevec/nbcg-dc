@@ -24,7 +24,6 @@
  * Framework-free — imports only sibling domain types.
  */
 
-import type { ItemLevel } from "./item";
 import type { RecordMetadata } from "./metadata";
 
 /**
@@ -41,8 +40,6 @@ export interface ParentRecord {
   /** `collectionType` from the record metadata (a number), or `null` when the
    * indexed doc carried none. Drives {@link isEligibleParent}. */
   collectionType: number | null;
-  /** The record level, when known (parents are typically `main` serials). */
-  level?: ItemLevel;
   /** The parent's metadata blob — the source of inheritable field values. */
   metadata: RecordMetadata;
 }
