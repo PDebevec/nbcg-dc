@@ -1467,6 +1467,30 @@ describe("PARENT_NOT_FOUND", () => {
     expect(out.missingParentIds).toEqual(["par1"]);
     expect(deps.createItem).toHaveBeenCalledTimes(1);
   });
+
+  it("stops a re-upload at the connect, instead of listing it as one failed link", async () => {
+    const mirror: LocalMetadataFile = {
+      backendId: "rec_1",
+      version: 3,
+      targetState: "RECORD",
+      visibilityStatus: "PUBLIC",
+      metadata: { title: "Gorski vijenac", year: "2020" },
+      syncedAt: "2026-08-01T00:00:00.000Z",
+    };
+    const reupload = (id: string) =>
+      makeItem({ id, root: "processed", backendId: "rec_1", flags: { uploaded: true, reupload: false, reuploadTextOnly: false } });
+    const deps = fakeDeps({
+      readMirror: vi.fn(async () => mirror),
+      connectParent: vi.fn(async () => { throw gone(); }),
+    });
+
+    const out = await uploadBatch([reupload("a"), reupload("b")], { resolveContext: () => CTX, deps });
+
+    expect(out.results).toHaveLength(1);
+    expect(out.results[0]).toMatchObject({ status: "error", missingParentIds: ["par1"], relationErrors: [] });
+    expect(out.missingParentIds).toEqual(["par1"]);
+    expect(deps.connectParent).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("METADATA_VALIDATION_FAILED", () => {

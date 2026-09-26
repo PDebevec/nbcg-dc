@@ -310,3 +310,37 @@ describe("autosave", () => {
     expect(store.plainValues("i1").title).toBe("Mine");
   });
 });
+
+describe("emptiedKeys", () => {
+  const MIRROR: LocalMetadataFile = {
+    backendId: null,
+    version: null,
+    targetState: null,
+    visibilityStatus: null,
+    metadata: { title: "T", subtitle: "S" },
+    syncedAt: "2026-09-25T00:00:00.000Z",
+  };
+
+  it("lists a key the item had that the editor emptied", async () => {
+    mirrors.set("i1", MIRROR);
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    store.setFieldValue("i1", "subtitle", "");
+    expect(store.emptiedKeys("i1")).toEqual(["subtitle"]);
+  });
+
+  it("does not list a key the editor never held", async () => {
+    mirrors.set("i1", { ...MIRROR, metadata: { title: "T" } });
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    expect(store.emptiedKeys("i1")).toEqual([]);
+  });
+
+  it("does not list a key the schema does not know", async () => {
+    mirrors.set("i1", MIRROR);
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    store.setFieldValue("i1", "bogus", "");
+    expect(store.emptiedKeys("i1")).toEqual([]);
+  });
+});
