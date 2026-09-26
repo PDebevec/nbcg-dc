@@ -99,12 +99,26 @@ export function numberFromText(text: string): number | string | null {
   return Number.isNaN(n) ? text : n;
 }
 
-/** A quantity box's text → `{ value, unit }` with the unit the rules chose.
- * `null` when blank, or when the field has no unit in this context. */
-export function quantityFromText(text: string, state: Pick<FieldState, "unit">): unknown {
+/** A quantity box's text → `{ value, unit }` with the unit the rules chose,
+ * or `fallbackUnit` where they chose none (a hidden field — see
+ * {@link keptUnit}). `null` when blank, or when there is no unit at all. */
+export function quantityFromText(
+  text: string,
+  state: Pick<FieldState, "unit">,
+  fallbackUnit: string | null = null,
+): unknown {
   const value = numberFromText(text);
-  if (value === null || !state.unit) return null;
-  return { value, unit: state.unit.code };
+  const unit = state.unit?.code ?? fallbackUnit;
+  if (value === null || !unit) return null;
+  return { value, unit };
+}
+
+/** The unit a quantity keeps when its rules choose none: the one its stored
+ * value already has, else the field's first unit (its own, then its rules'). */
+export function keptUnit(field: FieldV2, stored: unknown): string | null {
+  if (isPlainObject(stored) && typeof stored.unit === "string" && stored.unit !== "") return stored.unit;
+  const first = field.unit ?? field.rules.find((r) => r.set.unit)?.set.unit ?? null;
+  return first?.code ?? null;
 }
 
 // ─── what goes out ───────────────────────────────────────────────────────────

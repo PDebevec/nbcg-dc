@@ -6,6 +6,7 @@ import {
   getAtPath,
   isPartialDate,
   isUntouched,
+  keptUnit,
   normalizeRecord,
   normalizeValue,
   numberFromText,
@@ -121,6 +122,29 @@ describe("numberFromText / quantityFromText", () => {
     expect(quantityFromText("253", { unit: PAGES })).toEqual({ value: 253, unit: "pages" });
     expect(quantityFromText("", { unit: PAGES })).toBeNull();
     expect(quantityFromText("253", { unit: null })).toBeNull();
+  });
+
+  it("keeps the unit it is given when the rules chose none (a hidden field)", () => {
+    expect(quantityFromText("300", { unit: null }, "minutes")).toEqual({ value: 300, unit: "minutes" });
+    expect(quantityFromText("300", { unit: PAGES }, "minutes")).toEqual({ value: 300, unit: "pages" });
+    expect(quantityFromText("", { unit: null }, "minutes")).toBeNull();
+  });
+});
+
+describe("keptUnit", () => {
+  const snapshotExtent = SNAPSHOT.fields.find((f) => f.key === "extent")!;
+
+  it("is the unit the stored value already has", () => {
+    expect(keptUnit(snapshotExtent, { value: 90, unit: "minutes" })).toBe("minutes");
+  });
+
+  it("falls back to the field's first unit", () => {
+    expect(keptUnit(snapshotExtent, undefined)).toBe("pages");
+    expect(keptUnit({ ...snapshotExtent, unit: { code: "sheets", en: "sheets", cnr: "list." } }, null)).toBe("sheets");
+  });
+
+  it("is null when the field has no unit at all", () => {
+    expect(keptUnit(extent, undefined)).toBeNull();
   });
 });
 

@@ -44,7 +44,7 @@ import {
   type ItemCheck,
   type ItemReadiness,
 } from "@domain/schema-check";
-import { getAtPath, numberFromText, quantityFromText, setAtPath, topKey } from "@domain/schema-values";
+import { getAtPath, keptUnit, numberFromText, quantityFromText, setAtPath, topKey } from "@domain/schema-values";
 import { fieldSourceOptions } from "@domain/provenance";
 import { missingParentNote, type ParentRecord } from "@domain/parent";
 import { buildFieldViews, entryFromHint, toHintView, type FieldView, type HintView } from "./metadataFieldViews";
@@ -352,21 +352,27 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
 
   /** Set a value at a path (`title`, `publication.place`, `authors[1].role`)
    * as an operator edit. A number box's text is stored as a number, a
-   * quantity box's as `{ value, unit }` with the unit the rules chose. */
+   * quantity box's as `{ value, unit }` with the unit the rules chose — or,
+   * hidden in "Other fields" where they choose none, the unit it already had. */
   function setField(path: string, value: unknown): void {
     const c = current.value;
     const s = metadata.schema;
     if (!c || !s || !editable.value) return;
     const field = fieldAtPath(s.fields, path);
     if (!field) return;
+    const key = topKey(path);
     let next = value;
     if (typeof value === "string") {
       if (field.type === "integer" || field.type === "number") next = numberFromText(value);
       else if (field.type === "quantity") {
-        next = quantityFromText(value, check.value?.states[statePathOf(path)] ?? { unit: null });
+        const held = getAtPath(values.value[key]?.value, path.slice(key.length));
+        next = quantityFromText(
+          value,
+          check.value?.states[statePathOf(path)] ?? { unit: null },
+          keptUnit(field, held),
+        );
       }
     }
-    const key = topKey(path);
     const stored = key === path ? next : setAtPath(values.value[key]?.value, path.slice(key.length), next);
     metadata.setFieldValue(c.id, key, stored);
   }
