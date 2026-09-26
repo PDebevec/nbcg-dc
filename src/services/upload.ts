@@ -6,16 +6,24 @@
  * The whole *policy* is in `domain/upload.ts` (pure); this service is the
  * executor that does the I/O in the right order:
  *
- *   preflight → create | replace (metadata) → upload assets (roles + OCR text)
- *   → connect parents → write-through (`metadata.json` + SQLite) → move folder
+ *   new item:  preflight → create with `parentIds` → write-through
+ *              (`metadata.json` + SQLite) → adopt the parents' new versions
+ *              → upload assets (roles + OCR text) → move folder to /processed
+ *   re-upload: preflight → PATCH (changed keys, `null` for emptied ones)
+ *              → write-through → replace / add assets → connect parents
+ *              → adopt the parents' new versions
+ *
+ * A create that collides with an existing record (409) adopts it and goes on
+ * as a re-upload, without clearing any field.
  *
  * Design:
  *  - **Store-free + fully injectable.** Every backend/native primitive is a
  *    field on {@link UploadDeps} that defaults to the real service/IPC — so the
  *    orchestration is unit-testable with in-memory fakes and no Tauri runtime.
  *  - **Never double-create.** An item with a `backendId` always replaces (stable
- *    id); a create-collision (`409`, e.g. a deterministic COBISS id) surfaces as
- *    a distinct `duplicate` outcome rather than an error.
+ *    id); a create-collision (`409`, e.g. a deterministic COBISS id) adopts the
+ *    existing record, or surfaces as a distinct `duplicate` outcome when that
+ *    record can't be resolved.
  *  - **Write-gating is reactive.** No pre-check of scopes — a `403` on
  *    create/upload folds into a `forbidden` outcome with a clear message
  *    (single-user static token; docs/PROJECT-KNOWLEDGE §3).
@@ -26,8 +34,8 @@
  *
  * The reactive run state (progress + per-item results feeding the Upload tab)
  * and the terminal batch-archive (READ-ONLY + release items) are **store
- * coordination** — a future `stores/useUpload` wraps {@link uploadBatch} and, on
- * full success, calls `useBatches.archive()` + refreshes items. This service
+ * coordination** — `stores/useUpload` wraps {@link uploadBatch} and, on full
+ * success, calls `useBatches.archive()` + refreshes items. This service
  * deliberately does not import Pinia. Stays in Jernej's `.ts` lane.
  */
 

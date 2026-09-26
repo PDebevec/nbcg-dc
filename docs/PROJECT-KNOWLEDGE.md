@@ -127,8 +127,8 @@ schema-driven COMARC domain fields.
 **Items** — `src/modules/items`
 | Method / path | Auth | Body → Response |
 |---|---|---|
-| `POST /api/items` | `records:manage` or `drafts:manage` (by `targetState`) | `{ visibilityStatus*, targetState*, metadata? }` → full entity `{id, visibilityStatus, metadata, version:0, createdAt, updatedAt, createdBy…, updatedBy…}`. `metadata.title` required. `cobissId` in metadata ⇒ deterministic id (409 if it exists). **Server force-writes `_source`, `childrenInDrafts:0`, `childrenInRecords:0`, `jeGlavnoGradivo:true` AFTER the client metadata — unsettable; `collectionType` is only a default (`0`) and IS overridable.** |
-| `PATCH /api/items/:id` | manage (by collection) | `{ visibilityStatus?, metadata?, expectedVersion* }` → **always `{ version }`**: the new version on a real change, the **unchanged** one when the payload had nothing to write. **Metadata is SHALLOW-merged** (only sent keys; nested replaced; unknown dropped; no unset). `409` on version mismatch. ✅ **Fixed 2026-08-07** — the no-op early return now sits *after* the existence and version guards, so a wrong `expectedVersion` is always a `409` and the returned version is always authoritative (it used to short-circuit first, returning `200` + an empty body with the version never compared). Metadata of only-unknown keys still sanitises to `{}` and counts as "nothing to write" — no `400`. |
+| `POST /api/items` | `records:manage` or `drafts:manage` (by `targetState`) | `{ visibilityStatus*, targetState*, metadata?, parentIds? }` → full entity `{id, visibilityStatus, metadata, version:0, createdAt, updatedAt, createdBy…, updatedBy…, parents[]}`. `parentIds` links the new item in the same transaction (`400 PARENT_NOT_FOUND` for an unknown id); `parents[]` is each parent's state after the link (`{ parentId, version, childrenInDrafts, childrenInRecords }`, as `relations/connect` returns). The metadata is checked against the schema v2 rules for `targetState` (`400 METADATA_VALIDATION_FAILED`). `cobissId` in metadata ⇒ deterministic id (409 if it exists). **Server force-writes `_source`, `childrenInDrafts:0`, `childrenInRecords:0`, `jeGlavnoGradivo:true` AFTER the client metadata — unsettable; `collectionType` is only a default (`0`) and IS overridable.** |
+| `PATCH /api/items/:id` | manage (by collection) | `{ visibilityStatus?, metadata?, expectedVersion* }` → **always `{ version }`**: the new version on a real change, the **unchanged** one when the payload had nothing to write. **Metadata is SHALLOW-merged** (only sent keys; nested replaced; unknown dropped; a key sent as `null` is removed). The result is checked against the rules for the item's state (`400 METADATA_VALIDATION_FAILED`). `409` on version mismatch. ✅ **Fixed 2026-08-07** — the no-op early return now sits *after* the existence and version guards, so a wrong `expectedVersion` is always a `409` and the returned version is always authoritative (it used to short-circuit first, returning `200` + an empty body with the version never compared). Metadata of only-unknown keys still sanitises to `{}` and counts as "nothing to write" — no `400`. |
 | `POST /api/items/transition` | `records:manage` **and** `drafts:manage` | `{ ids[], targetState }` → **`{ id, version }[]`** (since 2026-08-07; versions are *read back* post-trigger, not computed as +1, because a transitioned item that is itself a parent gets bumped twice). ⚠️ **Not idempotent** — any id already in `targetState` throws `400 Items already in state …` and the whole batch fails. Preserves `id`, re-points attachments, rewrites relation `childType`/`parentType`. |
 | `DELETE /api/items` | manage (per collection touched) | `{ ids[] }` (body on DELETE) → empty. Hard delete, **all-or-nothing** (`404` if any id is missing → nothing deleted). Relations removed first (so the counts trigger fires), attachments cascade, blobs deleted best-effort after commit. |
 | `GET /api/items/stats` | `records:view:hidden` + `drafts:view:hidden` | → `{ records:{PUBLIC,PRIVATE,HIDDEN}, drafts:{…} }`. Only scoped GET. |
@@ -165,7 +165,8 @@ extractedText?, filename, mimeType, sizeBytes, textExtractionStatus, createdAt }
 >
 > **✅ Fixed 2026-08-07:** both endpoints now return the parent's post-write state,
 > so a mirrored parent adopts the new version directly instead of `409`ing on its
-> next `PATCH`. `services/upload` carries these up as
+> next `PATCH`. `POST /api/items` with `parentIds` returns the same states as
+> `parents[]`. `services/upload` carries either up as
 > `ItemUploadResult.parentStates`.
 >
 > Two caveats survive the fix:
@@ -441,21 +442,31 @@ src/
   main.ts                     bootstrap: Pinia + router + boot()
   app/{router,config,boot}.ts 4-rail router; constants; startup (config → connection → batches → jobs → sync)
   domain/                     framework-free vocabulary (imports nothing)
-    enums schema metadata metadata-form config connection naming files item
-    overview batch parent provenance pipeline upload sync
+    enums metadata config connection naming files item overview batch parent
+    provenance pipeline steps upload sync
+    schema                    schema v2 types, captions (LABEL_LANGUAGE)
+    schema-values             values in the stored shape: normalise in, prune out, paths
+    schema-form schema-check  form order + visibility split; the save check + readiness
+    schemaRules.ts            vendored backend evaluator (+ .conformance.json, .schema.json snapshot) —
+                              written by scripts/sync-schema-rules.ps1, never edit by hand
+    schema.fixture.ts         test builders + the snapshot schema (not used by the app)
   services/
     api/client.ts             base client: /api join, Bearer auth, typed ApiError, JSON/multipart/binary, timeout
     api/dto.ts                THE FULL VERIFIED BACKEND CONTRACT — start here for any API work
-    api/{health,schema,cobiss,search,collections,relations,items,files}.ts
+    api/{health,schemaV2,hints,cobiss,search,collections,relations,items,files,deterministicId,index}.ts
     config.ts backend.ts      config + token persistence, root probing, app version; the singleton ApiClient
-    indexing.ts batches.ts    local index ↔ domain Item; batch persistence
-    pipeline.ts upload.ts     the 5-stage run; create/replace + assets + relations + write-through
+    keycloakAuth.ts           Keycloak password grant + token refresh
+    indexing.ts batches.ts    local index ↔ domain Item, metadata.json mirror; batch persistence
+    pipeline.ts upload.ts     the 5-stage run; create (with parentIds) / re-upload + assets + write-through
     sync.ts                   backend → archive refresh (Epic 08)
   ipc/{bindings,events}.ts    typed Rust command/event CONTRACT (Arch implements; tauri-specta will regenerate)
   stores/                     useSettings useConnection useToasts useItems useBatches
-                              useBatchWork useProcessing useSync
-  composables/                useOverview useBatch useBatches   (the rest deferred with the GUI)
+                              useBatchWork useProcessing useSync useMetadata useUpload
+  composables/                useOverview useBatch useBatches useBatchSetup useMetadataForm
+                              metadataFieldViews useParentLinks useProcessing useConnection
+                              useSettingsScreen useSyncScreen useToasts
   lib/logger.ts
+  views/ components/ design/  the GUI (.vue files import only @composables, @ui, @domain types)
 ```
 
 > ### ⚠️ Real scans are JPG, and that broke the pipeline's input classification
@@ -603,8 +614,10 @@ Two concrete follow-ups Epic 09 left behind, both in Epic 07's upload flow —
 
 - ~~Re-read or invalidate a locally-tracked parent's `version` after
   `connectParents`~~ — **done.** `services/upload.applyParentStates` adopts the
-  version the connect response already carries (no re-read; the relation edge is
-  CDC-lagged independently of the item, so a read-back would not work anyway).
+  version the connect response already carries — or, for a new item created
+  with `parentIds`, the create response's `parents[]`, adopted before its files
+  upload (no re-read; the relation edge is CDC-lagged independently of the item,
+  so a read-back would not work anyway).
   Guarded by `domain/sync.resolveVersion` so a version never moves backwards.
 - Filter the batch before any `transitionItems` call — **no call site exists.**
   Nothing in the archive calls `transitionItems`; publish target is chosen at
@@ -676,7 +689,11 @@ Added by Epic 09 (2026-08-07), all verified against the backend source:
     integration gap; no task filed.
 16. **Replacing a file wipes its text unless `extractedText` is re-sent**, and an
     empty-string `extractedTexts` entry on upload does *not* suppress Tika.
-17. **Schema `required` is a UI hint** — only a non-empty `title` is enforced.
+17. **The backend enforces the schema v2 rules on every write** — a create or
+    PATCH whose metadata misses a required field or breaks a constraint for the
+    state the item ends up in is `400 METADATA_VALIDATION_FAILED` (one entry per
+    field; the app shows them by field). The app runs the same rules first
+    (`domain/schemaRules.ts`), so this is mostly a backstop.
 ```
 
 ---

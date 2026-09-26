@@ -450,7 +450,8 @@ function valueEquals(a: unknown, b: unknown): boolean {
  * keys a PATCH should send (the backend shallow-merges what it receives; sending
  * unchanged keys is wasteful and, for a no-op, avoidable). A key present in
  * `next` but absent in `prev` counts as changed; a key only in `prev` is NOT
- * emitted (the backend cannot unset a key — docs/PROJECT-KNOWLEDGE §4).
+ * emitted here — the PATCH removes a key sent as `null`, and only the keys the
+ * operator emptied are cleared that way ({@link keysToClear}, {@link changedMetadata}).
  */
 export function changedMetadataKeys(
   next: Record<string, unknown>,
@@ -582,9 +583,9 @@ export function parentNotFoundIds(body: unknown): string[] | null {
 
 /**
  * The fully-decided, I/O-free plan for uploading one item. `services/upload.ts`
- * executes it: read each group's file bytes, read each text pair, then create /
- * replace + upload + connect. When `blockers` is non-empty the item must not be
- * uploaded (the summary shows why).
+ * executes it: create (with its parents) or replace + connect, and upload each
+ * group's files with their texts. When `blockers` is non-empty the item must
+ * not be uploaded (the summary shows why).
  */
 export interface ItemUploadPlan {
   itemId: string;

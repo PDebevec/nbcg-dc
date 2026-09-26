@@ -75,8 +75,8 @@ export interface CreateItemDto {
  * PATCH /api/items/:id body. `expectedVersion` is REQUIRED (`@IsInt() @Min(0)`,
  * optimistic concurrency → 409 on mismatch). `metadata` is SHALLOW-merged
  * (`{ ...existing, ...sanitized }`): only the keys sent are written; nested
- * objects/arrays are replaced wholesale; unknown keys are dropped; there is no
- * way to unset a key. Send ONLY changed fields.
+ * objects/arrays are replaced wholesale; unknown keys are dropped; a key sent
+ * as `null` is removed. Send ONLY changed fields (and `null` for cleared ones).
  *
  * **FIXED BACKEND-SIDE 2026-08-07** (`nbcg/todo/backend-patch-noop-skips-404-and-409.md`).
  * The no-op early return used to sit *before* the existence and version guards,
