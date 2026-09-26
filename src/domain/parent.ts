@@ -221,6 +221,22 @@ export function missingParentMessage(names: readonly string[], gone: boolean): s
   return `${subject} can't be found on the backend. Change or remove ${it} in this batch — if ${one ? "it was" : "they were"} only just created, try again in a minute.`;
 }
 
+/** The names of a batch's parents that are not on the backend, by how the app knows. */
+export interface MissingParentNames {
+  /** The backend refused them on a write (`PARENT_NOT_FOUND`) — authoritative. */
+  gone: string[];
+  /** Search answered 404 — possibly only the index lagging. */
+  notFound: string[];
+}
+
+/** {@link missingParentMessage} for both kinds, each in its own wording; '' when none is missing. */
+export function missingParentNote(names: MissingParentNames): string {
+  const parts: string[] = [];
+  if (names.gone.length > 0) parts.push(missingParentMessage(names.gone, true));
+  if (names.notFound.length > 0) parts.push(missingParentMessage(names.notFound, false));
+  return parts.join(" ");
+}
+
 /**
  * Whether linking `childId` under `parentId` would create a cycle — i.e. the
  * proposed parent is already a descendant of (reachable from) the child. The

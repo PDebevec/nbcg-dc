@@ -57,6 +57,9 @@ const metadataFake = {
   saving: ref(new Set<string>()),
   parentRecords: ref(new Map()),
   parentLoading: ref(new Set<string>()),
+  parentGone: ref(new Set<string>()),
+  parentMissing: ref(new Set<string>()),
+  parentFailed: ref(new Set<string>()),
   fields: [],
   ensureItemLoaded: async () => {},
   checkOf: () => null,
@@ -88,6 +91,10 @@ const { useBatchesStore } = await import("@stores/useBatches");
 beforeEach(() => {
   setActivePinia(createPinia());
   uploadFake.activeBatchId = null;
+  metadataFake.parentRecords.value = new Map();
+  metadataFake.parentGone.value = new Set();
+  metadataFake.parentMissing.value = new Set();
+  metadataFake.parentFailed.value = new Set();
 });
 
 describe("editable", () => {
@@ -125,5 +132,37 @@ describe("editable", () => {
 
     expect(view.editable.value).toBe(true);
     expect(view.uploadingNote.value).toBe("");
+  });
+});
+
+describe("parent rows", () => {
+  function record(id: string) {
+    return { id, title: `Parent ${id}`, collectionType: null, metadata: {} };
+  }
+
+  it("say why a parent is missing before its cached record's own type", () => {
+    const batches = useBatchesStore();
+    batches.batches = [
+      makeBatch([], {
+        parents: ["gone", "notFound", "failed", "ok"].map((id) => ({ id, passesData: false })),
+      }),
+    ];
+    // The gone parent had loaded before the upload refused it: its record stays cached.
+    metadataFake.parentRecords.value = new Map([
+      ["gone", record("gone")],
+      ["ok", record("ok")],
+    ]);
+    metadataFake.parentGone.value = new Set(["gone"]);
+    metadataFake.parentMissing.value = new Set(["notFound"]);
+    metadataFake.parentFailed.value = new Set(["failed"]);
+
+    const view = useMetadataForm(() => "b1");
+
+    expect(view.parents.value.map((p) => p.typeLabel)).toEqual([
+      "No longer exists",
+      "Not found on backend",
+      "Couldn't load",
+      "Record",
+    ]);
   });
 });

@@ -14,6 +14,7 @@ import {
   collectAncestors,
   wouldCreateCycle,
   missingParentMessage,
+  missingParentNote,
 } from "./parent";
 
 const SERIAL_TYPES = [5, 7];
@@ -228,5 +229,19 @@ describe("missingParentMessage", () => {
     expect(missingParentMessage(["A", "B"], true)).toBe(
       "The parents 'A', 'B' no longer exist. Change or remove them in this batch, then upload again.",
     );
+  });
+});
+
+describe("missingParentNote", () => {
+  it("words each parent by how the app knows it is missing", () => {
+    expect(missingParentNote({ gone: ["A"], notFound: [] })).toBe(missingParentMessage(["A"], true));
+    expect(missingParentNote({ gone: [], notFound: ["B"] })).toBe(missingParentMessage(["B"], false));
+    expect(missingParentNote({ gone: ["A"], notFound: ["B"] })).toBe(
+      `${missingParentMessage(["A"], true)} ${missingParentMessage(["B"], false)}`,
+    );
+  });
+
+  it("is empty when no parent is missing", () => {
+    expect(missingParentNote({ gone: [], notFound: [] })).toBe("");
   });
 });

@@ -152,8 +152,8 @@ const metadataFake = {
   isReady(): boolean {
     return metadataFake.ready;
   },
-  missingParentNamesOf(): string[] {
-    return [];
+  missingParentNamesOf(): { gone: string[]; notFound: string[] } {
+    return { gone: [], notFound: [] };
   },
   emptiedKeys(): string[] {
     return [];

@@ -546,13 +546,42 @@ describe("upload request chunking (backend caps files per request)", () => {
 
 describe("missing parents", () => {
   it("blocks every item while a batch parent can't be found", () => {
-    const blockers = uploadBlockers(makeItem(), { metadataReady: true, primaryThumbnail: null, missingParents: ["Old maps"] });
-    expect(blockers.map((b) => b.code)).toContain("parent-missing");
+    const blockers = uploadBlockers(makeItem(), {
+      metadataReady: true,
+      primaryThumbnail: null,
+      missingParents: { gone: [], notFound: ["Old maps"] },
+    });
+    const blocker = blockers.find((b) => b.code === "parent-missing");
+    expect(blocker?.message).toContain("can't be found");
+  });
+
+  it("says a parent the backend refused on upload no longer exists", () => {
+    const blockers = uploadBlockers(makeItem(), {
+      metadataReady: true,
+      primaryThumbnail: null,
+      missingParents: { gone: ["Old maps"], notFound: [] },
+    });
+    const blocker = blockers.find((b) => b.code === "parent-missing");
+    expect(blocker?.message).toContain("no longer exists");
+  });
+
+  it("does not block when every parent is there", () => {
+    const blockers = uploadBlockers(makeItem(), {
+      metadataReady: true,
+      primaryThumbnail: null,
+      missingParents: { gone: [], notFound: [] },
+    });
+    expect(blockers.map((b) => b.code)).not.toContain("parent-missing");
   });
 
   it("reads the ids out of a PARENT_NOT_FOUND body", () => {
     expect(parentNotFoundIds({ code: "PARENT_NOT_FOUND", parentIds: ["p1"] })).toEqual(["p1"]);
     expect(parentNotFoundIds({ message: "Bad Request" })).toBeNull();
+  });
+
+  it("reads a PARENT_NOT_FOUND body that names no parent as no answer", () => {
+    expect(parentNotFoundIds({ code: "PARENT_NOT_FOUND", parentIds: [] })).toBeNull();
+    expect(parentNotFoundIds({ code: "PARENT_NOT_FOUND", parentIds: [42] })).toBeNull();
   });
 });
 

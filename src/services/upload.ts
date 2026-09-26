@@ -70,7 +70,7 @@ import type {
 import type { Item } from "@domain/item";
 import type { DiscoveredAsset } from "@domain/files";
 import { isMangledFilename, isSameUploadedFilename } from "@domain/naming";
-import { missingParentMessage } from "@domain/parent";
+import { missingParentMessage, type MissingParentNames } from "@domain/parent";
 import { resolveVersion } from "@domain/sync";
 import {
   changedMetadata,
@@ -200,8 +200,8 @@ export interface UploadItemContext {
   metadataReady: boolean;
   /** The chosen primary-thumbnail filename, or null. */
   primaryThumbnail: string | null;
-  /** Names of batch parents search could not find (a blocker). */
-  missingParents?: string[];
+  /** Names of batch parents that are not on the backend (a blocker). */
+  missingParents?: MissingParentNames;
   /** Schema keys the operator emptied; a re-upload clears them on the backend. */
   emptied?: string[];
 }

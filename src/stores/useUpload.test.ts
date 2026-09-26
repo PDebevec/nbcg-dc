@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
 import { BatchStage, newBatchFields, type Batch } from "@domain/batch";
-import { ItemState } from "@domain/item";
-import type { ItemUploadResult } from "@services/upload";
+import { ItemState, type Item } from "@domain/item";
+import { missingParentMessage } from "@domain/parent";
+import type { ItemUploadResult, UploadItemContext } from "@services/upload";
 
 // ── fixtures ─────────────────────────────────────────────────────────────
 
@@ -25,9 +26,20 @@ vi.mock("@services/api/items", async (importOriginal) => {
   return { ...actual, deleteItems: vi.fn().mockRejectedValue(new Error("boom")) };
 });
 
+// `run` is driven with a scripted outcome: the real `uploadBatch` needs the
+// backend and Tauri. Everything else in the module stays real — the cleanup
+// suite below goes through the genuine `cleanupUnfinishedRecords`.
+vi.mock("@services/upload", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@services/upload")>();
+  return { ...actual, uploadBatch: vi.fn() };
+});
+
 const { useUploadStore } = await import("./useUpload");
 const { useBatchesStore } = await import("./useBatches");
+const { useItemsStore } = await import("./useItems");
+const { useMetadataStore } = await import("./useMetadata");
 const { deleteItems } = await import("@services/api/items");
+const { uploadBatch } = await import("@services/upload");
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -177,5 +189,55 @@ describe("useUpload.closeBatch — cleanup", () => {
 
     expect(deleteItems).toHaveBeenCalledWith({ ids: ["b2"] });
     expect(store.error).toBeNull();
+  });
+});
+
+describe("useUpload.run", () => {
+  const item = { id: "i1", batchId: "b1", folderName: "i1", folderPath: "/p/i1" } as Item;
+  const ctx: UploadItemContext = {
+    targetState: "DRAFT",
+    visibility: "PRIVATE",
+    parentIds: ["p1"],
+    metadataReady: true,
+    primaryThumbnail: null,
+  };
+
+  function outcome(over: Partial<ItemUploadResult> = {}): ItemUploadResult {
+    return {
+      itemId: "i1",
+      status: "uploaded",
+      backendId: "rec_1",
+      created: false,
+      blockers: [],
+      warnings: [],
+      fieldErrors: [],
+      metadataRejected: false,
+      relationErrors: [],
+      parentStates: [],
+      missingParentIds: [],
+      message: null,
+      ...over,
+    };
+  }
+
+  beforeEach(() => {
+    vi.spyOn(useItemsStore(), "refresh").mockResolvedValue();
+  });
+
+  it("marks the parents the backend refused as gone, and says they no longer exist", async () => {
+    const metadata = useMetadataStore();
+    metadata.rememberParent({ id: "p1", title: "Pobjeda", collectionType: null, metadata: {} });
+    vi.mocked(uploadBatch).mockResolvedValueOnce({
+      results: [outcome({ status: "error", missingParentIds: ["p1"] })],
+      allUploaded: false,
+      missingParentIds: ["p1"],
+    });
+    const store = useUploadStore();
+
+    const ok = await store.run("b1", [item], () => ctx);
+
+    expect(ok).toBe(false);
+    expect(metadata.parentGone.has("p1")).toBe(true);
+    expect(store.error).toBe(missingParentMessage(["Pobjeda"], true));
   });
 });

@@ -66,7 +66,8 @@ export function useParentLinks(
   const metadata = useMetadataStore();
   const settings = useSettingsStore();
   const toasts = useToastsStore();
-  const { parentRecords, parentLoading } = storeToRefs(metadata);
+  const { parentRecords, parentLoading, parentGone, parentMissing, parentFailed } =
+    storeToRefs(metadata);
   const { config } = storeToRefs(settings);
 
   const dataPassingTypes = computed(() => config.value.dataPassingCollectionTypes);
@@ -88,9 +89,15 @@ export function useParentLinks(
     { immediate: true },
   );
 
+  /** Why a parent is not usable comes first: a parent the upload was refused
+   * for keeps its cached record, which would otherwise read as fine. */
   function typeLabelFor(link: LinkedParent): string {
+    const id = link.parentId;
+    if (parentGone.value.has(id)) return "No longer exists";
+    if (parentMissing.value.has(id)) return "Not found on backend";
+    if (parentFailed.value.has(id)) return "Couldn't load";
     if (link.record) return link.eligible ? "Serial" : "Record";
-    return parentLoading.value.has(link.parentId) ? "Loading…" : "Not found on backend";
+    return parentLoading.value.has(id) ? "Loading…" : "Not found on backend";
   }
 
   const parents = computed<ParentRowView[]>(() =>

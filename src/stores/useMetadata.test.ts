@@ -97,7 +97,40 @@ describe("useMetadataStore on schema v2", () => {
     store.setFieldValue("i1", "title", "T");
     store.setFieldValue("i1", "materialType", BOOK);
     expect(store.batchParentsOf(item()).missing).toEqual(["gone"]);
+    expect(store.missingParentNamesOf(item())).toEqual({ gone: [], notFound: ["gone"] });
     expect(store.isReady(item())).toBe(false);
+  });
+
+  it("holds a parent the backend refused on upload as gone, though its record had loaded", async () => {
+    batch.parents = [{ id: "p1", passesData: false }];
+    backendParents.set("p1", { id: "p1", title: "Pobjeda", collectionType: null, metadata: {} });
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    await store.ensureParents(["p1"]);
+    store.setFieldValue("i1", "title", "T");
+    store.setFieldValue("i1", "materialType", BOOK);
+    expect(store.isReady(item())).toBe(true);
+
+    store.markParentsGone(["p1"]);
+
+    expect(store.isReady(item())).toBe(false);
+    expect(store.missingParentNamesOf(item())).toEqual({ gone: ["Pobjeda"], notFound: [] });
+    expect(store.batchParentsOf(item())).toMatchObject({ records: [], gone: ["p1"], missing: [] });
+  });
+
+  it("keeps a gone parent gone when a later search finds it", async () => {
+    batch.parents = [{ id: "p1", passesData: false }];
+    const pobjeda = { id: "p1", title: "Pobjeda", collectionType: null, metadata: {} };
+    backendParents.set("p1", pobjeda);
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    await store.ensureParents(["p1"]);
+    store.markParentsGone(["p1"]);
+
+    store.rememberParent(pobjeda);
+
+    expect(store.batchParentsOf(item()).gone).toEqual(["p1"]);
+    expect(store.parentGone.has("p1")).toBe(true);
   });
 
   it("keeps the form open but not ready while a batch parent failed to load", async () => {

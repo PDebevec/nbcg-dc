@@ -30,7 +30,7 @@ import type { Item } from "@domain/item";
 import type { FieldV2, RecordSchemaV2 } from "@domain/schema";
 import type { TargetState } from "@domain/schemaRules";
 import type { LocalMetadataFile, MetadataValues } from "@domain/metadata";
-import type { ParentRecord } from "@domain/parent";
+import type { MissingParentNames, ParentRecord } from "@domain/parent";
 import { resolveItemPublish } from "@domain/batch";
 import { orderedFields } from "@domain/schema-form";
 import { checkItem, type ItemCheck, type ItemReadiness } from "@domain/schema-check";
@@ -58,9 +58,12 @@ const SAVE_DEBOUNCE_MS = 800;
 
 /** A batch's parents as far as this session knows them. */
 export interface BatchParents {
-  /** The parents whose records have loaded. */
+  /** The parents whose records have loaded (and that are not gone). */
   records: ParentRecord[];
-  /** Ids the backend answered 404 for. */
+  /** Ids the backend refused on an upload (`PARENT_NOT_FOUND`) — authoritative,
+   * even when the record had loaded before. */
+  gone: string[];
+  /** Ids search answered 404 for. */
   missing: string[];
   /** Ids whose fetch failed without proving they are gone (e.g. offline). */
   failed: string[];
@@ -333,17 +336,20 @@ export const useMetadataStore = defineStore("metadata", () => {
   /** The item's batch's parents, as far as this session knows them. */
   function batchParentsOf(item: Item): BatchParents {
     const records: ParentRecord[] = [];
+    const gone: string[] = [];
     const missing: string[] = [];
     const failed: string[] = [];
     let pending = false;
     for (const id of batchParentIds(item)) {
+      // Gone first: the record loaded when the editor opened stays cached.
       const record = parentRecords.value.get(id);
-      if (record) records.push(record);
+      if (parentGone.value.has(id)) gone.push(id);
+      else if (record) records.push(record);
       else if (parentMissing.value.has(id)) missing.push(id);
       else if (parentFailed.value.has(id)) failed.push(id);
       else pending = true;
     }
-    return { records, missing, failed, pending };
+    return { records, gone, missing, failed, pending };
   }
 
   /** Whose rules apply to the item and what they still need — null while the
@@ -369,12 +375,15 @@ export const useMetadataStore = defineStore("metadata", () => {
     const check = checkOf(item);
     if (check == null || !check.ok) return false;
     const parents = batchParentsOf(item);
-    return parents.missing.length === 0 && parents.failed.length === 0;
+    return parents.gone.length === 0 && parents.missing.length === 0 && parents.failed.length === 0;
   }
 
-  /** Names of the item's batch parents the backend answered 404 for. */
-  function missingParentNamesOf(item: Item): string[] {
-    return batchParentsOf(item).missing.map((id) => parentRecords.value.get(id)?.title ?? id);
+  /** Names of the item's batch parents that are not on the backend: gone
+   * (refused on an upload) and not found (search 404). Either blocks. */
+  function missingParentNamesOf(item: Item): MissingParentNames {
+    const parents = batchParentsOf(item);
+    const nameOf = (id: string) => parentRecords.value.get(id)?.title ?? id;
+    return { gone: parents.gone.map(nameOf), notFound: parents.missing.map(nameOf) };
   }
 
   function readinessOf(item: Item): ItemReadiness {
@@ -425,6 +434,10 @@ export const useMetadataStore = defineStore("metadata", () => {
   // ── parent records (shared cache) ─────────────────────────────────────────
   const parentRecords = ref<Map<string, ParentRecord>>(new Map());
   const parentLoading = ref<Set<string>>(new Set());
+  /** Parents the backend refused on an upload (`PARENT_NOT_FOUND`). Authoritative:
+   * their cached record stays (it names them) and a later search hit does not
+   * bring them back. */
+  const parentGone = ref<Set<string>>(new Set());
   /** Parents the backend answered 404 for (search; see `domain/parent`). */
   const parentMissing = ref<Set<string>>(new Set());
   /** Parents whose last fetch failed without an answer (e.g. offline); a later
@@ -440,12 +453,20 @@ export const useMetadataStore = defineStore("metadata", () => {
     return next;
   }
 
+  /** Cache a parent's record. It clears a search 404 or a failed fetch, never gone. */
   function rememberParent(record: ParentRecord): void {
     const map = new Map(parentRecords.value);
     map.set(record.id, record);
     parentRecords.value = map;
     parentMissing.value = without(parentMissing.value, record.id);
     parentFailed.value = without(parentFailed.value, record.id);
+  }
+
+  /** The backend refused these parents on an upload (`PARENT_NOT_FOUND`). */
+  function markParentsGone(ids: readonly string[]): void {
+    const next = new Set(parentGone.value);
+    for (const id of ids) next.add(id);
+    parentGone.value = next;
   }
 
   function markParentsMissing(ids: readonly string[]): void {
@@ -542,9 +563,10 @@ export const useMetadataStore = defineStore("metadata", () => {
     // parents
     parentRecords,
     parentLoading,
+    parentGone,
     parentMissing,
     parentFailed,
-    markParentsMissing,
+    markParentsGone,
     ensureParent,
     ensureParents,
     findParents,

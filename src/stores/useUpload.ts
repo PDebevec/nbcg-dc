@@ -137,7 +137,7 @@ export const useUploadStore = defineStore("upload", () => {
       for (const res of outcome.results) setResult(batchId, res);
       if (outcome.missingParentIds.length > 0) {
         const metadata = useMetadataStore();
-        metadata.markParentsMissing(outcome.missingParentIds);
+        metadata.markParentsGone(outcome.missingParentIds);
         const names = outcome.missingParentIds.map((id) => metadata.parentRecords.get(id)?.title ?? id);
         error.value = missingParentMessage(names, true);
       }

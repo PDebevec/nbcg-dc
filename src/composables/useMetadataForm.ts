@@ -46,7 +46,7 @@ import {
 } from "@domain/schema-check";
 import { getAtPath, numberFromText, quantityFromText, setAtPath, topKey } from "@domain/schema-values";
 import { fieldSourceOptions } from "@domain/provenance";
-import { missingParentMessage, type ParentRecord } from "@domain/parent";
+import { missingParentNote, type ParentRecord } from "@domain/parent";
 import { buildFieldViews, entryFromHint, toHintView, type FieldView, type HintView } from "./metadataFieldViews";
 import { derivedOutputNames } from "@domain/naming";
 import { fetchCobissPreview, cobissCollisionMessage } from "@services/api/cobiss";
@@ -337,11 +337,11 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
     return b ? metadata.ensureParents(b.parents.map((p) => p.id)) : Promise.resolve();
   }
 
-  /** One banner when a batch parent can't be found (it blocks every item). */
+  /** One banner when a batch parent is not on the backend (it blocks every
+   * item): "no longer exists" once an upload was refused, else "can't be found". */
   const parentBanner = computed(() => {
     const c = current.value;
-    const names = c ? metadata.missingParentNamesOf(c) : [];
-    return names.length > 0 ? missingParentMessage(names, false) : "";
+    return c ? missingParentNote(metadata.missingParentNamesOf(c)) : "";
   });
 
   const isLast = computed(() => index.value >= items.value.length - 1);
