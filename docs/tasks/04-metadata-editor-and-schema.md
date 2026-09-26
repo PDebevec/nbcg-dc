@@ -1,6 +1,10 @@
 # Epic 04 — Metadata editor & schema
 
 > Depends on: 01, 03, 09 · Blocks: 05, 06, 07
+>
+> **Schema v2, 2026-09-26.** Parts of this epic describe schema v1 and the hand-set
+> main/child level, which are gone. The current behaviour is in
+> [metadata-schema-v2.md](metadata-schema-v2.md).
 > Logic-lane (`.ts`) pass: **2026-08-04** — schema backend service + the pure
 > schema→form/validation/pruning rules landed (see **Progress** below). The GUI
 > (`.vue`) form + the metadata working-model store/composable are the remaining

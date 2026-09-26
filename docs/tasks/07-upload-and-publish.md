@@ -1,6 +1,11 @@
 # Epic 07 — Upload & publish
 
 > Depends on: 02, 03, 04, 05, 06, 09 · Blocks: — (closes the loop)
+>
+> **Schema v2, 2026-09-26.** New items are now created with `parentIds` (no connect),
+> a re-upload clears emptied fields, and `PARENT_NOT_FOUND` / `METADATA_VALIDATION_FAILED`
+> are handled. The current behaviour is in
+> [metadata-schema-v2.md](metadata-schema-v2.md).
 
 Goal: the **Upload** half of the Processing & Upload tab — turn a processed,
 described batch into records/drafts on the backend (single source of truth),

@@ -101,7 +101,7 @@ Start with [00-project-overview](../00-project-overview.md) →
 | 01 | [App shell & navigation](01-app-shell.md) | Tauri/Vue skeleton, 4-destination rail, router, config, auth | — |
 | 02 | [Overview & local index](02-overview-and-index.md) | Arrivals table, filters, selection scoping, state machine, SQLite index | 01 |
 | 03 | [Batches & lifecycle](03-batches-and-lifecycle.md) | Batch model (local), Batches list, create/open, 3-tab shell, single-run lock | 01, 02 |
-| 04 | [Metadata editor & schema](04-metadata-editor-and-schema.md) | Metadata tab, dynamic form, main/child schema, navigator, validation, files strip | 01, 03, 09 |
+| 04 | [Metadata editor & schema](04-metadata-editor-and-schema.md) — now on [schema v2](metadata-schema-v2.md) | Metadata tab, dynamic form, rules-driven schema, navigator, validation, files strip | 01, 03, 09 |
 | 05 | [COBISS, parents & provenance](05-cobiss-parents-and-provenance.md) ✅ *(logic lane)* | Setup tab, COBISS prefill, parent linking, provenance + per-field source | 03, 04, 08, 09 |
 | 06 | [Processing pipeline & jobs](06-processing-pipeline-and-jobs.md) | 5-stage pipeline, job runner, Processing tab, rerun, dirty flag | 01, 02, 03, 04 |
 | 07 | [Upload & publish](07-upload-and-publish.md) | Upload tab, create+assets+parents, visibility, write-through, re-upload | 02, 03, 04, 05, 06, 09 |

@@ -1,6 +1,10 @@
 # Epic 05 — COBISS, parents & provenance
 
 > Depends on: 03, 04, 08, 09 · Blocks: 07
+>
+> **Schema v2, 2026-09-26.** The ingestion case and the item's role now come from the
+> batch's parents, not a hand-set main/child level. The current behaviour is in
+> [metadata-schema-v2.md](metadata-schema-v2.md).
 
 Goal: the automation that makes the common cases near-zero-typing — the batch
 **Setup tab**, COBISS prefill, parent linking, the serial-issue flow, and the

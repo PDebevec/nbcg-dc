@@ -1,6 +1,6 @@
 # Metadata schema v2 in the archive app: design
 
-Date: 2026-09-25 · Status: proposed, waiting for review
+Date: 2026-09-25 · Status: implemented on branch `schema-v2` (2026-09-26) — what was built, the checks run and the follow-ups are in [`docs/tasks/metadata-schema-v2.md`](../../tasks/metadata-schema-v2.md)
 
 ## Source of truth
 
