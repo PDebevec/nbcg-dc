@@ -8,6 +8,13 @@ const mirrors = new Map<string, LocalMetadataFile | null>();
 const backendParents = new Map<string, { id: string; title: string; collectionType: number | null; metadata: Record<string, unknown> }>();
 /** Parent ids whose fetch throws (offline), as opposed to a 404. */
 const unreachableParents = new Set<string>();
+/** Folder paths no longer on disk (an upload moved them to /processed). */
+const movedFolders = new Set<string>();
+/** Item ids whose metadata.json read throws. */
+const unreadableMirrors = new Set<string>();
+const writeMirror = vi.fn(async (item: Item, file: LocalMetadataFile) => {
+  mirrors.set(item.id, file);
+});
 const batch = {
   id: "b1",
   parents: [] as Array<{ id: string; passesData: boolean }>,
@@ -17,10 +24,12 @@ const batch = {
 
 vi.mock("@services/api/schemaV2", () => ({ getRecordSchemaV2: async () => SNAPSHOT }));
 vi.mock("@services/indexing", () => ({
-  readItemMetadata: async (item: Item) => mirrors.get(item.id) ?? null,
-  writeItemMetadata: async (item: Item, file: LocalMetadataFile) => {
-    mirrors.set(item.id, file);
+  readItemMetadata: async (item: Item) => {
+    if (unreadableMirrors.has(item.id)) throw new Error("read failed");
+    return mirrors.get(item.id) ?? null;
   },
+  writeItemMetadata: (item: Item, file: LocalMetadataFile) => writeMirror(item, file),
+  itemFolderExists: async (item: Item) => !movedFolders.has(item.folderPath),
 }));
 vi.mock("@services/api/collections", () => ({
   getParentById: async (id: string) => {
@@ -48,6 +57,9 @@ beforeEach(() => {
   mirrors.clear();
   backendParents.clear();
   unreachableParents.clear();
+  movedFolders.clear();
+  unreadableMirrors.clear();
+  writeMirror.mockClear();
   batch.parents = [];
   batch.publish = "DRAFT";
   batch.overrides = {};
@@ -205,5 +217,66 @@ describe("reloadMirror", () => {
     });
     await store.reloadMirrors([{ ...item(), folderPath: "/processed/i1" }]);
     expect(store.backendStates.get("i1")).toBe("DRAFT");
+  });
+});
+
+describe("autosave", () => {
+  const LINKED: LocalMetadataFile = {
+    backendId: "rec_1",
+    version: 0,
+    targetState: "RECORD",
+    visibilityStatus: "PRIVATE",
+    metadata: { title: "T" },
+    syncedAt: "2026-09-25T00:00:00.000Z",
+  };
+
+  it("writes an item that is not uploaded yet to its metadata.json", async () => {
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    store.setFieldValue("i1", "title", "Mine");
+    await store.flush();
+    expect(writeMirror).toHaveBeenCalledTimes(1);
+    expect(mirrors.get("i1")).toMatchObject({ backendId: null, metadata: { title: "Mine" } });
+  });
+
+  it("does not write over a mirror an upload linked meanwhile, and picks up its state", async () => {
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    store.setFieldValue("i1", "title", "Mine");
+    // The upload wrote the backend link while Setup was still editable.
+    mirrors.set("i1", LINKED);
+
+    await store.flush();
+
+    expect(writeMirror).not.toHaveBeenCalled();
+    expect(mirrors.get("i1")).toBe(LINKED);
+    expect(store.backendStates.get("i1")).toBe("RECORD");
+    expect(store.plainValues("i1").title).toBe("Mine");
+  });
+
+  it("does not write when the upload moved the item's folder away", async () => {
+    mirrors.set("i1", { ...LINKED, backendId: null, version: null, targetState: null });
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    store.setFieldValue("i1", "title", "Mine");
+    mirrors.delete("i1");
+    movedFolders.add("/p/i1");
+
+    await store.flush();
+
+    expect(writeMirror).not.toHaveBeenCalled();
+    expect(store.plainValues("i1").title).toBe("Mine");
+  });
+
+  it("does not write when metadata.json can't be re-read", async () => {
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    store.setFieldValue("i1", "title", "Mine");
+    unreadableMirrors.add("i1");
+
+    await store.flush();
+
+    expect(writeMirror).not.toHaveBeenCalled();
+    expect(store.plainValues("i1").title).toBe("Mine");
   });
 });

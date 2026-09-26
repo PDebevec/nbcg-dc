@@ -141,6 +141,15 @@ export function readItemMetadata(item: Item): Promise<LocalMetadataFile | null> 
   return ipc.fs.readMetadata(item.folderPath);
 }
 
+/**
+ * Whether an item's folder is still where the item says. Reading the mirror of
+ * a folder an upload has just moved to `/processed` gives null (as for a folder
+ * with no `metadata.json`), so this is how a caller tells the two apart.
+ */
+export function itemFolderExists(item: Item): Promise<boolean> {
+  return ipc.fs.pathExists(item.folderPath);
+}
+
 /** Write an item's `metadata.json` mirror (write-through; Epics 07 & 08). */
 export function writeItemMetadata(
   item: Item,

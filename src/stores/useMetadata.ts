@@ -48,7 +48,7 @@ import {
 } from "@domain/provenance";
 import { getRecordSchemaV2 } from "@services/api/schemaV2";
 import { getParentById, searchParents } from "@services/api/collections";
-import { readItemMetadata, writeItemMetadata } from "@services/indexing";
+import { itemFolderExists, readItemMetadata, writeItemMetadata } from "@services/indexing";
 import { logger } from "@lib/logger";
 import { useBatchesStore } from "./useBatches";
 import { useItemsStore } from "./useItems";
@@ -251,12 +251,33 @@ export const useMetadataStore = defineStore("metadata", () => {
   /**
    * Write an item's working values to its `metadata.json` — only for items not
    * yet connected to a backend record (see the module doc).
+   *
+   * The disk copy is read again first: Setup stays editable during an upload,
+   * and the cached mirror is only reloaded when the run ends. An item the run
+   * already linked is adopted from disk, never written back as unlinked; one
+   * whose folder the run moved is not written at all. Either way the values
+   * stay in memory.
    */
   async function saveItem(itemId: string): Promise<void> {
     const item = knownItems.get(itemId);
     if (!item || !loadedItems.value.has(itemId)) return;
     const mirror = mirrors.get(itemId) ?? null;
     if (mirror?.backendId) return; // connected → in-memory working copy only
+    let disk: LocalMetadataFile | null;
+    try {
+      disk = await readItemMetadata(item);
+      if (!disk && !(await itemFolderExists(item))) {
+        logger.warn("metadata", `The folder of ${itemId} moved; its edits stay in memory.`);
+        return;
+      }
+    } catch (err) {
+      logger.warn("metadata", `Couldn't re-read metadata.json for ${itemId}; its edits stay in memory.`, err);
+      return;
+    }
+    if (disk?.backendId) {
+      rememberMirror(itemId, disk);
+      return;
+    }
     const metadata = wireMetadata(itemId);
     const file: LocalMetadataFile = {
       backendId: null,
