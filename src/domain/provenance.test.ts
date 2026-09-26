@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { FieldDescriptor } from "./schema";
+import { fieldV2 } from "./schema.fixture";
 import type { MetadataValues } from "./metadata";
 import type { ParentRecord } from "./parent";
 import {
@@ -19,25 +19,12 @@ import {
   toMetadataValues,
 } from "./provenance";
 
-function field(over: Partial<FieldDescriptor> & { key: string }): FieldDescriptor {
-  return {
-    type: "string",
-    required: false,
-    group: "basic",
-    order: 0,
-    parentInheritable: false,
-    issueIdentifying: false,
-    levels: ["main", "child"],
-    ...over,
-  };
-}
-
 // A child (serial issue) field set: shared parent fields + per-issue fields.
-const serialTitle = field({ key: "serialTitle", parentInheritable: true });
-const publisher = field({ key: "publisher", parentInheritable: true });
-const place = field({ key: "place", parentInheritable: true });
-const issueNo = field({ key: "issueNo", issueIdentifying: true, required: true });
-const volumeYear = field({ key: "volumeYear", issueIdentifying: true, required: true });
+const serialTitle = fieldV2({ key: "serialTitle", parentInheritable: true });
+const publisher = fieldV2({ key: "publisher", parentInheritable: true });
+const place = fieldV2({ key: "place", parentInheritable: true });
+const issueNo = fieldV2({ key: "issueNo", issueIdentifying: true, required: true });
+const volumeYear = fieldV2({ key: "volumeYear", issueIdentifying: true, required: true });
 const FIELDS = [serialTitle, publisher, place, issueNo, volumeYear];
 
 function parent(over: Partial<ParentRecord> & { id: string }): ParentRecord {
@@ -220,7 +207,7 @@ describe("per-field source picker", () => {
   });
 
   it("offers only Manual for a non-inheritable field", () => {
-    const nonInherit = field({ key: "title" });
+    const nonInherit = fieldV2({ key: "title" });
     const opts = fieldSourceOptions(nonInherit, {}, [p1]);
     expect(opts).toEqual([{ kind: "manual", parentId: null, value: undefined }]);
   });

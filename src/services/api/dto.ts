@@ -28,7 +28,7 @@ export type {
   FileType,
   TextExtractionStatus,
 } from "@domain/enums";
-export type { ResolvedCode, FieldDescriptor, RecordSchema } from "@domain/schema";
+export type { ResolvedCode } from "@domain/schema";
 export type { RecordMetadata } from "@domain/metadata";
 
 // ─── items ────────────────────────────────────────────────────────────────
@@ -680,48 +680,9 @@ export interface DomainRecord {
 }
 
 // ─── schema ─────────────────────────────────────────────────────────────
-// GET /api/schema/record?level=main|child  → { fields }  (strong ETag)
-
-/*
- * `GET /api/schema/record`. The response type itself is `RecordSchema` in
- * `@domain/schema`; this section carries only what was measured against the
- * live backend. Deliberately not a JSDoc block - it documents the endpoint,
- * not any one declaration, and as `/**` it would silently re-attach itself
- * to whatever type came next.
- *
- * Anonymous-OK; strong quoted-md5 `ETag` +
- * `Cache-Control: public, max-age=86400`, and `If-None-Match` correctly yields
- * `304` (live-verified 2026-08-07, including for the empty body below).
- *
- * Live counts: **41 main · 31 child · 41 unfiltered**. Child is a strict SUBSET
- * of main — there are no child-only fields — so the level filter only ever
- * removes fields, and a main-level form is a superset of a child-level one.
- * Only two fields are `issueIdentifying` (`numberingAndDates`, `seriesVolume`);
- * 23 are `parentInheritable`.
- *
- * ⚠️ `FieldDescriptor.required` IS A UI HINT, NOT A SERVER CONSTRAINT. The
- * schema marks both `title` and `collectionType` required, but
- * `items.service.create` enforces only a non-empty `title`
- * (`REQUIRED_METADATA_VALIDATORS`) and defaults `collectionType` to `0`. Treat
- * `required` as "the editor should ask for it", never as "the backend will
- * reject it".
- *
- * `?level` **IS** validated (fixed backend-side 2026-08-07; re-verified live
- * 2026-08-08): an unrecognised value is a `400`, and it is case-sensitive, so
- * `?level=Main` fails while `?level=` (empty) keeps its "all fields" meaning.
- * The old trap — an unknown level returning a cacheable `200 { fields: [] }` —
- * is gone.
- *
- * `services/api/schema` nonetheless still refuses to let an empty field list
- * replace a non-empty cached copy. Not for that cause, which no longer exists,
- * but because a `200` with no fields remains reachable from a transient backend
- * fault, and storing it would leave the metadata editor a form with no fields
- * for the full 24 h `max-age` — offline copy included.
- *
- * The backend's ETag cache (`SchemaController.etagCache`) is per-process and has
- * no invalidation, so a schema change on the backend only reaches clients after
- * a backend restart.
- */
+// GET /api/schema/v2/record → RecordSchemaV2 (ETag, Cache-Control: no-cache).
+// Types in `@domain/schema`; fetching in `./schemaV2`; the rules in
+// `@domain/schemaRules` (vendored from the backend).
 
 // ─── health ─────────────────────────────────────────────────────────────
 // GET /api/health  (unauthenticated liveness probe)

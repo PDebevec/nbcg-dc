@@ -354,7 +354,7 @@ describe("ApiClient — requestDetailed", () => {
     const { client } = harness(
       () => new Response(JSON.stringify({ fields: [] }), { status: 200, headers: { ETag: '"abc"' } }),
     );
-    const res = await client.getDetailed<{ fields: unknown[] }>("/schema/record");
+    const res = await client.getDetailed<{ fields: unknown[] }>("/schema/v2/record");
     expect(res.status).toBe(200);
     expect(res.etag).toBe('"abc"');
     expect(res.data).toEqual({ fields: [] });
@@ -364,7 +364,7 @@ describe("ApiClient — requestDetailed", () => {
   // copy off the back of it.
   it("treats a listed non-2xx status as success and decodes no body", async () => {
     const { client } = harness(() => new Response(null, { status: 304, headers: { ETag: '"abc"' } }));
-    const res = await client.getDetailed("/schema/record", { acceptStatuses: [304] });
+    const res = await client.getDetailed("/schema/v2/record", { acceptStatuses: [304] });
     expect(res.status).toBe(304);
     expect(res.data).toBeUndefined();
     expect(res.etag).toBe('"abc"');
@@ -373,13 +373,13 @@ describe("ApiClient — requestDetailed", () => {
   it("still throws for a non-2xx status that was not listed", async () => {
     const { client } = harness(() => json({ message: "bad level" }, 400));
     await expect(
-      client.getDetailed("/schema/record", { acceptStatuses: [304] }),
+      client.getDetailed("/schema/v2/record", { acceptStatuses: [304] }),
     ).rejects.toMatchObject({ kind: "bad_request" });
   });
 
   it("forwards request headers such as If-None-Match", async () => {
     const { client, calls } = harness(() => new Response(null, { status: 304 }));
-    await client.getDetailed("/schema/record", {
+    await client.getDetailed("/schema/v2/record", {
       headers: { "If-None-Match": '"abc"' },
       acceptStatuses: [304],
     });

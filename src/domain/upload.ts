@@ -54,7 +54,7 @@ export type UploadBlockerCode =
   /** A multi-image item has no chosen primary thumbnail (docs/tasks/07 hard gate). */
   | "thumbnail-unresolved"
   /** Required metadata fields are missing/invalid (computed by the caller from
-   * `domain/metadata-form`, passed in as `metadataReady`). */
+   * `domain/schema-check`, passed in as `metadataReady`). */
   | "metadata-invalid"
   /** A pipeline stage failed — the item is Stopped, not Ready. */
   | "processing-failed"
@@ -124,7 +124,7 @@ function stageSatisfied(status: StageStatus): boolean {
 /**
  * The pre-upload gate for one item: the hard {@link UploadBlocker}s and soft
  * {@link UploadWarning}s. `metadataReady` is computed by the caller from the
- * schema + working values (`domain/metadata-form.isItemValid`) — the schema is
+ * schema + working values (`domain/schema-check.checkItem`) — the schema is
  * not available here, so it is injected. `primaryThumbnail` is the resolved
  * operator/auto pick (see {@link resolvePrimaryThumbnail}).
  */

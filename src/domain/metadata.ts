@@ -30,7 +30,7 @@ export interface MetadataFieldValue<T = unknown> {
   sourceParentId?: string | null;
 }
 
-/** The editor's per-field working map (keyed by `FieldDescriptor.key`). */
+/** The editor's per-field working map (keyed by `FieldV2.key`). */
 export type MetadataValues = Record<string, MetadataFieldValue>;
 
 /**

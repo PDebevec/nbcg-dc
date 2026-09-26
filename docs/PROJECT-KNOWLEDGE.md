@@ -368,40 +368,23 @@ being a write counter.
 - `GET /api/import/jobs/:jobId` — needs `import:execute`. Job disappears (→404)
   after TTL (24h complete / 7d failed).
 
-**Schema** — `src/modules/schema`
-- `GET /api/schema/record?level=main|child` → `{ fields: FieldDescriptor[] }`.
-  Anonymous-OK. **Strong ETag** (quoted md5) + `Cache-Control: max-age=86400`;
-  send `If-None-Match` for a `304`.
-- `FieldDescriptor` = `{ key, type('string'|'number'|'boolean'|'date'|'enum'|
-  'array'|'object'), required, itemType?, allowedValues?: ResolvedCode[],
-  objectShape?: FieldDescriptor[] (recursive), group, order, parentInheritable,
-  issueIdentifying, levels: ('main'|'child')[] }`. **No `label`** — labels come
-  from `allowedValues[].en` / `.cnr`. `ResolvedCode` = `{ code, en, cnr }` (cnr =
-  Montenegrin). Main vs child = the `levels` array + `?level` filter (no separate
-  field-set).
-- **Live-verified 2026-08-07:** `41` main fields, `31` child, `41` unfiltered; the
-  `If-None-Match` → `304` revalidation works as documented. `?level` is validated
-  since 2026-08-07 — an unrecognised value is a **`400`** (case-sensitive), so the
-  old `200 { fields: [] }` trap is gone. **Child is a strict
-  subset of main — there are no child-only fields**, so `?level` only ever
-  removes fields. 23 fields are `parentInheritable`; exactly two are
-  `issueIdentifying` (`numberingAndDates`, `seriesVolume`).
-- **`required` is a UI hint, not a server constraint.** The schema marks both
-  `title` and `collectionType` required, but `items.service.create` enforces only
-  a non-empty `title` and defaults `collectionType` to `0`. Never rely on the
-  backend to reject a missing "required" field.
-- The backend's ETag cache (`SchemaController.etagCache`) is **per-process with
-  no invalidation**, so a schema change only reaches clients after a backend
-  restart.
-- **`level` is validated** since 2026-08-07: an unrecognised value is a `400`
-  (case-sensitive — `?level=Main` fails), while `?level=` empty keeps its
-  long-standing "all fields" meaning. It used to return `200 { fields: [] }`, which
-  made an empty field list a reachable response.
-  `services/api/schema` still refuses to let an empty schema replace a non-empty
-  cached one — not for that cause, which is gone, but because a `200` with no
-  fields remains possible from a transient backend fault and would leave the
-  metadata editor a form with no fields for the full 24h max-age, **offline copy
-  included**.
+**Schema** — `src/modules/schema` (v2, since 2026-09-25)
+- `GET /api/schema/v2/record` → one schema for every item: `context`,
+  `vocabularies` (≤ 50 values inline, bigger ones searched via
+  `/api/search/vocabularies/:name`), `groups`, `fields` with `label`/`help` (en +
+  cnr), `input`, `values.storeAs`, `suggest`, `rules`. ETag +
+  `Cache-Control: no-cache`.
+- Which fields show and which are required comes from the rules, evaluated in
+  the app by `src/domain/schemaRules.ts` — a verbatim copy of the backend's
+  `evaluate.ts` (`scripts/sync-schema-rules.ps1`). Drafts need title, material
+  type, collection type; records also extent / map scale / issue number and date
+  where visible.
+- The backend checks every create and PATCH against the state the item ends up
+  in → `400 METADATA_VALIDATION_FAILED`; `POST /api/items` takes `parentIds`
+  (`400 PARENT_NOT_FOUND`).
+- Contract: nbcg `docs/shared/plans/metadata-schema-v2.md`; app changes:
+  `…-archive-app.md`; app design:
+  `docs/superpowers/specs/2026-09-25-metadata-schema-v2-design.md`.
 
 **Health** — `GET /api/health` (unauthenticated) → `{ status, timestamp }`.
 `GET /api/` → `'Hello World!'`.
@@ -657,7 +640,7 @@ Two concrete follow-ups Epic 09 left behind, both in Epic 07's upload flow —
     an unknown value is now a `400` (case-sensitive; `?level=` empty still means
     "all"). `services/api/schema` keeps its empty-field-list guard anyway, because
     a `200` with no fields is still possible from a transient fault and would
-    silently empty the metadata form for 24h.
+    silently empty the metadata form for 24h. — moot since schema v2 (no levels).
 11. **`RootValidity` has a fourth state** (`unknown`) that Epic 10's spec does not
     list — there is no filesystem to probe outside Tauri, and both three-state
     answers would be wrong (see the Epic 10 doc).
