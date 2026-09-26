@@ -33,6 +33,7 @@ import {
   type DiscoveredAsset,
 } from "./files";
 import { baseNameOf } from "./naming";
+import { missingParentMessage } from "./parent";
 import { classifyInput, planThumbnail, type ContentKind } from "./pipeline";
 import {
   hasFailedStage,
@@ -63,7 +64,9 @@ export type UploadBlockerCode =
    * false. Give it a title and every gate passed, creating a **published record
    * with no files** on the live website. Verified 2026-08-07.
    */
-  | "no-assets";
+  | "no-assets"
+  /** A batch parent is not on the backend (search 404). */
+  | "parent-missing";
 
 /** A soft reason to warn before uploading (does not block — the operator may
  * continue). */
@@ -138,6 +141,8 @@ export interface UploadGateInput {
    * cover.
    */
   contentKind?: ContentKind;
+  /** Names of the batch's parents search could not find. */
+  missingParents?: string[];
 }
 
 /** The pipeline stages that must be complete before an item can upload. OCR is
@@ -202,6 +207,10 @@ export function uploadBlockers(
       code: "metadata-invalid",
       message: "Required metadata is incomplete or invalid.",
     });
+  }
+
+  if (input.missingParents && input.missingParents.length > 0) {
+    blockers.push({ code: "parent-missing", message: missingParentMessage(input.missingParents, false) });
   }
 
   return blockers;
@@ -507,6 +516,14 @@ function extractNestMessages(body: unknown): string[] {
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** The parent ids of a `400 PARENT_NOT_FOUND` body, or null for any other body. */
+export function parentNotFoundIds(body: unknown): string[] | null {
+  if (!body || typeof body !== "object") return null;
+  const b = body as { code?: unknown; parentIds?: unknown };
+  if (b.code !== "PARENT_NOT_FOUND" || !Array.isArray(b.parentIds)) return null;
+  return b.parentIds.filter((x): x is string => typeof x === "string");
 }
 
 // ─── the assembled per-item plan ─────────────────────────────────────────────

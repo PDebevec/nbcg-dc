@@ -25,6 +25,7 @@ const {
   saving,
   validationBanner,
   parentsBanner,
+  parentBanner,
   nextLabel,
   canNext,
   jump,
@@ -191,6 +192,7 @@ const enumLabel: Record<string, string> = {
       ✗ {{ parentsBanner }}
       <button class="banner-retry" @click="retryParents()">Retry</button>
     </div>
+    <div v-if="parentBanner" class="validation-banner">✗ {{ parentBanner }}</div>
 
     <div v-if="nav.total === 0" class="card empty-card">
       This batch has no items the index knows about. Rescan the folders on the

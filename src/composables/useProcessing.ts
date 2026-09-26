@@ -145,6 +145,8 @@ function blockerCopy(b: UploadBlocker): string {
       // operator got stuck: it names the step but not what to do about it.
       // Expanding the item now shows that step's own row and its Run button.
       return `${b.message} Expand the item to see why, and run just that step.`;
+    case "parent-missing":
+      return b.message;
     default:
       return b.message;
   }
@@ -255,6 +257,7 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
       metadataReady: metadata.isReady(item),
       primaryThumbnail: null,
       contentKind: b?.overrides[item.id]?.contentKind ?? "auto",
+      missingParents: metadata.missingParentNamesOf(item),
     });
     return [
       ...plan.blockers.map((x) => ({ code: x.code, message: blockerCopy(x), hard: true })),
@@ -476,6 +479,7 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
       metadata: metadata.wireMetadata(item.id),
       metadataReady: metadata.isReady(item),
       primaryThumbnail: null,
+      missingParents: metadata.missingParentNamesOf(item),
     });
     const ok = await uploadStore.run(b.id, members, resolveContext);
     if (ok) {

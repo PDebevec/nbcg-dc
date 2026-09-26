@@ -13,6 +13,7 @@ import {
   planItemUpload,
   isUploadable,
   MAX_FILES_PER_REQUEST,
+  parentNotFoundIds,
 } from "./upload";
 import { UPLOAD_MAX_FILES } from "@services/api/dto";
 import { discoverAsset, type DiscoveredAsset } from "./files";
@@ -528,5 +529,17 @@ describe("upload request chunking (backend caps files per request)", () => {
     const assets = Array.from({ length: 5 }, (_, i) => img(`${i + 1}.jpg`));
     const groups = uploadGroups(assets, null, 2);
     expect(groups.map((g) => g.assets.length)).toEqual([2, 2, 1]);
+  });
+});
+
+describe("missing parents", () => {
+  it("blocks every item while a batch parent can't be found", () => {
+    const blockers = uploadBlockers(makeItem(), { metadataReady: true, primaryThumbnail: null, missingParents: ["Old maps"] });
+    expect(blockers.map((b) => b.code)).toContain("parent-missing");
+  });
+
+  it("reads the ids out of a PARENT_NOT_FOUND body", () => {
+    expect(parentNotFoundIds({ code: "PARENT_NOT_FOUND", parentIds: ["p1"] })).toEqual(["p1"]);
+    expect(parentNotFoundIds({ message: "Bad Request" })).toBeNull();
   });
 });

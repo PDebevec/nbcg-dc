@@ -210,6 +210,21 @@ export function collectAncestors(
 }
 
 /**
+ * The one message for batch parents that are not on the backend. `gone`: the
+ * backend said so on a write (`PARENT_NOT_FOUND`). Otherwise search could not
+ * find it — which can also be the search index lagging behind a new record.
+ */
+export function missingParentMessage(names: readonly string[], gone: boolean): string {
+  const one = names.length === 1;
+  const subject = `${one ? "The parent" : "The parents"} ${names.map((n) => `'${n}'`).join(", ")}`;
+  const it = one ? "it" : "them";
+  if (gone) {
+    return `${subject} no longer ${one ? "exists" : "exist"}. Change or remove ${it} in this batch, then upload again.`;
+  }
+  return `${subject} can't be found on the backend. Change or remove ${it} in this batch — if ${one ? "it was" : "they were"} only just created, try again in a minute.`;
+}
+
+/**
  * Whether linking `childId` under `parentId` would create a cycle — i.e. the
  * proposed parent is already a descendant of (reachable from) the child. The
  * backend rejects cycles on connect; this lets the archive pre-empt the error.

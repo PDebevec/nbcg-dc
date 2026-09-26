@@ -70,11 +70,13 @@ import type {
 import type { Item } from "@domain/item";
 import type { DiscoveredAsset } from "@domain/files";
 import { isMangledFilename, isSameUploadedFilename } from "@domain/naming";
+import { missingParentMessage } from "@domain/parent";
 import { resolveVersion } from "@domain/sync";
 import {
   changedMetadata,
   isUploadable,
   mapValidationErrors,
+  parentNotFoundIds,
   planItemUpload,
   textQualityWarnings,
   type BackendFieldError,
@@ -195,6 +197,8 @@ export interface UploadItemContext {
   metadataReady: boolean;
   /** The chosen primary-thumbnail filename, or null. */
   primaryThumbnail: string | null;
+  /** Names of batch parents search could not find (a blocker). */
+  missingParents?: string[];
 }
 
 export type ItemUploadStatus =
@@ -274,6 +278,8 @@ export interface ItemUploadResult {
    * does not track locally simply have nothing to update.
    */
   parentStates: RelationWriteResult[];
+  /** Parents the backend said no longer exist (`PARENT_NOT_FOUND`). */
+  missingParentIds: string[];
   /** A human message for a toast (on non-`uploaded` outcomes). */
   message: string | null;
 }
@@ -295,6 +301,7 @@ function result(
     fieldErrors: [],
     relationErrors: [],
     parentStates: [],
+    missingParentIds: [],
     message: null,
     ...extra,
   };
@@ -580,6 +587,7 @@ export async function uploadItem(
   const plan = planItemUpload(item, {
     metadataReady: ctx.metadataReady,
     primaryThumbnail: ctx.primaryThumbnail,
+    missingParents: ctx.missingParents,
   });
 
   if (!isUploadable(plan)) {
@@ -1576,6 +1584,9 @@ async function connectParents(
       // losing an optimisation.
       if (state && typeof state.version === "number") states.push(state);
     } catch (err) {
+      // A parent that no longer exists is gone for the whole batch — let it
+      // stop the run instead of listing it as one failed link.
+      if (err instanceof ApiError && parentNotFoundIds(err.body)) throw err;
       const message = err instanceof Error ? err.message : String(err);
       logger.warn("upload", `Failed to link ${childId} under parent ${parentId}.`, err);
       errors.push({ parentId, message });
@@ -1643,6 +1654,16 @@ function mapUploadError(
       });
     }
     if (err.kind === "bad_request") {
+      const missingParents = parentNotFoundIds(err.body);
+      if (missingParents) {
+        return result(itemId, "error", {
+          backendId,
+          created,
+          warnings,
+          missingParentIds: missingParents,
+          message: missingParentMessage(missingParents, true),
+        });
+      }
       return result(itemId, "error", {
         backendId,
         created,
@@ -1676,6 +1697,9 @@ export interface BatchUploadResult {
   /** True when every attempted item reached `uploaded` — the caller then
    * archives the batch READ-ONLY and releases its items. */
   allUploaded: boolean;
+  /** Parents the backend said no longer exist; the run stopped at the item
+   * that hit it. */
+  missingParentIds: string[];
 }
 
 export interface UploadBatchOptions {
@@ -1710,8 +1734,12 @@ export async function uploadBatch(
     const res = await uploadItem(item, ctx, options.deps);
     results.push(res);
     options.onProgress?.({ itemId: item.id, phase: "done", index, total });
+    // The parent is gone for every item of the batch: stop instead of failing each one.
+    if (res.missingParentIds.length > 0) {
+      return { results, allUploaded: false, missingParentIds: res.missingParentIds };
+    }
   }
-  return { results, allUploaded: results.every((r) => r.status === "uploaded") };
+  return { results, allUploaded: results.every((r) => r.status === "uploaded"), missingParentIds: [] };
 }
 
 // ─── close-time cleanup ──────────────────────────────────────────────────────

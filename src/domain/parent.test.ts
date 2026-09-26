@@ -13,6 +13,7 @@ import {
   withDefaultPassing,
   collectAncestors,
   wouldCreateCycle,
+  missingParentMessage,
 } from "./parent";
 
 const SERIAL_TYPES = [5, 7];
@@ -213,5 +214,19 @@ describe("cycle-safe traversal", () => {
 
   it("rejects a self-link", () => {
     expect(wouldCreateCycle("x", "x", getParents)).toBe(true);
+  });
+});
+
+describe("missingParentMessage", () => {
+  it("says a parent search could not find can't be found, and why that may pass", () => {
+    expect(missingParentMessage(["Old maps"], false)).toBe(
+      "The parent 'Old maps' can't be found on the backend. Change or remove it in this batch — if it was only just created, try again in a minute.",
+    );
+  });
+
+  it("says a parent the backend refused no longer exists", () => {
+    expect(missingParentMessage(["A", "B"], true)).toBe(
+      "The parents 'A', 'B' no longer exist. Change or remove them in this batch, then upload again.",
+    );
   });
 });

@@ -138,6 +138,7 @@ describe("useUpload.closeBatch — cleanup", () => {
     fieldErrors: [],
     relationErrors: [],
     parentStates: [],
+    missingParentIds: [],
     message: null,
   };
 

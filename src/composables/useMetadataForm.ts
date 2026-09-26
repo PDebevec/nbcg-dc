@@ -45,7 +45,7 @@ import {
 } from "@domain/schema-check";
 import { getAtPath, numberFromText, quantityFromText, setAtPath, topKey } from "@domain/schema-values";
 import { fieldSourceOptions } from "@domain/provenance";
-import type { ParentRecord } from "@domain/parent";
+import { missingParentMessage, type ParentRecord } from "@domain/parent";
 import { buildFieldViews, entryFromHint, toHintView, type FieldView, type HintView } from "./metadataFieldViews";
 import { derivedOutputNames } from "@domain/naming";
 import { fetchCobissPreview, cobissCollisionMessage } from "@services/api/cobiss";
@@ -335,6 +335,13 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
     const b = batch.value;
     return b ? metadata.ensureParents(b.parents.map((p) => p.id)) : Promise.resolve();
   }
+
+  /** One banner when a batch parent can't be found (it blocks every item). */
+  const parentBanner = computed(() => {
+    const c = current.value;
+    const names = c ? metadata.missingParentNamesOf(c) : [];
+    return names.length > 0 ? missingParentMessage(names, false) : "";
+  });
 
   const isLast = computed(() => index.value >= items.value.length - 1);
   const nextLabel = computed(() => (isLast.value ? "Go to processing →" : "Next item →"));
@@ -674,6 +681,7 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
     saving: computed(() => saving.value.size > 0),
     validationBanner,
     parentsBanner,
+    parentBanner,
     nextLabel,
     canNext,
     isLast,

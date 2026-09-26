@@ -1402,6 +1402,33 @@ describe("uploadBatch", () => {
   });
 });
 
+describe("PARENT_NOT_FOUND", () => {
+  const gone = () =>
+    new ApiError({
+      kind: "bad_request",
+      status: 400,
+      url: "u",
+      method: "POST",
+      message: "Parent not found: par1",
+      body: { statusCode: 400, code: "PARENT_NOT_FOUND", message: "Parent not found: par1", parentIds: ["par1"] },
+    });
+
+  it("reports the missing parent on the item", async () => {
+    const deps = fakeDeps({ createItem: vi.fn(async () => { throw gone(); }) });
+    const res = await uploadItem(makeItem(), CTX, deps);
+    expect(res.status).toBe("error");
+    expect(res.missingParentIds).toEqual(["par1"]);
+  });
+
+  it("stops the batch instead of failing every item the same way", async () => {
+    const deps = fakeDeps({ createItem: vi.fn(async () => { throw gone(); }) });
+    const out = await uploadBatch([makeItem({ id: "a" }), makeItem({ id: "b" })], { resolveContext: () => CTX, deps });
+    expect(out.results).toHaveLength(1);
+    expect(out.missingParentIds).toEqual(["par1"]);
+    expect(deps.createItem).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ── retry policy on the calls that carry a payload ──────────────────────────
 //
 // A 105 MB web PDF that missed its deadline used to be sent three times before
@@ -1565,6 +1592,7 @@ function uploadResult(over: Partial<ItemUploadResult> = {}): ItemUploadResult {
     fieldErrors: [],
     relationErrors: [],
     parentStates: [],
+    missingParentIds: [],
     message: null,
     ...over,
   };

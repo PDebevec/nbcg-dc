@@ -153,6 +153,9 @@ const metadataFake = {
   isReady(): boolean {
     return metadataFake.ready;
   },
+  missingParentNamesOf(): string[] {
+    return [];
+  },
   wireMetadata(): Record<string, unknown> {
     return {};
   },
@@ -580,6 +583,7 @@ describe("per-step rows", () => {
               fieldErrors: [],
               relationErrors: [],
               parentStates: [],
+              missingParentIds: [],
               message: "Not fully processed yet (thumbnail).",
             },
           ],

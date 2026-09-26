@@ -363,6 +363,11 @@ export const useMetadataStore = defineStore("metadata", () => {
     return parents.missing.length === 0 && parents.failed.length === 0;
   }
 
+  /** Names of the item's batch parents the backend answered 404 for. */
+  function missingParentNamesOf(item: Item): string[] {
+    return batchParentsOf(item).missing.map((id) => parentRecords.value.get(id)?.title ?? id);
+  }
+
   function readinessOf(item: Item): ItemReadiness {
     const s = schema.value;
     if (!s) return "untouched";
@@ -519,6 +524,7 @@ export const useMetadataStore = defineStore("metadata", () => {
     checkOf,
     readinessOf,
     isReady,
+    missingParentNamesOf,
     // prefill
     applyCobissTo,
     applyParentTo,
