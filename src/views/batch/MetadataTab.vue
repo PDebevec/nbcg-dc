@@ -7,6 +7,7 @@ import SegmentedControl from "@ui/common/SegmentedControl.vue";
 import Spinner from "@ui/common/Spinner.vue";
 import FilesStrip from "@ui/metadata/FilesStrip.vue";
 import MetaField from "@ui/metadata/MetaField.vue";
+import OtherFields from "@ui/metadata/OtherFields.vue";
 
 const props = defineProps<{ batchId: string }>();
 
@@ -16,6 +17,7 @@ const {
   nav,
   files,
   fields,
+  otherFields,
   editable,
   loading,
   schemaError,
@@ -316,6 +318,19 @@ const enumLabel: Record<string, string> = {
             />
           </template>
         </div>
+        <OtherFields
+          v-if="!loading"
+          :fields="otherFields"
+          :editable="editable"
+          :hint-path="hintPath"
+          :hint-items="hintItems"
+          @change="setField"
+          @add="addEntry"
+          @remove="removeEntry"
+          @query="requestHints"
+          @pick="pickHint"
+          @close-hints="closeHints"
+        />
         <div class="footer-nav">
           <button
             class="prev-btn"
