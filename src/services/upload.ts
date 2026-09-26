@@ -53,9 +53,9 @@ import { deterministicItemId } from "./api/deterministicId";
 import { findById, hitToRemote, type SearchHit } from "./api/search";
 import { listIndex, readItemMetadata, writeItemMetadata } from "./indexing";
 import type {
+  CreatedItemEntity,
   CreateItemDto,
   FileAttachment,
-  ItemEntity,
   RelationWriteResult,
   UpdateItemDto,
 } from "./api/dto";
@@ -492,6 +492,16 @@ async function writeThrough(
 }
 
 /**
+ * The links a create made through `parentIds`, or null when the response does
+ * not report them (a backend without `parentIds`) and the upload has to
+ * connect as before.
+ */
+function linkedByCreate(created: CreatedItemEntity, ctx: UploadItemContext): RelationWriteResult[] | null {
+  if (created.parents) return created.parents;
+  return ctx.parentIds.length === 0 ? [] : null;
+}
+
+/**
  * Finish an upload once the record and its assets are already on the
  * backend: connect parents, adopt their bumped versions, reposition the
  * folder to `/processed`, and build the `"uploaded"` result.
@@ -501,6 +511,8 @@ async function writeThrough(
  * {@link recreateOrphaned} (an orphaned replace re-created as a fresh
  * record). It used to be copied into each; extracted so the parent-linking
  * and move-to-processed behaviour can't drift between them.
+ *
+ * Links parents only when the create did not already (see `linkedOnCreate`).
  */
 async function finishUpload(
   item: Item,
@@ -509,19 +521,25 @@ async function finishUpload(
   deps: UploadDeps,
   warnings: UploadWarning[],
   run: RunCreation,
+  /** The links a create made itself (`parentIds`), already adopted — null
+   * when this path still has to connect (re-upload, takeover). */
+  linkedOnCreate: RelationWriteResult[] | null = null,
 ): Promise<ItemUploadResult> {
-  // Link parents (idempotent server-side); a per-parent failure doesn't undo
-  // the upload — record it and continue. Each success reports the parent's new
-  // version, which the caller needs to keep that parent's mirror usable.
-  const { errors: relationErrors, states: parentStates } = await connectParents(
-    backendId,
-    ctx.parentIds,
-    deps,
-  );
-
-  // Each connect bumped the parent's version server-side; adopt it now or the
-  // parent's next PATCH 409s. Never throws — see `applyParentStates`.
-  await applyParentStates(parentStates, deps);
+  let relationErrors: Array<{ parentId: string; message: string }> = [];
+  let parentStates: RelationWriteResult[];
+  if (linkedOnCreate) {
+    parentStates = linkedOnCreate;
+  } else {
+    // Link parents (idempotent server-side); a per-parent failure doesn't undo
+    // the upload — record it and continue. Each success reports the parent's
+    // new version, which the caller needs to keep that parent's mirror usable.
+    const connected = await connectParents(backendId, ctx.parentIds, deps);
+    relationErrors = connected.errors;
+    parentStates = connected.states;
+    // Each connect bumped the parent's version server-side; adopt it now or the
+    // parent's next PATCH 409s. Never throws — see `applyParentStates`.
+    await applyParentStates(parentStates, deps);
+  }
 
   // Reposition to `/processed` on first upload (a replace already lives there).
   if (item.root === "unprocessed") {
@@ -591,6 +609,9 @@ export async function uploadItem(
   // non-`uploaded` result. The OCR and mangled-filename warnings the operator
   // needs in order to know *what* to fix rode on the same list.
   const warnings: UploadWarning[] = [...plan.warnings];
+  // The links a create made itself (`parentIds`) — passed to `finishUpload` so
+  // it does not connect a second time. Stays null on the replace path.
+  let linked: RelationWriteResult[] | null = null;
 
   try {
     // Resolve the working metadata (ctx override, else the folder mirror) and the
@@ -606,10 +627,15 @@ export async function uploadItem(
     let mirrorMetadata: RecordMetadata;
 
     if (plan.mode === "create") {
-      let created: ItemEntity;
+      let created: CreatedItemEntity;
       try {
         created = await createOnBackend(
-          { visibilityStatus: ctx.visibility, targetState: ctx.targetState, metadata: pruned },
+          {
+            visibilityStatus: ctx.visibility,
+            targetState: ctx.targetState,
+            metadata: pruned,
+            parentIds: ctx.parentIds,
+          },
           deps,
         );
       } catch (err) {
@@ -711,6 +737,11 @@ export async function uploadItem(
         metadata: mirrorMetadata,
       });
 
+      // The create linked the parents and bumped their versions: adopt them now,
+      // before the files — if an asset fails, the links still exist.
+      linked = linkedByCreate(created, ctx);
+      if (linked) await applyParentStates(linked, deps);
+
       const attachments = await uploadCreateAssets(backendId, plan, deps, warnings);
       warnings.push(...textQualityWarnings(attachments));
     } else {
@@ -718,7 +749,7 @@ export async function uploadItem(
       return await replaceOnBackend(item, ctx, plan, pruned, mirror, deps, warnings, run);
     }
 
-    return await finishUpload(item, backendId, ctx, deps, warnings, run);
+    return await finishUpload(item, backendId, ctx, deps, warnings, run, linked);
   } catch (err) {
     // Prefer the id this run actually minted. They agree on the create branch;
     // they diverge only when `recreateOrphaned` replaced a 404'd link with a
@@ -1022,7 +1053,7 @@ async function recreateOrphaned(
   const targetState = mirror.targetState ?? ctx.targetState;
   const visibility = mirror.visibilityStatus ?? ctx.visibility;
   const created = await createOnBackend(
-    { targetState, visibilityStatus: visibility, metadata: pruned },
+    { targetState, visibilityStatus: visibility, metadata: pruned, parentIds: ctx.parentIds },
     deps,
   );
   // The second (and last) create site. The old link was authoritatively 404'd
@@ -1037,6 +1068,8 @@ async function recreateOrphaned(
     visibility,
     metadata: created.metadata,
   });
+  const linked = linkedByCreate(created, ctx);
+  if (linked) await applyParentStates(linked, deps);
   const attachments = await uploadCreateAssets(
     created.id,
     { ...plan, backendId: created.id },
@@ -1044,7 +1077,7 @@ async function recreateOrphaned(
     warnings,
   );
   warnings.push(...textQualityWarnings(attachments));
-  return await finishUpload(item, created.id, ctx, deps, warnings, run);
+  return await finishUpload(item, created.id, ctx, deps, warnings, run, linked);
 }
 
 // ─── backend steps ───────────────────────────────────────────────────────────
@@ -1052,7 +1085,7 @@ async function recreateOrphaned(
 async function createOnBackend(
   dto: CreateItemDto,
   deps: UploadDeps,
-): Promise<ItemEntity> {
+): Promise<CreatedItemEntity> {
   return withRetry(() => deps.createItem(dto), deps);
 }
 

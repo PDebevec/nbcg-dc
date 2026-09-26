@@ -62,6 +62,13 @@ export interface CreateItemDto {
   visibilityStatus: VisibilityStatus;
   targetState: ItemType;
   metadata?: RecordMetadataInput;
+  /**
+   * Parents to link the new item to, in the same transaction; the backend's
+   * save check runs with them (an issue of a serial needs its issue data as a
+   * RECORD). An unknown id is `400 PARENT_NOT_FOUND`. Needs manage rights on
+   * each parent's collection, as `relations/connect` does.
+   */
+  parentIds?: string[];
 }
 
 /**
@@ -165,6 +172,12 @@ export interface ItemEntity {
   updatedAt: string;
   createdByUserId: string;
   updatedByUserId: string | null;
+}
+
+/** `POST /api/items` response: the item, plus each parent's state after the
+ * links created with `parentIds` (what `relations/connect` returns). */
+export interface CreatedItemEntity extends ItemEntity {
+  parents?: RelationWriteResult[];
 }
 
 /**

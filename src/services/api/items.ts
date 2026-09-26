@@ -26,9 +26,9 @@
 
 import type { ApiClient } from "./client";
 import type {
+  CreatedItemEntity,
   CreateItemDto,
   DeleteItemsDto,
-  ItemEntity,
   ItemStats,
   TransitionItemsDto,
   TransitionResult,
@@ -48,14 +48,15 @@ export interface ItemsServiceOptions {
  * Create a `Draft`/`Record` (`POST /api/items`). `metadata.title` must be a
  * non-empty string or the backend `400`s; the caller sends only schema-valid
  * fields. Returns the full entity — capture `.id` (and `.version`, which starts
- * at 0) for the write-through mirror.
+ * at 0) for the write-through mirror. With `parentIds` the links are created
+ * in the same transaction and `parents` reports each parent's new version.
  */
 export async function createItem(
   dto: CreateItemDto,
   options: ItemsServiceOptions = {},
-): Promise<ItemEntity> {
+): Promise<CreatedItemEntity> {
   const client = options.client ?? getApiClient();
-  return client.post<ItemEntity>("/items", {
+  return client.post<CreatedItemEntity>("/items", {
     json: dto,
     signal: options.signal,
   });

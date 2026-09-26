@@ -182,6 +182,7 @@ describe("uploadItem — create", () => {
       visibilityStatus: "PUBLIC",
       targetState: "RECORD",
       metadata: { title: "Gorski vijenac", year: "2020" },
+      parentIds: ["par1"],
     });
 
     // two upload requests: THUMBNAIL then WEB, extractedTexts only on WEB
@@ -315,6 +316,51 @@ describe("uploadItem — create", () => {
     // Nothing to link, so nothing to write.
     expect(deps.writeMirror).not.toHaveBeenCalled();
     expect(deps.recordUpload).not.toHaveBeenCalled();
+  });
+
+  it("creates a new item under the batch's parents and does not connect it afterwards", async () => {
+    const linked = [{ parentId: "par1", version: 9, childrenInDrafts: 1, childrenInRecords: 0 }];
+    const deps = fakeDeps({ createItem: vi.fn(async () => ({ ...ENTITY, parents: linked })) });
+    const res = await uploadItem(makeItem(), CTX, deps);
+    expect(deps.createItem).toHaveBeenCalledWith(expect.objectContaining({ parentIds: ["par1"] }));
+    expect(deps.connectParent).not.toHaveBeenCalled();
+    expect(res.status).toBe("uploaded");
+    expect(res.parentStates).toEqual(linked);
+  });
+
+  it("adopts the parents' new versions right after the create, even when the files then fail", async () => {
+    const parentItem = makeItem({ id: "parent-item", backendId: "par1" });
+    const parentMirror = {
+      backendId: "par1",
+      version: 3,
+      targetState: "RECORD" as const,
+      visibilityStatus: "PUBLIC" as const,
+      metadata: { title: "Pobjeda" },
+      syncedAt: "2026-09-25T00:00:00.000Z",
+    };
+    const deps = fakeDeps({
+      createItem: vi.fn(async () => ({
+        ...ENTITY,
+        parents: [{ parentId: "par1", version: 9, childrenInDrafts: 1, childrenInRecords: 0 }],
+      })),
+      uploadFiles: vi.fn(async () => {
+        throw apiError("server", 500);
+      }),
+      listItems: vi.fn(async () => [parentItem]),
+      readMirror: vi.fn(async (target) => (target.id === "parent-item" ? parentMirror : null)),
+    });
+    const res = await uploadItem(makeItem(), CTX, deps);
+    expect(res.status).not.toBe("uploaded");
+    expect(deps.writeMirror).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "parent-item" }),
+      expect.objectContaining({ version: 9 }),
+    );
+  });
+
+  it("falls back to connect when the backend did not report the links", async () => {
+    const deps = fakeDeps(); // ENTITY has no `parents`
+    await uploadItem(makeItem(), CTX, deps);
+    expect(deps.connectParent).toHaveBeenCalledWith("par1", "rec_1");
   });
 });
 
