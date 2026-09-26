@@ -127,10 +127,25 @@ export const useBatchWorkStore = defineStore("batchWork", () => {
     unlocked.value = false;
   }
 
+  /** An item the Metadata tab should open on (Processing → "Edit metadata"). */
+  const focusItemId = ref<string | null>(null);
+
+  function focusItem(itemId: string): void {
+    focusItemId.value = itemId;
+  }
+
+  /** Read and clear the focus request. */
+  function takeFocus(): string | null {
+    const id = focusItemId.value;
+    focusItemId.value = null;
+    return id;
+  }
+
   return {
     // state
     currentId,
     unlocked,
+    focusItemId,
     // derived
     current,
     availableTabs,
@@ -142,5 +157,7 @@ export const useBatchWorkStore = defineStore("batchWork", () => {
     setTab,
     unlock,
     close,
+    focusItem,
+    takeFocus,
   };
 });

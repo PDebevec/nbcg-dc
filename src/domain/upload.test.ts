@@ -14,6 +14,8 @@ import {
   isUploadable,
   MAX_FILES_PER_REQUEST,
   parentNotFoundIds,
+  metadataValidationFailure,
+  validationFieldErrors,
 } from "./upload";
 import { UPLOAD_MAX_FILES } from "@services/api/dto";
 import { discoverAsset, type DiscoveredAsset } from "./files";
@@ -541,5 +543,36 @@ describe("missing parents", () => {
   it("reads the ids out of a PARENT_NOT_FOUND body", () => {
     expect(parentNotFoundIds({ code: "PARENT_NOT_FOUND", parentIds: ["p1"] })).toEqual(["p1"]);
     expect(parentNotFoundIds({ message: "Bad Request" })).toBeNull();
+  });
+});
+
+describe("METADATA_VALIDATION_FAILED", () => {
+  const body = {
+    statusCode: 400,
+    code: "METADATA_VALIDATION_FAILED",
+    message: "1 of 1 item is not ready to publish",
+    items: [
+      {
+        id: null,
+        state: "RECORD",
+        missing: [{ path: "extent", label: { en: "Number of pages", cnr: "Broj strana" } }],
+        violations: [
+          { path: "issue.date", label: { en: "Issue date", cnr: "Datum izlaska" }, constraint: "pattern", hint: { en: "YYYY", cnr: "GGGG" } },
+        ],
+      },
+    ],
+  };
+
+  it("reads the failing item", () => {
+    expect(metadataValidationFailure(body)).toMatchObject({ state: "RECORD", missing: [{ path: "extent" }] });
+    expect(metadataValidationFailure({ ...body, code: "PUBLISH_VALIDATION_FAILED" })).not.toBeNull();
+    expect(metadataValidationFailure({ message: "x" })).toBeNull();
+  });
+
+  it("gives one line per field, with its label", () => {
+    expect(validationFieldErrors(metadataValidationFailure(body)!)).toEqual([
+      { key: "extent", message: "Broj strana — required." },
+      { key: "issue.date", message: "Datum izlaska — Expected: GGGG." },
+    ]);
   });
 });

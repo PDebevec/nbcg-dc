@@ -581,6 +581,7 @@ describe("per-step rows", () => {
               ],
               warnings: [],
               fieldErrors: [],
+              metadataRejected: false,
               relationErrors: [],
               parentStates: [],
               missingParentIds: [],

@@ -154,6 +154,12 @@ export function useBatch(batchId: MaybeRefOrGetter<string>) {
     void router.push({ name: "batches" });
   }
 
+  /** Processing → "Edit metadata": open the Metadata tab on that item. */
+  function editItemMetadata(itemId: string): void {
+    work.focusItem(itemId);
+    setTab("metadata");
+  }
+
   // Ensure the batches store is populated even when the workspace is the first
   // (or only) screen reached — a deep-link/reload onto /batches/:id, or opening
   // an In-progress item from a cold store — so `current`/`header` resolve
@@ -183,5 +189,6 @@ export function useBatch(batchId: MaybeRefOrGetter<string>) {
     setTab,
     unlock,
     back,
+    editItemMetadata,
   };
 }

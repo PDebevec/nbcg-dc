@@ -1429,6 +1429,30 @@ describe("PARENT_NOT_FOUND", () => {
   });
 });
 
+describe("METADATA_VALIDATION_FAILED", () => {
+  it("maps a METADATA_VALIDATION_FAILED create to labelled field errors", async () => {
+    const deps = fakeDeps({
+      createItem: vi.fn(async () => {
+        throw new ApiError({
+          kind: "bad_request",
+          status: 400,
+          url: "u",
+          method: "POST",
+          message: "1 of 1 item is not ready to publish",
+          body: {
+            code: "METADATA_VALIDATION_FAILED",
+            message: "1 of 1 item is not ready to publish",
+            items: [{ id: null, state: "RECORD", missing: [{ path: "extent", label: { en: "Number of pages", cnr: "Broj strana" } }], violations: [] }],
+          },
+        });
+      }),
+    });
+    const res = await uploadItem(makeItem(), CTX, deps);
+    expect(res.metadataRejected).toBe(true);
+    expect(res.fieldErrors).toEqual([{ key: "extent", message: "Broj strana — required." }]);
+  });
+});
+
 // ── retry policy on the calls that carry a payload ──────────────────────────
 //
 // A 105 MB web PDF that missed its deadline used to be sent three times before
@@ -1590,6 +1614,7 @@ function uploadResult(over: Partial<ItemUploadResult> = {}): ItemUploadResult {
     blockers: [],
     warnings: [],
     fieldErrors: [],
+    metadataRejected: false,
     relationErrors: [],
     parentStates: [],
     missingParentIds: [],

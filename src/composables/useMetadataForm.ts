@@ -655,6 +655,22 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
     void patchOverride({ visibility: null });
   }
 
+  // Opened from Processing → "Edit metadata": start on that item with its
+  // validation shown. (Placed last: `jump` reads state declared above.)
+  watch(
+    () => items.value.map((i) => i.id).join("|"),
+    () => {
+      const id = work.focusItemId;
+      if (!id) return;
+      const i = items.value.findIndex((it) => it.id === id);
+      if (i === -1) return;
+      work.takeFocus();
+      jump(i);
+      showValidation.value = true;
+    },
+    { immediate: true },
+  );
+
   // ── lifecycle ────────────────────────────────────────────────────────────
 
   async function init(): Promise<void> {

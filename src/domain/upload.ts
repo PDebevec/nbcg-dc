@@ -41,6 +41,9 @@ import {
   type StageName,
   type StageStatus,
 } from "./item";
+import { labelText } from "./schema";
+import { violationMessage } from "./schema-check";
+import type { Label } from "./schemaRules";
 
 // ─── gating ──────────────────────────────────────────────────────────────────
 
@@ -516,6 +519,42 @@ function extractNestMessages(body: unknown): string[] {
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** The failing item of a `400 METADATA_VALIDATION_FAILED` (also the older
+ * `PUBLISH_VALIDATION_FAILED`, without `state`). */
+export interface ValidationFailureItem {
+  id: string | null;
+  state?: "DRAFT" | "RECORD";
+  missing: Array<{ path: string; label?: Label }>;
+  violations: Array<{ path: string; label?: Label; constraint: string; limit?: number | string; hint?: Label }>;
+}
+
+/** The failing item of a validation 400, or null for any other body. */
+export function metadataValidationFailure(body: unknown): ValidationFailureItem | null {
+  if (!body || typeof body !== "object") return null;
+  const b = body as { code?: unknown; items?: unknown };
+  if (b.code !== "METADATA_VALIDATION_FAILED" && b.code !== "PUBLISH_VALIDATION_FAILED") return null;
+  const first = Array.isArray(b.items) ? b.items[0] : null;
+  if (!first || typeof first !== "object") return null;
+  const f = first as Partial<ValidationFailureItem>;
+  return {
+    id: f.id ?? null,
+    state: f.state,
+    missing: Array.isArray(f.missing) ? f.missing : [],
+    violations: Array.isArray(f.violations) ? f.violations : [],
+  };
+}
+
+/** One line per failing field, labelled: "Broj strana — required." */
+export function validationFieldErrors(failure: ValidationFailureItem): BackendFieldError[] {
+  return [
+    ...failure.missing.map((m) => ({ key: m.path, message: `${labelText(m.label) || m.path} — required.` })),
+    ...failure.violations.map((v) => ({
+      key: v.path,
+      message: `${labelText(v.label) || v.path} — ${violationMessage(v)}`,
+    })),
+  ];
 }
 
 /** The parent ids of a `400 PARENT_NOT_FOUND` body, or null for any other body. */

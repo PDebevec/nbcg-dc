@@ -180,4 +180,21 @@ describe("ProcessingTab", () => {
     expect(html).not.toContain("Web PDF built.");
     expect(html).toContain("Expand all steps");
   });
+
+  it("offers Edit metadata when the backend refused an item's metadata", async () => {
+    const html = await render([
+      makeRow({
+        upload: {
+          status: "error",
+          label: "Upload failed",
+          message: "1 of 1 item is not ready to publish",
+          fieldErrors: ["Broj strana — required."],
+          warnings: [],
+          canEditMetadata: true,
+        },
+      }),
+    ]);
+    expect(html).toContain("Broj strana — required.");
+    expect(html).toContain("Edit metadata");
+  });
 });

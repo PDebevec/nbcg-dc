@@ -10,7 +10,7 @@ import Pill from "@ui/common/Pill.vue";
 
 const props = defineProps<{ batchId: string }>();
 
-const { header, tabs, steps, activeTab, setTab, unlock, back } = useBatch(
+const { header, tabs, steps, activeTab, setTab, unlock, back, editItemMetadata } = useBatch(
   () => props.batchId,
 );
 </script>
@@ -87,7 +87,7 @@ const { header, tabs, steps, activeTab, setTab, unlock, back } = useBatch(
         :batch-id="props.batchId"
         @go-processing="setTab('processing')"
       />
-      <ProcessingTab v-else :batch-id="props.batchId" />
+      <ProcessingTab v-else :batch-id="props.batchId" @edit-metadata="editItemMetadata" />
     </div>
   </div>
 </template>

@@ -111,3 +111,13 @@ describe("useBatchWork.setTab", () => {
     expect(persisted).toHaveLength(0);
   });
 });
+
+describe("focusItem", () => {
+  it("hands the focus request over once", () => {
+    setActivePinia(createPinia());
+    const work = useBatchWorkStore();
+    work.focusItem("i1");
+    expect(work.takeFocus()).toBe("i1");
+    expect(work.takeFocus()).toBeNull();
+  });
+});

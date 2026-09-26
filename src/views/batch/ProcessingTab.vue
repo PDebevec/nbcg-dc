@@ -6,6 +6,7 @@ import type { RunnableStage } from "@domain/pipeline";
 import ProgressBar from "@ui/batch/ProgressBar.vue";
 
 const props = defineProps<{ batchId: string }>();
+const emit = defineEmits<{ "edit-metadata": [itemId: string] }>();
 
 const {
   rows,
@@ -306,6 +307,13 @@ function runStep(row: ProcessingItemView, step: StepView): void {
           <div v-for="e in row.upload.fieldErrors" :key="e" class="note hard indent">
             {{ e }}
           </div>
+          <button
+            v-if="row.upload.canEditMetadata"
+            class="edit-metadata"
+            @click="emit('edit-metadata', row.id)"
+          >
+            Edit metadata
+          </button>
           <!-- Keyed by index, not by the message: since warnings now survive
                onto a *failed* result too, one row can legitimately carry the
                same text twice, and keying on it would collide. -->
@@ -1110,6 +1118,13 @@ function runStep(row: ProcessingItemView, step: StepView): void {
 
 .note.indent {
   margin-left: 18px;
+}
+
+.edit-metadata {
+  margin: 4px 0 0 22px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--c-primary);
 }
 
 .note-glyph {

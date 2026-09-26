@@ -76,9 +76,11 @@ import {
   changedMetadata,
   isUploadable,
   mapValidationErrors,
+  metadataValidationFailure,
   parentNotFoundIds,
   planItemUpload,
   textQualityWarnings,
+  validationFieldErrors,
   type BackendFieldError,
   type ItemUploadPlan,
   type UploadBlocker,
@@ -257,6 +259,8 @@ export interface ItemUploadResult {
   warnings: UploadWarning[];
   /** Backend validation errors mapped onto fields (on a `400`). */
   fieldErrors: BackendFieldError[];
+  /** The backend refused the metadata (`METADATA_VALIDATION_FAILED`). */
+  metadataRejected: boolean;
   /** Per-parent connect failures (the record still uploaded). */
   relationErrors: Array<{ parentId: string; message: string }>;
   /**
@@ -299,6 +303,7 @@ function result(
     blockers: [],
     warnings: [],
     fieldErrors: [],
+    metadataRejected: false,
     relationErrors: [],
     parentStates: [],
     missingParentIds: [],
@@ -1662,6 +1667,17 @@ function mapUploadError(
           warnings,
           missingParentIds: missingParents,
           message: missingParentMessage(missingParents, true),
+        });
+      }
+      const failure = metadataValidationFailure(err.body);
+      if (failure) {
+        return result(itemId, "error", {
+          backendId,
+          created,
+          warnings,
+          metadataRejected: true,
+          fieldErrors: validationFieldErrors(failure),
+          message: err.message,
         });
       }
       return result(itemId, "error", {

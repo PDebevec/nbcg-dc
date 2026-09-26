@@ -70,6 +70,7 @@ export interface UploadResultView {
   message: string;
   fieldErrors: string[];
   warnings: string[];
+  canEditMetadata: boolean;
 }
 
 /** One row of the per-item live pipeline list. */
@@ -288,8 +289,10 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
             : "")),
       fieldErrors: blocked
         ? r.blockers.slice(1).map(blockerCopy)
-        : r.fieldErrors.map((e) => (e.key ? `${e.key}: ${e.message}` : e.message)),
+        : r.fieldErrors.map((e) => e.message),
       warnings: r.warnings.map(warningCopy),
+      canEditMetadata:
+        r.metadataRejected || (blocked && r.blockers.some((b) => b.code === "metadata-invalid")),
     };
   }
 

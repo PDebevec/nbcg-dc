@@ -136,6 +136,7 @@ describe("useUpload.closeBatch — cleanup", () => {
     blockers: [],
     warnings: [],
     fieldErrors: [],
+    metadataRejected: false,
     relationErrors: [],
     parentStates: [],
     missingParentIds: [],
