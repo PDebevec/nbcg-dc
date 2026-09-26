@@ -874,10 +874,13 @@ async function replaceOnBackend(
   // when that's *all* that changed (`flags.reuploadTextOnly`); a
   // metadata-only edit still uploads any file the backend is missing, but
   // never re-PUTs unchanged ones.
+  //
+  // The state is the mirror's: a PATCH never changes it, so the batch's choice
+  // must not overwrite what the Draft/Record lock reads (as in `recreateOrphaned`).
   await writeThrough(item, deps, {
     backendId,
     version,
-    targetState: ctx.targetState,
+    targetState: mirror.targetState ?? ctx.targetState,
     visibility: ctx.visibility,
     metadata: mirrorMetadata,
   });

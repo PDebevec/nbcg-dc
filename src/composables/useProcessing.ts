@@ -476,7 +476,8 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
     await metadata.ensureParents(b.parents.map((p) => p.id));
     await metadata.flush();
     const resolveContext = (item: Item): UploadItemContext => ({
-      targetState: resolveItemPublish(b, item.id),
+      // An uploaded item keeps its backend state; the batch's choice is for new ones.
+      targetState: metadata.backendStates.get(item.id) ?? resolveItemPublish(b, item.id),
       visibility: resolveItemVisibility(b, item.id),
       parentIds: b.parents.map((p) => p.id),
       metadata: metadata.wireMetadata(item.id),

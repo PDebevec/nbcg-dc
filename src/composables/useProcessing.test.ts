@@ -147,6 +147,7 @@ vi.mock("@stores/useItems", () => ({ useItemsStore: () => itemsFake }));
 
 const metadataFake = {
   ready: true,
+  backendStates: new Map<string, "DRAFT" | "RECORD" | null>(),
   async ensureItemLoaded() {},
   async ensureParents(_ids: readonly string[]) {},
   isReady(): boolean {
@@ -209,6 +210,7 @@ beforeEach(() => {
   itemsFake.loaded = true;
   itemsFake.refreshCalls = 0;
   metadataFake.ready = true;
+  metadataFake.backendStates = new Map();
   metadataFake.ensureParents = async () => {};
   uploadFake.run = async () => true;
   uploadFake.results.value = new Map();
@@ -436,6 +438,31 @@ describe("upload", () => {
     await view.upload();
 
     expect(events).toEqual(["parents loaded: p1", "contexts built"]);
+  });
+
+  it("uploads an item in the state it has on the backend, else the batch's choice", async () => {
+    const done = { stages: stagesWith({ pdf: "done", thumbnail: "done", ocr: "done" }) };
+    const record = makeItem({ id: "rec", folderName: "rec", assets: [asset("rec", "rec.pdf")], ...done });
+    const fresh = makeItem({ id: "new", folderName: "new", assets: [asset("new", "new.pdf")], ...done });
+    seed(
+      makeBatch(["rec", "new"], {
+        stage: BatchStage.Processing,
+        proc: { rec: ItemRunStatus.Done, new: ItemRunStatus.Done },
+        publish: PublishTarget.DRAFT,
+      }),
+      [record, fresh],
+    );
+    metadataFake.backendStates = new Map([["rec", "RECORD"], ["new", null]]);
+    const states: string[] = [];
+    uploadFake.run = async (_batchId, members, resolveContext) => {
+      for (const m of members) states.push(`${m.id}:${resolveContext(m).targetState}`);
+      return true;
+    };
+    const view = useProcessing(() => "b1");
+
+    await view.upload();
+
+    expect(states).toEqual(["rec:RECORD", "new:DRAFT"]);
   });
 });
 

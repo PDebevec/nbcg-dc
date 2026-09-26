@@ -1066,6 +1066,16 @@ describe("uploadItem — replace", () => {
     expect(written?.metadata).not.toHaveProperty("year");
   });
 
+  it("keeps the state the record has on the backend — a PATCH never changes it", async () => {
+    const deps = fakeDeps({ readMirror: vi.fn(async () => MIRROR) });
+    const item = replaceItem();
+    await uploadItem(item, { ...CTX, targetState: "DRAFT", metadata: { title: "New title", year: "2020" } }, deps);
+
+    const written = vi.mocked(deps.writeMirror).mock.calls.find(([target]) => target.id === item.id)?.[1];
+    expect(written?.targetState).toBe("RECORD");
+    expect(vi.mocked(deps.recordUpload).mock.calls[0][1].targetState).toBe("RECORD");
+  });
+
   it("includes visibilityStatus in the PATCH when it changed", async () => {
     const deps = fakeDeps({
       readMirror: vi.fn(async () => MIRROR),
