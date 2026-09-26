@@ -246,3 +246,48 @@ export function buildFieldViews(input: BuildViewsInput): FieldView[] {
     return v;
   });
 }
+
+// ─── typeahead ───────────────────────────────────────────────────────────────
+
+/** One typeahead hint: its text, and the value picking it stores. */
+export interface HintView {
+  label: string;
+  stored: unknown;
+}
+
+/**
+ * One backend hint as the list shows it: an author hint is labelled by name
+ * and fills that author's sub-fields; a vocabulary hint stores the code or the
+ * `{ code, en, cnr }` (`storeAs`); a free hint stores its text.
+ */
+export function toHintView(
+  view: FieldView,
+  value: unknown,
+  storeAs: "code" | "resolvedCode" | null,
+): HintView | null {
+  if (view.hints?.fillsEntry) {
+    if (!isPlainObject(value)) return null;
+    const label = [value.familyName, value.firstName]
+      .filter((x): x is string => typeof x === "string" && x !== "")
+      .join(", ");
+    return { label: label || "—", stored: value };
+  }
+  if (view.hints?.strict) {
+    const label = asLabel(value);
+    if (!label || !isPlainObject(value) || !("code" in value)) return null;
+    return { label: labelText(label) || codeOf(value), stored: storeAs === "code" ? value.code : value };
+  }
+  return typeof value === "string" ? { label: value, stored: value } : null;
+}
+
+/** An author hint merged into the entry: only the entry's own sub-fields are taken. */
+export function entryFromHint(
+  entry: unknown,
+  stored: unknown,
+  shapeKeys: readonly string[],
+): Record<string, unknown> {
+  const base: Plain = isPlainObject(entry) ? { ...entry } : {};
+  if (!isPlainObject(stored)) return base;
+  for (const key of shapeKeys) if (key in stored) base[key] = stored[key];
+  return base;
+}

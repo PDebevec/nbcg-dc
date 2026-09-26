@@ -32,6 +32,11 @@ const {
   removeEntry,
   setFieldSource,
   setFieldManual,
+  hintPath,
+  hintItems,
+  requestHints,
+  pickHint,
+  closeHints,
   cobissId,
   setCobissId,
   getCobiss,
@@ -298,11 +303,16 @@ const enumLabel: Record<string, string> = {
             <MetaField
               :field="field"
               :editable="editable"
+              :hint-path="hintPath"
+              :hint-items="hintItems"
               @change="setField"
               @add="addEntry"
               @remove="removeEntry"
               @pick-source="setFieldSource"
               @manual="setFieldManual"
+              @query="requestHints"
+              @pick="pickHint"
+              @close-hints="closeHints"
             />
           </template>
         </div>

@@ -41,12 +41,14 @@ import {
   type ItemCheck,
   type ItemReadiness,
 } from "@domain/schema-check";
-import { numberFromText, quantityFromText, setAtPath, topKey } from "@domain/schema-values";
+import { getAtPath, numberFromText, quantityFromText, setAtPath, topKey } from "@domain/schema-values";
 import { fieldSourceOptions } from "@domain/provenance";
 import type { ParentRecord } from "@domain/parent";
-import { buildFieldViews, type FieldView } from "./metadataFieldViews";
+import { buildFieldViews, entryFromHint, toHintView, type FieldView, type HintView } from "./metadataFieldViews";
 import { derivedOutputNames } from "@domain/naming";
 import { fetchCobissPreview, cobissCollisionMessage } from "@services/api/cobiss";
+import { fetchHints } from "@services/api/hints";
+import { logger } from "@lib/logger";
 import { useParentLinks } from "./useParentLinks";
 
 export type { ParentRowView, ParentSearchRow } from "./useParentLinks";
@@ -56,7 +58,10 @@ export type {
   FieldSourceOptionView,
   FieldView,
   HintSource,
+  HintView,
 } from "./metadataFieldViews";
+
+const HINT_DEBOUNCE_MS = 250;
 
 /** One entry in the item navigator dropdown. */
 export interface NavItemView {
@@ -369,10 +374,91 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
     });
   }
 
+  // ── typeahead ────────────────────────────────────────────────────────────
+
+  /** The one open hint list: which field it belongs to, and its hints. */
+  const hintPath = ref<string | null>(null);
+  const hintItems = ref<HintView[]>([]);
+  let hintAbort: AbortController | null = null;
+  let hintTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function findView(
+    path: string,
+    list: FieldView[] = [...views.value.shown, ...views.value.other],
+  ): FieldView | null {
+    for (const v of list) {
+      if (v.path === path) return v;
+      const inner = findView(path, [...v.children, ...v.entries.flat()]);
+      if (inner) return inner;
+    }
+    return null;
+  }
+
+  function closeHints(): void {
+    if (hintTimer) clearTimeout(hintTimer);
+    hintTimer = null;
+    hintAbort?.abort();
+    hintAbort = null;
+    hintPath.value = null;
+    hintItems.value = [];
+  }
+
+  /** Look up hints for what was typed into the field at `path` (debounced). */
+  function requestHints(path: string, text: string): void {
+    const view = findView(path);
+    const source = view?.hints;
+    closeHints();
+    const q = text.trim();
+    if (!view || !source || q.length < source.minChars) return;
+    const storeAs = metadata.schema ? (fieldAtPath(metadata.schema.fields, path)?.values?.storeAs ?? null) : null;
+    hintTimer = setTimeout(async () => {
+      hintTimer = null;
+      const controller = new AbortController();
+      hintAbort = controller;
+      try {
+        const hints = await fetchHints(source.path, source.queryParam, q, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        hintPath.value = path;
+        hintItems.value = hints
+          .map((h) => toHintView(view, h.value, storeAs))
+          .filter((h): h is HintView => h != null);
+      } catch (err) {
+        if (!controller.signal.aborted) logger.warn("metadata", `Couldn't load hints for ${path}.`, err);
+      }
+    }, HINT_DEBOUNCE_MS);
+  }
+
+  /** Use a hint: a free hint fills the box, a vocabulary hint sets or adds the
+   * value, an author hint fills that author's sub-fields. */
+  function pickHint(path: string, index: number): void {
+    const view = findView(path);
+    const hint = hintItems.value[index];
+    closeHints();
+    if (!view || !hint) return;
+    if (view.hints?.fillsEntry) {
+      const entryPath = path.slice(0, path.lastIndexOf("."));
+      const key = topKey(entryPath);
+      const entry = getAtPath(values.value[key]?.value, entryPath.slice(key.length));
+      const shape = metadata.schema ? (fieldAtPath(metadata.schema.fields, entryPath)?.objectShape ?? []) : [];
+      setField(entryPath, entryFromHint(entry, hint.stored, shape.map((c) => c.key)));
+      return;
+    }
+    if (view.kind === "multi-hint" || view.kind === "multi-vocab") {
+      const list = Array.isArray(view.raw) ? view.raw : [];
+      const code = (x: unknown) =>
+        x && typeof x === "object" && "code" in x ? String((x as { code: unknown }).code) : String(x);
+      if (list.some((x) => code(x) === code(hint.stored))) return;
+      setField(path, [...list, hint.stored]);
+      return;
+    }
+    setField(path, hint.stored);
+  }
+
   // ── navigation ───────────────────────────────────────────────────────────
 
   function jump(i: number): void {
     if (i < 0 || i >= items.value.length) return;
+    closeHints();
     const prev = current.value;
     if (prev && prev.id !== items.value[i].id) void metadata.flush(prev.id);
     index.value = i;
@@ -541,7 +627,10 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
 
   if (getCurrentInstance()) {
     onMounted(init);
-    onUnmounted(() => void metadata.flush());
+    onUnmounted(() => {
+      closeHints();
+      void metadata.flush();
+    });
   }
 
   return {
@@ -568,6 +657,12 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
     removeEntry,
     setFieldSource,
     setFieldManual,
+    // typeahead
+    hintPath,
+    hintItems,
+    requestHints,
+    pickHint,
+    closeHints,
     // COBISS
     cobissId,
     setCobissId,

@@ -3,7 +3,7 @@ import { SNAPSHOT } from "@domain/schema.fixture";
 import { buildContext, evaluateAll, type ItemState } from "@domain/schemaRules";
 import { orderedFields } from "@domain/schema-form";
 import type { MetadataValues } from "@domain/metadata";
-import { buildFieldViews, type FieldView } from "./metadataFieldViews";
+import { buildFieldViews, entryFromHint, toHintView, type FieldView } from "./metadataFieldViews";
 
 const BOOK = { code: "am", en: "Book", cnr: "Knjiga" };
 
@@ -80,5 +80,34 @@ describe("buildFieldViews", () => {
   it("marks where each group starts", () => {
     const starts = views({}).filter((v) => v.groupStart).map((v) => v.group);
     expect(starts).toEqual(SNAPSHOT.groups.slice().sort((a, b) => a.order - b.order).map((g) => g.key));
+  });
+});
+
+describe("toHintView", () => {
+  const base = find(views({}), "keywords");
+
+  it("uses a free hint's text as label and value", () => {
+    expect(toHintView(base, "computers", null)).toEqual({ label: "computers", stored: "computers" });
+  });
+
+  it("stores a vocabulary hint per storeAs", () => {
+    const lang = find(views({}), "language");
+    const cnr = { code: "cnr", en: "Montenegrin", cnr: "Crnogorski" };
+    expect(toHintView(lang, cnr, "resolvedCode")).toEqual({ label: "Crnogorski", stored: cnr });
+    expect(toHintView(lang, cnr, "code")).toEqual({ label: "Crnogorski", stored: "cnr" });
+  });
+
+  it("labels an author hint by name", () => {
+    const familyName = find(views({ authors: [{}] }), "authors").entries[0][0];
+    expect(toHintView(familyName, { familyName: "Njegoš", firstName: "Petar" }, null)?.label).toBe("Njegoš, Petar");
+  });
+});
+
+describe("entryFromHint", () => {
+  it("takes only the entry's own sub-fields", () => {
+    expect(entryFromHint({ role: "r" }, { familyName: "Njegoš", count: 3 }, ["familyName", "firstName", "role"])).toEqual({
+      role: "r",
+      familyName: "Njegoš",
+    });
   });
 });

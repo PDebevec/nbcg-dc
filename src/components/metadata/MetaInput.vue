@@ -1,49 +1,78 @@
 <script setup lang="ts">
-import { computed } from "vue";
-import type { FieldView } from "@composables/useMetadataForm";
+import { computed, ref } from "vue";
+import type { FieldView, HintView } from "@composables/useMetadataForm";
 
 /**
  * The input for one non-object schema field. Emits the value to store: a
- * picked option emits that option's stored value; text, number, quantity and
- * date boxes emit their text (the composable turns it into the stored shape).
- * Object kinds are composed by `MetaField`.
+ * picked option or hint emits what it stores; text, number, quantity and date
+ * boxes emit their text (the composable turns it into the stored shape).
+ * Boxes with hints also emit what was typed (`query`); a vocabulary box stores
+ * nothing until a hint is picked.
  */
 const props = defineProps<{
   field: FieldView;
   editable: boolean;
   /** Tighter sizing inside object sub-forms. */
   compact?: boolean;
+  /** This field's open hint list, or null when its list is closed. */
+  hints?: HintView[] | null;
 }>();
 
-const emit = defineEmits<{ change: [value: unknown] }>();
+const emit = defineEmits<{
+  change: [value: unknown];
+  query: [text: string];
+  pick: [index: number];
+  close: [];
+}>();
+
+/** What is typed into a chip box or a vocabulary search box. */
+const typed = ref("");
 
 const disabled = computed(() => !props.editable || props.field.readOnly);
 const invalid = computed(() => Boolean(props.field.error));
 const flagged = computed(() => Boolean(props.field.flag));
 const list = computed<unknown[]>(() => (Array.isArray(props.field.raw) ? props.field.raw : []));
-/** Options not chosen yet (multi-enum add list). */
 const remainingOptions = computed(() =>
   props.field.options.filter((o) => !props.field.chips.includes(o.value)),
 );
+const open = computed(() => (props.hints?.length ?? 0) > 0);
 
 function onText(event: Event): void {
   emit("change", (event.target as HTMLInputElement | HTMLTextAreaElement).value);
 }
 
-/** A select: emit the picked option's stored value (null for "not set"). */
+/** A free-hint box: the text is the value; hints only show how others wrote it. */
+function onHintText(event: Event): void {
+  const text = (event.target as HTMLInputElement).value;
+  emit("change", text);
+  emit("query", text);
+}
+
+/** A chip or vocabulary search box: nothing is stored while typing. */
+function onTyped(event: Event): void {
+  typed.value = (event.target as HTMLInputElement).value;
+  if (props.field.hints) emit("query", typed.value);
+}
+
+function onPick(index: number): void {
+  typed.value = "";
+  emit("pick", index);
+}
+
 function onOption(event: Event): void {
   const value = (event.target as HTMLSelectElement).value;
   emit("change", props.field.options.find((o) => o.value === value)?.stored ?? null);
 }
 
+/** Enter adds free text as a chip (not in a vocabulary box). */
 function onChipKeydown(event: KeyboardEvent): void {
-  if (event.key !== "Enter") return;
-  const input = event.target as HTMLInputElement;
-  const value = input.value.trim();
+  if (event.key !== "Enter" || props.field.kind === "multi-vocab") return;
+  const value = typed.value.trim();
   if (!value) return;
   event.preventDefault();
   emit("change", [...list.value, value]);
-  input.value = "";
+  typed.value = "";
+  emit("close");
 }
 
 function removeChip(i: number): void {
@@ -59,15 +88,45 @@ function onOptionAdd(event: Event): void {
 </script>
 
 <template>
-  <!-- text, date, single free-hint box -->
+  <!-- text, date -->
   <input
-    v-if="field.kind === 'text' || field.kind === 'date' || field.kind === 'hint'"
+    v-if="field.kind === 'text' || field.kind === 'date'"
     :value="field.value"
     :disabled="disabled"
     :placeholder="field.kind === 'date' ? 'YYYY-MM-DD' : field.label"
     :class="{ invalid, flagged, compact }"
     @input="onText"
   />
+
+  <!-- free text with hints -->
+  <div v-else-if="field.kind === 'hint'" class="hint-slot">
+    <input
+      :value="field.value"
+      :disabled="disabled"
+      :placeholder="field.label"
+      :class="{ invalid, flagged, compact }"
+      @input="onHintText"
+      @blur="emit('close')"
+    />
+    <ul v-if="open" class="hints">
+      <li v-for="(h, i) in hints" :key="i" @mousedown.prevent="onPick(i)">{{ h.label }}</li>
+    </ul>
+  </div>
+
+  <!-- one value from a searched vocabulary -->
+  <div v-else-if="field.kind === 'vocab'" class="hint-slot">
+    <input
+      :value="typed"
+      :disabled="disabled"
+      :placeholder="field.value || 'Search…'"
+      :class="{ invalid, flagged, compact }"
+      @input="onTyped"
+      @blur="emit('close')"
+    />
+    <ul v-if="open" class="hints">
+      <li v-for="(h, i) in hints" :key="i" @mousedown.prevent="onPick(i)">{{ h.label }}</li>
+    </ul>
+  </div>
 
   <textarea
     v-else-if="field.kind === 'textarea'"
@@ -89,7 +148,6 @@ function onOptionAdd(event: Event): void {
     @input="onText"
   />
 
-  <!-- quantity: the number, with the unit the rules chose -->
   <div v-else-if="field.kind === 'quantity'" class="quantity">
     <input
       :value="field.value"
@@ -115,27 +173,29 @@ function onOptionAdd(event: Event): void {
     </option>
   </select>
 
-  <!-- a single searched value (an author's role) -->
-  <input
-    v-else-if="field.kind === 'vocab'"
-    :value="field.value"
-    disabled
-    :class="{ invalid, flagged, compact }"
-  />
-
   <!-- chips: free text (multi, multi-hint) and coded (multi-enum, multi-vocab) -->
   <div v-else class="chips" :class="{ invalid, flagged }">
     <span v-for="(chip, i) in field.chips" :key="`${chip}-${i}`" class="chip">
       {{ field.chipLabels[i] ?? chip }}
       <button v-if="!disabled" class="chip-x" title="Remove" @click="removeChip(i)">×</button>
     </span>
-    <input
-      v-if="!disabled && (field.kind === 'multi' || field.kind === 'multi-hint')"
-      class="chip-input"
-      :class="{ compact }"
-      :placeholder="`${field.label} — Enter to add`"
-      @keydown="onChipKeydown"
-    />
+    <div
+      v-if="!disabled && (field.kind === 'multi' || field.kind === 'multi-hint' || field.kind === 'multi-vocab')"
+      class="hint-slot chip-slot"
+    >
+      <input
+        class="chip-input"
+        :class="{ compact }"
+        :value="typed"
+        :placeholder="field.kind === 'multi-vocab' ? 'Search…' : `${field.label} — Enter to add`"
+        @input="onTyped"
+        @keydown="onChipKeydown"
+        @blur="emit('close')"
+      />
+      <ul v-if="open" class="hints">
+        <li v-for="(h, i) in hints" :key="i" @mousedown.prevent="onPick(i)">{{ h.label }}</li>
+      </ul>
+    </div>
     <select
       v-else-if="!disabled && field.kind === 'multi-enum'"
       class="chip-select"
@@ -188,6 +248,45 @@ select:disabled {
   background: var(--c-surface-disabled);
   color: var(--c-text-muted);
   cursor: not-allowed;
+}
+
+.hint-slot {
+  position: relative;
+}
+
+.chip-slot {
+  flex: 1;
+  min-width: 160px;
+}
+
+.chip-slot .chip-input {
+  width: 100%;
+}
+
+.hints {
+  position: absolute;
+  z-index: 30;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin: 4px 0 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-menu);
+}
+
+.hints li {
+  padding: 6px 9px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.hints li:hover {
+  background: var(--c-primary-soft);
 }
 
 .chips {

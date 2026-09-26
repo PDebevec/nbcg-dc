@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import type { FieldView } from "@composables/useMetadataForm";
+import type { FieldView, HintView } from "@composables/useMetadataForm";
 import MetaInput from "./MetaInput.vue";
 
 /**
@@ -8,7 +8,7 @@ import MetaInput from "./MetaInput.vue";
  * edit is emitted with the path it belongs to (`title`, `publication.place`,
  * `authors[1].role`); the composable writes it into the right place.
  */
-defineProps<{ field: FieldView; editable: boolean }>();
+defineProps<{ field: FieldView; editable: boolean; hintPath?: string | null; hintItems?: HintView[] }>();
 
 const emit = defineEmits<{
   change: [path: string, value: unknown];
@@ -16,6 +16,9 @@ const emit = defineEmits<{
   remove: [key: string, index: number];
   pickSource: [key: string, parentId: string];
   manual: [key: string];
+  query: [path: string, text: string];
+  pick: [path: string, index: number];
+  closeHints: [];
 }>();
 
 const menuOpen = ref(false);
@@ -95,7 +98,11 @@ function manual(key: string): void {
           :field="child"
           :editable="editable"
           compact
+          :hints="hintPath === child.path ? hintItems : null"
           @change="emit('change', child.path, $event)"
+          @query="emit('query', child.path, $event)"
+          @pick="emit('pick', child.path, $event)"
+          @close="emit('closeHints')"
         />
         <div v-if="child.error" class="error">{{ child.error }}</div>
       </div>
@@ -122,7 +129,11 @@ function manual(key: string): void {
               :field="child"
               :editable="editable"
               compact
+              :hints="hintPath === child.path ? hintItems : null"
               @change="emit('change', child.path, $event)"
+              @query="emit('query', child.path, $event)"
+              @pick="emit('pick', child.path, $event)"
+              @close="emit('closeHints')"
             />
             <div v-if="child.error" class="error">{{ child.error }}</div>
           </div>
@@ -138,7 +149,11 @@ function manual(key: string): void {
       v-else
       :field="field"
       :editable="editable"
+      :hints="hintPath === field.path ? hintItems : null"
       @change="emit('change', field.path, $event)"
+      @query="emit('query', field.path, $event)"
+      @pick="emit('pick', field.path, $event)"
+      @close="emit('closeHints')"
     />
 
     <div v-if="field.error" class="error">{{ field.error }}</div>
