@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed, ref, watch } from "vue";
 import type { FieldView, HintView } from "@composables/useMetadataForm";
 import MetaField from "./MetaField.vue";
 
@@ -7,12 +8,28 @@ import MetaField from "./MetaField.vue";
  * "Get data" or a material-type change. A rule never deletes data: they stay
  * editable and upload as they are (schema v2 editor rule 1).
  */
-defineProps<{
+const props = defineProps<{
   fields: FieldView[];
   editable: boolean;
   hintPath: string | null;
   hintItems: HintView[];
 }>();
+
+function hasError(field: FieldView): boolean {
+  return field.error !== "" || field.children.some(hasError) || field.entries.some((e) => e.some(hasError));
+}
+
+/** Collapsed, but opened when a field in it has an error so the error is seen.
+ * It does not close again when the error is fixed — mid-edit, that would take
+ * the field away from the operator. */
+const open = ref(false);
+watch(
+  computed(() => props.fields.some(hasError)),
+  (erroring) => {
+    if (erroring) open.value = true;
+  },
+  { immediate: true },
+);
 
 const emit = defineEmits<{
   change: [path: string, value: unknown];
@@ -27,7 +44,12 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <details v-if="fields.length > 0" class="other">
+  <details
+    v-if="fields.length > 0"
+    class="other"
+    :open="open"
+    @toggle="open = ($event.target as HTMLDetailsElement).open"
+  >
     <summary>Other fields ({{ fields.length }})</summary>
     <p class="note">
       Not used for this material type, but they hold a value — it is kept and uploaded as it is.

@@ -28,6 +28,15 @@ describe("OtherFields", () => {
     expect(html).toContain("kept and uploaded");
   });
 
+  it("opens itself when a field in it has an error, so the error is seen", async () => {
+    const open = /<details[^>]*\sopen/;
+    expect(await render([view({ key: "extent" })])).not.toMatch(open);
+    expect(await render([view({ key: "extent", error: "Must be a number." })])).toMatch(open);
+    // An error on a sub-field of a hidden object counts too.
+    const nested = view({ key: "publication", kind: "object", children: [view({ key: "place", error: "Too long." })] });
+    expect(await render([nested])).toMatch(open);
+  });
+
   it("renders nothing when there are none", async () => {
     expect(await render([])).not.toContain("Other fields");
   });
