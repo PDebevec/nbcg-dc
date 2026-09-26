@@ -405,6 +405,24 @@ describe("create collision — adoption", () => {
     expect(body.metadata).toEqual({ title: "New title" }); // cobissId matched → not resent
   });
 
+  it("never clears a field on the record it adopted, whatever the editor emptied", async () => {
+    const updateItem = vi.fn(async () => ({ version: 8 }));
+    const writeMirror = vi.fn(async () => {});
+    const deps = fakeDeps({
+      createItem: vi.fn(async () => conflict()),
+      resolveExistingRecord: vi.fn(async () => ({ ...existing, metadata: { ...existing.metadata, year: "1999" } })),
+      updateItem,
+      writeMirror,
+    });
+    await uploadItem(makeItem(), { ...CTX, metadata: { title: "New title" }, emptied: ["year"] }, deps);
+
+    expect(updateItem).toHaveBeenCalledTimes(1);
+    expect((updateItem as any).mock.calls[0][1].metadata).toEqual({ title: "New title" });
+    // The mirror keeps the record's field too.
+    const last = (writeMirror as any).mock.calls.at(-1)[1] as LocalMetadataFile;
+    expect(last.metadata).toMatchObject({ year: "1999", title: "New title" });
+  });
+
   it("issues NO patch when the operator changed nothing", async () => {
     const updateItem = vi.fn();
     const deps = fakeDeps({

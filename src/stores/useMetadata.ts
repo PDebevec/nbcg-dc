@@ -71,6 +71,15 @@ export interface BatchParents {
   pending: boolean;
 }
 
+/** An item's editor values from its mirror, normalised on the way in. A new
+ * item starts from the schema's defaults (collectionType → 0). */
+function valuesFromMirror(s: RecordSchemaV2, mirror: LocalMetadataFile | null): MetadataValues {
+  const stored = mirror?.metadata ?? {};
+  const start = mirror?.backendId ? stored : { ...defaultValues(s), ...stored };
+  const known = new Set(s.fields.map((f) => f.key));
+  return toMetadataValues(normalizeRecord(s, start), "user", known);
+}
+
 /** The item's state on the backend, from its mirror; null before its first upload. */
 function backendStateOf(mirror: LocalMetadataFile | null): TargetState | null {
   if (!mirror?.backendId) return null;
@@ -196,11 +205,7 @@ export const useMetadataStore = defineStore("metadata", () => {
           logger.warn("metadata", `Couldn't read metadata.json for ${item.id}.`, err);
         }
         rememberMirror(item.id, mirror);
-        const stored = mirror?.metadata ?? {};
-        // A new item starts from the schema's defaults (collectionType → 0).
-        const start = mirror?.backendId ? stored : { ...defaultValues(s), ...stored };
-        const known = new Set(s.fields.map((f) => f.key));
-        const loaded = toMetadataValues(normalizeRecord(s, start), "user", known);
+        const loaded = valuesFromMirror(s, mirror);
         // Don't clobber edits made while the read was in flight.
         if (!values.value.has(item.id)) {
           const map = new Map(values.value);
@@ -327,21 +332,36 @@ export const useMetadataStore = defineStore("metadata", () => {
    * Re-read an item's metadata.json after something else wrote it — an upload's
    * write-through, a sync — so its backend link and state (the Draft/Record
    * lock) are current, and a later autosave goes to the folder the item now
-   * lives in. Values stay: they are what was just sent.
+   * lives in.
+   *
+   * The editor's values stay, unless `options.values` asks to take the
+   * mirror's (normalised as on load). An upload asks for it on an item that
+   * adopted an existing record, so the values are that record's and a later
+   * re-upload does not clear fields the operator never saw. Otherwise a later
+   * re-upload sends the editor's values — after a sync too, not what it read.
    */
-  async function reloadMirror(item: Item): Promise<void> {
+  async function reloadMirror(item: Item, options: { values?: boolean } = {}): Promise<void> {
     if (!loadedItems.value.has(item.id)) return;
     knownItems.set(item.id, item);
+    let mirror: LocalMetadataFile | null;
     try {
-      rememberMirror(item.id, await readItemMetadata(item));
+      mirror = await readItemMetadata(item);
     } catch (err) {
       logger.warn("metadata", `Couldn't re-read metadata.json for ${item.id}.`, err);
+      return;
+    }
+    rememberMirror(item.id, mirror);
+    const s = schema.value;
+    if (options.values && s) {
+      const map = new Map(values.value);
+      map.set(item.id, valuesFromMirror(s, mirror));
+      values.value = map;
     }
   }
 
-  /** {@link reloadMirror} for each of `items` this session has loaded. */
+  /** {@link reloadMirror} (values kept) for each of `items` this session has loaded. */
   async function reloadMirrors(items: readonly Item[]): Promise<void> {
-    await Promise.all(items.map(reloadMirror));
+    await Promise.all(items.map((item) => reloadMirror(item)));
   }
 
   // ── the save check + readiness ───────────────────────────────────────────

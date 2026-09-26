@@ -218,6 +218,36 @@ describe("reloadMirror", () => {
     await store.reloadMirrors([{ ...item(), folderPath: "/processed/i1" }]);
     expect(store.backendStates.get("i1")).toBe("DRAFT");
   });
+
+  it("keeps the editor's values, or takes an adopted record's when asked", async () => {
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    store.setFieldValue("i1", "title", "Mine");
+    store.setFieldValue("i1", "subtitle", "Sub");
+    store.setFieldValue("i1", "subtitle", "");
+    expect(store.emptiedKeys("i1")).toEqual(["subtitle"]);
+    mirrors.set("i1", {
+      backendId: "rec_9",
+      version: 7,
+      targetState: "RECORD",
+      visibilityStatus: "PUBLIC",
+      metadata: { title: "Existing", materialType: BOOK, collectionType: 0, language: ["cnr"] },
+      syncedAt: "2026-09-25T00:00:00.000Z",
+    });
+
+    await store.reloadMirror(item());
+    expect(store.plainValues("i1").title).toBe("Mine");
+
+    await store.reloadMirror(item(), { values: true });
+    expect(store.plainValues("i1")).toEqual({
+      title: "Existing",
+      materialType: BOOK,
+      collectionType: 0,
+      // normalised on the way in, as on load
+      language: [{ code: "cnr", en: "cnr", cnr: "cnr" }],
+    });
+    expect(store.emptiedKeys("i1")).toEqual([]);
+  });
 });
 
 describe("autosave", () => {

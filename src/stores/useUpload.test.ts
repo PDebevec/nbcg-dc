@@ -240,4 +240,56 @@ describe("useUpload.run", () => {
     expect(metadata.parentGone.has("p1")).toBe(true);
     expect(store.error).toBe(missingParentMessage(["Pobjeda"], true));
   });
+
+  it("reloads an adopted item's values from its new mirror, the others' link only", async () => {
+    const other = { ...item, id: "i2", folderName: "i2", folderPath: "/p/i2" };
+    useItemsStore().items = [item, other];
+    const metadata = useMetadataStore();
+    const reload = vi.spyOn(metadata, "reloadMirror").mockResolvedValue();
+    vi.mocked(uploadBatch).mockResolvedValueOnce({
+      results: [
+        outcome({ warnings: [{ code: "adopted-existing", message: "" }] }),
+        outcome({ itemId: "i2" }),
+      ],
+      allUploaded: false,
+      missingParentIds: [],
+    });
+
+    await useUploadStore().run("b1", [item, other], () => ctx);
+
+    expect(reload).toHaveBeenCalledWith(item, { values: true });
+    expect(reload).toHaveBeenCalledWith(other, { values: false });
+  });
+
+  it("still refreshes the items and reloads their mirrors when the run throws", async () => {
+    useItemsStore().items = [item];
+    const refresh = vi.mocked(useItemsStore().refresh);
+    const reload = vi.spyOn(useMetadataStore(), "reloadMirror").mockResolvedValue();
+    vi.mocked(uploadBatch).mockRejectedValueOnce(new Error("bug"));
+    const store = useUploadStore();
+
+    const ok = await store.run("b1", [item], () => ctx);
+
+    expect(ok).toBe(false);
+    expect(store.error).toBe("bug");
+    expect(refresh).toHaveBeenCalled();
+    expect(reload).toHaveBeenCalledWith(item, { values: false });
+    expect(store.activeBatchId).toBeNull();
+  });
+
+  it("logs a failed reload instead of failing the run", async () => {
+    useItemsStore().items = [item];
+    vi.spyOn(useMetadataStore(), "reloadMirror").mockRejectedValue(new Error("disk"));
+    vi.mocked(uploadBatch).mockResolvedValueOnce({
+      results: [outcome({ status: "error" })],
+      allUploaded: false,
+      missingParentIds: [],
+    });
+    const store = useUploadStore();
+
+    await expect(store.run("b1", [item], () => ctx)).resolves.toBe(false);
+
+    expect(store.error).toBeNull();
+    expect(store.activeBatchId).toBeNull();
+  });
 });

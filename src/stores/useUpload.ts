@@ -127,6 +127,8 @@ export const useUploadStore = defineStore("upload", () => {
     error.value = null;
     clearResults(batchId);
     progress.value = null;
+    /** Items that adopted an existing record (see {@link reloadAfterRun}). */
+    let adopted = new Set<string>();
     try {
       const outcome = await uploadBatch(items, {
         resolveContext,
@@ -135,6 +137,11 @@ export const useUploadStore = defineStore("upload", () => {
         },
       });
       for (const res of outcome.results) setResult(batchId, res);
+      adopted = new Set(
+        outcome.results
+          .filter((r) => r.warnings.some((w) => w.code === "adopted-existing"))
+          .map((r) => r.itemId),
+      );
       if (outcome.missingParentIds.length > 0) {
         const metadata = useMetadataStore();
         metadata.markParentsGone(outcome.missingParentIds);
@@ -148,21 +155,40 @@ export const useUploadStore = defineStore("upload", () => {
       if (outcome.allUploaded) {
         await closeBatch(batchId);
       }
-      // Whatever the outcome, some items may have moved / gained a backend id.
-      const itemsStore = useItemsStore();
-      await itemsStore.refresh();
-      // The editor must see both: the new backend link locks Draft/Record and
-      // is what a re-upload diffs against; the new folder is where it autosaves.
-      const ran = new Set(items.map((i) => i.id));
-      await useMetadataStore().reloadMirrors(itemsStore.items.filter((i) => ran.has(i.id)));
       return outcome.allUploaded;
     } catch (err) {
       error.value = (err as Error)?.message ?? "Upload failed unexpectedly.";
       logger.error("upload", "Upload run failed.", err);
       return false;
     } finally {
+      // Before the editor unlocks, even after an unexpected throw.
+      await reloadAfterRun(items, adopted);
       activeBatchId.value = null;
       progress.value = null;
+    }
+  }
+
+  /**
+   * Whatever a run's outcome, some items may have moved or gained a backend
+   * id: rescan, then re-read the run's mirrors. The editor must see both — the
+   * new backend link locks Draft/Record and is what a re-upload diffs against;
+   * the new folder is where it autosaves. An item that adopted an existing
+   * record takes that record's values too, so a later re-upload never clears
+   * a field its operator never saw. Never throws: it runs in `run`'s `finally`.
+   */
+  async function reloadAfterRun(items: Item[], adopted: ReadonlySet<string>): Promise<void> {
+    try {
+      const itemsStore = useItemsStore();
+      await itemsStore.refresh();
+      const ran = new Set(items.map((i) => i.id));
+      const metadata = useMetadataStore();
+      await Promise.all(
+        itemsStore.items
+          .filter((i) => ran.has(i.id))
+          .map((i) => metadata.reloadMirror(i, { values: adopted.has(i.id) })),
+      );
+    } catch (err) {
+      logger.warn("upload", "Couldn't reload the items after the upload.", err);
     }
   }
 
