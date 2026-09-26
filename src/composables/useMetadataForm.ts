@@ -37,6 +37,7 @@ import type { MetadataValues } from "@domain/metadata";
 import { fieldAtPath, splitByVisibility, statePathOf } from "@domain/schema-form";
 import {
   firstIncompleteIndex,
+  publishNote,
   violationMessage,
   type ItemCheck,
   type ItemReadiness,
@@ -569,11 +570,17 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
 
   // ── per-item publish + visibility ────────────────────────────────────────
 
-  const publish = computed<PublishTarget>(() =>
-    batch.value && current.value
-      ? resolveItemPublish(batch.value, current.value.id)
-      : PublishTarget.DRAFT,
+  /** The item's state on the backend; null before its first upload. */
+  const backendState = computed(() =>
+    current.value ? (metadata.backendStates.get(current.value.id) ?? null) : null,
   );
+  /** Draft/Record is chosen only for a new item; the web app moves it after. */
+  const publishLocked = computed(() => backendState.value != null);
+  const publish = computed<PublishTarget>(() =>
+    backendState.value ??
+    (batch.value && current.value ? resolveItemPublish(batch.value, current.value.id) : PublishTarget.DRAFT),
+  );
+  const publishHint = computed(() => publishNote(check.value, backendState.value));
   const visibility = computed<VisibilityStatus>(() =>
     batch.value && current.value
       ? resolveItemVisibility(batch.value, current.value.id)
@@ -604,6 +611,7 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
   }
 
   function setPublish(value: PublishTarget): void {
+    if (publishLocked.value) return;
     void patchOverride({ publish: value });
   }
 
@@ -685,6 +693,8 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
     retryParents,
     // publish / visibility (per item)
     publish,
+    publishLocked,
+    publishHint,
     visibility,
     publishOverridden,
     visibilityOverridden,

@@ -290,6 +290,27 @@ export const useMetadataStore = defineStore("metadata", () => {
     }
   }
 
+  /**
+   * Re-read an item's metadata.json after something else wrote it — an upload's
+   * write-through, a sync — so its backend link and state (the Draft/Record
+   * lock) are current, and a later autosave goes to the folder the item now
+   * lives in. Values stay: they are what was just sent.
+   */
+  async function reloadMirror(item: Item): Promise<void> {
+    if (!loadedItems.value.has(item.id)) return;
+    knownItems.set(item.id, item);
+    try {
+      rememberMirror(item.id, await readItemMetadata(item));
+    } catch (err) {
+      logger.warn("metadata", `Couldn't re-read metadata.json for ${item.id}.`, err);
+    }
+  }
+
+  /** {@link reloadMirror} for each of `items` this session has loaded. */
+  async function reloadMirrors(items: readonly Item[]): Promise<void> {
+    await Promise.all(items.map(reloadMirror));
+  }
+
   // ── the save check + readiness ───────────────────────────────────────────
 
   function batchOf(item: Item) {
@@ -491,6 +512,8 @@ export const useMetadataStore = defineStore("metadata", () => {
     ensureItemLoaded,
     wireMetadata,
     flush,
+    reloadMirror,
+    reloadMirrors,
     // check + readiness
     batchParentsOf,
     checkOf,

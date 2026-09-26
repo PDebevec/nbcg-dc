@@ -116,3 +116,15 @@ export type ItemReadiness = "ready" | "incomplete" | "untouched";
 export function firstIncompleteIndex(readinesses: readonly ItemReadiness[]): number {
   return readinesses.findIndex((r) => r !== "ready");
 }
+
+/** The note under the Draft/Record switch. */
+export function publishNote(check: ItemCheck | null, backendState: TargetState | null): string {
+  if (backendState) {
+    return `On the backend as a ${backendState === "RECORD" ? "record" : "draft"} — change that in the web app.`;
+  }
+  if (check && check.targetState === "DRAFT" && check.missingToPublish > 0) {
+    const n = check.missingToPublish;
+    return `${n} more field${n === 1 ? "" : "s"} needed to publish as a record.`;
+  }
+  return "";
+}

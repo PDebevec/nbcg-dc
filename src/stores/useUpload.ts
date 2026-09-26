@@ -23,6 +23,7 @@ import {
 import { logger } from "@lib/logger";
 import { useBatchesStore } from "./useBatches";
 import { useItemsStore } from "./useItems";
+import { useMetadataStore } from "./useMetadata";
 
 export const useUploadStore = defineStore("upload", () => {
   /** The batch currently uploading, or null. */
@@ -141,7 +142,12 @@ export const useUploadStore = defineStore("upload", () => {
         await closeBatch(batchId);
       }
       // Whatever the outcome, some items may have moved / gained a backend id.
-      await useItemsStore().refresh();
+      const itemsStore = useItemsStore();
+      await itemsStore.refresh();
+      // The editor must see both: the new backend link locks Draft/Record and
+      // is what a re-upload diffs against; the new folder is where it autosaves.
+      const ran = new Set(items.map((i) => i.id));
+      await useMetadataStore().reloadMirrors(itemsStore.items.filter((i) => ran.has(i.id)));
       return outcome.allUploaded;
     } catch (err) {
       error.value = (err as Error)?.message ?? "Upload failed unexpectedly.";

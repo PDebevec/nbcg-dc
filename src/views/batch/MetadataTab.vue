@@ -58,6 +58,8 @@ const {
   togglePassesData,
   retryParents,
   publish,
+  publishLocked,
+  publishHint,
   visibility,
   publishOverridden,
   visibilityOverridden,
@@ -253,20 +255,21 @@ const enumLabel: Record<string, string> = {
           <div class="heading-row">
             <span class="heading">Publish this item as</span>
             <button
-              v-if="publishOverridden && editable"
+              v-if="publishOverridden && editable && !publishLocked"
               class="reset-link"
               @click="resetPublishToBatch()"
             >
               reset to batch ({{ enumLabel[batchPublish] }})
             </button>
-            <span v-else class="default-note">batch default</span>
+            <span v-else-if="!publishLocked" class="default-note">batch default</span>
           </div>
           <SegmentedControl
             :options="publishOptions"
             :model-value="publish"
-            :disabled="!editable"
+            :disabled="!editable || publishLocked"
             @update:model-value="setPublish($event as 'DRAFT' | 'RECORD')"
           />
+          <div v-if="publishHint" class="publish-note">{{ publishHint }}</div>
         </div>
         <div class="card slim">
           <div class="heading-row">
@@ -410,6 +413,12 @@ const enumLabel: Record<string, string> = {
   font-size: 11px;
   color: var(--c-text-dim);
   margin-left: auto;
+}
+
+.publish-note {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--c-text-faint);
 }
 
 .two-col {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SNAPSHOT } from "./schema.fixture";
-import { checkItem, firstIncompleteIndex, violationMessage, type ItemCheckInput } from "./schema-check";
+import { checkItem, firstIncompleteIndex, publishNote, violationMessage, type ItemCheckInput } from "./schema-check";
 
 const BOOK = { code: "am", en: "Book", cnr: "Knjiga" };
 const SERIAL = { title: "Pobjeda", collectionType: 4 };
@@ -71,5 +71,20 @@ describe("firstIncompleteIndex", () => {
   it("finds the first item that is not ready", () => {
     expect(firstIncompleteIndex(["ready", "untouched", "incomplete"])).toBe(1);
     expect(firstIncompleteIndex(["ready"])).toBe(-1);
+  });
+});
+
+describe("publishNote", () => {
+  it("explains the lock once the item is on the backend", () => {
+    expect(publishNote(null, "RECORD")).toBe("On the backend as a record — change that in the web app.");
+  });
+
+  it("counts what a draft still needs to publish", () => {
+    const c = check({ title: "T", materialType: BOOK, collectionType: 0 });
+    expect(publishNote(c, null)).toBe("1 more field needed to publish as a record.");
+  });
+
+  it("says nothing when there is nothing to say", () => {
+    expect(publishNote(check({ title: "T", materialType: BOOK, collectionType: 0 }, { choice: "RECORD" }), null)).toBe("");
   });
 });

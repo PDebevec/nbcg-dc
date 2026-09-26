@@ -36,6 +36,7 @@ import type { SyncRunDto } from "@ipc/bindings";
 import { logger } from "@lib/logger";
 import { useConnectionStore } from "./useConnection";
 import { useItemsStore } from "./useItems";
+import { useMetadataStore } from "./useMetadata";
 import { useSettingsStore } from "./useSettings";
 
 /** How often the scheduler re-checks whether a sync is due. */
@@ -159,7 +160,10 @@ export const useSyncStore = defineStore("sync", () => {
         // Titles, orphan flags, and published state may all have moved — refresh
         // the Overview so the table reflects the archive we just rewrote.
         if (result.run.updated > 0 || result.run.missed > 0) {
-          await useItemsStore().load();
+          const itemsStore = useItemsStore();
+          await itemsStore.load();
+          // A sync rewrites mirrors: new versions, and a state moved on the web.
+          await useMetadataStore().reloadMirrors(itemsStore.items);
         }
       } catch (err) {
         error.value = (err as Error)?.message ?? "Sync failed.";

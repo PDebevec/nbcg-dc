@@ -156,3 +156,21 @@ describe("useMetadataStore on schema v2", () => {
     expect((store.plainValues("i1").materialType as { code: string }).code).toBe("am");
   });
 });
+
+describe("reloadMirror", () => {
+  it("picks up the backend link an upload wrote, and the item's new folder", async () => {
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    expect(store.backendStates.get("i1")).toBeNull();
+    mirrors.set("i1", {
+      backendId: "rec_1",
+      version: 0,
+      targetState: "DRAFT",
+      visibilityStatus: "PRIVATE",
+      metadata: { title: "T" },
+      syncedAt: "2026-09-25T00:00:00.000Z",
+    });
+    await store.reloadMirrors([{ ...item(), folderPath: "/processed/i1" }]);
+    expect(store.backendStates.get("i1")).toBe("DRAFT");
+  });
+});
