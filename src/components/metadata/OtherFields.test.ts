@@ -31,4 +31,19 @@ describe("OtherFields", () => {
   it("renders nothing when there are none", async () => {
     expect(await render([])).not.toContain("Other fields");
   });
+
+  it("passes a field's source options through to MetaField (pickSource/manual stay reachable)", async () => {
+    const html = await render([
+      view({
+        sourceOptions: [{ parentId: "p1", name: "Parent A", preview: "some value", selected: false }],
+      }),
+    ]);
+    // The picker pill only renders when `field.sourceOptions` reaches MetaField — this
+    // is as far as an SSR smoke test can exercise it: the menu (and its "Manual entry"
+    // option) only appears after a click, which renderToString cannot simulate. The
+    // pickSource/manual forwarding itself is guarded by vue-tsc: OtherFields' template
+    // binds `@pick-source`/`@manual` against MetaField's typed emits, so a signature
+    // mismatch or a dropped listener fails the type check.
+    expect(html).toContain("Choose source");
+  });
 });

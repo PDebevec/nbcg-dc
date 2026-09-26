@@ -18,6 +18,8 @@ const emit = defineEmits<{
   change: [path: string, value: unknown];
   add: [key: string];
   remove: [key: string, index: number];
+  pickSource: [key: string, parentId: string];
+  manual: [key: string];
   query: [path: string, text: string];
   pick: [path: string, index: number];
   closeHints: [];
@@ -42,6 +44,8 @@ const emit = defineEmits<{
         @change="(path, value) => emit('change', path, value)"
         @add="(key) => emit('add', key)"
         @remove="(key, index) => emit('remove', key, index)"
+        @pick-source="(key, parentId) => emit('pickSource', key, parentId)"
+        @manual="(key) => emit('manual', key)"
         @query="(path, text) => emit('query', path, text)"
         @pick="(path, index) => emit('pick', path, index)"
         @close-hints="emit('closeHints')"
