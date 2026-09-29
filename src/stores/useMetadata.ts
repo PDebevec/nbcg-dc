@@ -364,6 +364,32 @@ export const useMetadataStore = defineStore("metadata", () => {
     await Promise.all(items.map((item) => reloadMirror(item)));
   }
 
+  /**
+   * Drop everything held for `itemIds` — values, mirrors and, above all, any
+   * pending autosave. Called before a batch delete: an autosave landing after
+   * the folders were restored would write the deleted batch's edits straight
+   * back into them. The next `ensureItemLoaded` re-reads each item from disk.
+   */
+  function forget(itemIds: readonly string[]): void {
+    const ids = new Set(itemIds);
+    for (const id of ids) {
+      const timer = saveTimers.get(id);
+      if (timer) clearTimeout(timer);
+      saveTimers.delete(id);
+      mirrors.delete(id);
+      knownItems.delete(id);
+      loadPromises.delete(id);
+    }
+    const keep = <T>(map: Map<string, T>) => new Map([...map].filter(([id]) => !ids.has(id)));
+    const keepSet = (set: Set<string>) => new Set([...set].filter((id) => !ids.has(id)));
+    values.value = keep(values.value);
+    backendStates.value = keep(backendStates.value);
+    touched.value = keepSet(touched.value);
+    loadedItems.value = keepSet(loadedItems.value);
+    loadingItems.value = keepSet(loadingItems.value);
+    saving.value = keepSet(saving.value);
+  }
+
   // ── the save check + readiness ───────────────────────────────────────────
 
   function batchOf(item: Item) {
@@ -591,6 +617,7 @@ export const useMetadataStore = defineStore("metadata", () => {
     flush,
     reloadMirror,
     reloadMirrors,
+    forget,
     // check + readiness
     batchParentsOf,
     checkOf,

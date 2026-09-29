@@ -12,6 +12,7 @@
 
 pub mod batches;
 pub mod items;
+pub mod snapshots;
 pub mod sync_runs;
 
 use std::path::Path;
@@ -23,7 +24,7 @@ use crate::error::Result;
 
 /// The schema version stored in `PRAGMA user_version`. Bump it and add a step
 /// to [`migrate`] when the schema changes.
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 /// How many sync runs to retain. The Sync screen shows a recent-runs log, not
 /// an audit trail, so old rows are pruned on append.
@@ -232,6 +233,37 @@ fn migrate(conn: &Connection) -> Result<()> {
         }
     }
 
+    if version < 4 {
+        // Delete batch (docs/superpowers/specs/2026-09-29-delete-batch-design.md):
+        // the write-ahead "reached the backend" mark, each member's pre-batch
+        // index state, and a stored batch-number high-water mark — batch rows
+        // can now be deleted, so `MAX(batch_no) + 1` alone would reuse a number.
+        if !column_exists(&tx, "batches", "backend_touched_at")? {
+            tx.execute_batch("ALTER TABLE batches ADD COLUMN backend_touched_at TEXT;")?;
+        }
+        tx.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS batch_snapshots (
+                batch_id     TEXT NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+                item_id      TEXT NOT NULL,
+                snapshot_dir TEXT NOT NULL,
+                item_row     TEXT NOT NULL,
+                item_dto     TEXT NOT NULL,
+                taken_at     TEXT NOT NULL,
+                PRIMARY KEY (batch_id, item_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS counters (
+                name  TEXT PRIMARY KEY,
+                value INTEGER NOT NULL
+            );
+
+            INSERT OR IGNORE INTO counters (name, value)
+                SELECT 'batch_no', COALESCE(MAX(batch_no), 0) FROM batches;
+            "#,
+        )?;
+    }
+
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     tx.commit()?;
     Ok(())
@@ -312,6 +344,31 @@ mod tests {
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .expect("version");
         assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migrating_to_v4_seeds_the_batch_counter_from_existing_batches() {
+        let conn = Connection::open_in_memory().expect("open");
+        migrate(&conn).expect("migrate");
+        conn.execute_batch(
+            "INSERT INTO batches (id, batch_no, created_at, item_type, stage, publish, visibility) \
+             VALUES ('b7', 7, 'now', 'to-process', 'setup', 'DRAFT', 'PRIVATE'); \
+             DELETE FROM counters;",
+        )
+        .expect("seed");
+        conn.pragma_update(None, "user_version", 3i64)
+            .expect("rewind");
+
+        migrate(&conn).expect("migrate to v4");
+
+        let value: i64 = conn
+            .query_row(
+                "SELECT value FROM counters WHERE name = 'batch_no'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("counter");
+        assert_eq!(value, 7);
     }
 
     #[test]

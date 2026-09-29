@@ -12,7 +12,7 @@
  * it without crossing a service seam.
  */
 
-import { ItemState } from "./item";
+import { ItemState, type Item } from "./item";
 import { PublishTarget, VisibilityStatus } from "./enums";
 import type { ContentKind } from "./pipeline";
 
@@ -183,6 +183,9 @@ export interface Batch {
   overrides: Record<string, BatchItemOverride>;
   /** ISO timestamp the batch was archived (uploaded + items released), or null. */
   archivedAt: string | null;
+  /** When the batch first wrote to the backend, or null. Once set it can't be
+   * deleted (see {@link deleteBlockedReason}). */
+  backendTouchedAt: string | null;
 }
 
 /** The fields a caller supplies to create a batch; the rest are defaulted by
@@ -197,8 +200,11 @@ export interface CreateBatchInput {
 
 /** The batch fields sent to the native `batch_create` (everything except the
  * native-assigned `id`/`no`/`createdAt` and the always-null-at-birth
- * `archivedAt`). */
-export type NewBatchFields = Omit<Batch, "id" | "no" | "createdAt" | "archivedAt">;
+ * `archivedAt`/`backendTouchedAt`). */
+export type NewBatchFields = Omit<
+  Batch,
+  "id" | "no" | "createdAt" | "archivedAt" | "backendTouchedAt"
+>;
 
 /** Conservative defaults for a new batch: saved as a Draft, not public. */
 export const DEFAULT_BATCH_PUBLISH: PublishTarget = PublishTarget.DRAFT;
@@ -357,6 +363,59 @@ export function singleRunBlockedMessage(running: Batch | null): string {
  * badge) until it uploads/archives. */
 export function isUnfinished(batch: Batch): boolean {
   return !isArchived(batch) && batch.stage !== BatchStage.Uploaded;
+}
+
+/** Why a batch can't be deleted — word for word what `core::batch_lifecycle`
+ * refuses with, so the button's tooltip and a native refusal read alike. */
+export const DELETE_BLOCKED = {
+  running: "Stop the processing run before deleting this batch.",
+  uploading: "Wait for the upload to finish.",
+  archived: "Uploaded batches can't be deleted.",
+  backend:
+    "This batch has already sent changes to the backend, so it can't be undone. Use Close batch instead.",
+} as const;
+
+/**
+ * Why `batch` can't be deleted right now, or null when it can. Delete is an
+ * undo of local work only: once the batch has written to the backend it is
+ * blocked for good. The native side re-checks all of this except `uploading`,
+ * which only the upload store knows.
+ */
+export function deleteBlockedReason(
+  batch: Batch,
+  context: { uploading: boolean },
+): string | null {
+  if (batch.running) return DELETE_BLOCKED.running;
+  if (context.uploading) return DELETE_BLOCKED.uploading;
+  if (isArchived(batch)) return DELETE_BLOCKED.archived;
+  if (batch.backendTouchedAt != null) return DELETE_BLOCKED.backend;
+  return null;
+}
+
+/** One file a batch delete removes. */
+export interface BatchDeleteFile {
+  path: string;
+  /** Named like one of the app's own outputs; false = added by hand. */
+  generated: boolean;
+}
+
+/** What deleting a batch does to one member (`ipc/bindings.BatchDeleteItemDto`). */
+export interface BatchDeleteItem {
+  itemId: string;
+  folderName: string;
+  /** The item as it will be after the delete, or null if it left the index. */
+  before: Item | null;
+  remove: BatchDeleteFile[];
+  restore: string[];
+  error: string | null;
+}
+
+/** A dry run of a batch delete — the confirmation's content. */
+export interface BatchDeletePlan {
+  batchId: string;
+  hasSnapshot: boolean;
+  blockedReason: string | null;
+  items: BatchDeleteItem[];
 }
 
 /** The item's effective publish target (its override, else the batch default). */

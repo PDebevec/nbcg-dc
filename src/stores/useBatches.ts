@@ -8,9 +8,9 @@
  * **crash recovery** on load (a batch left `running` after a crash is reset to a
  * resumable state and written back).
  *
- * Creating or archiving a batch changes item↔batch membership native-side, so
- * those actions refresh the items store afterwards to keep the Overview's
- * derived states (In progress ↔ Uploaded) in step.
+ * Creating, archiving or deleting a batch changes item↔batch membership
+ * native-side, so those actions refresh the items store afterwards to keep the
+ * Overview's derived states (In progress ↔ Uploaded) in step.
  */
 
 import { defineStore } from "pinia";
@@ -22,12 +22,16 @@ import {
   recoverBatch,
   runningBatch,
   type Batch,
+  type BatchDeletePlan,
   type CreateBatchInput,
 } from "@domain/batch";
 import {
   archiveBatch,
   createBatch,
+  deleteBatch,
   listBatches,
+  markBatchBackendTouched,
+  previewBatchDelete,
   updateBatch,
 } from "@services/batches";
 import { logger } from "@lib/logger";
@@ -185,6 +189,28 @@ export const useBatchesStore = defineStore("batches", () => {
     return saved;
   }
 
+  /** Dry-run a delete — the confirmation's content (read-only). */
+  function previewDelete(batchId: string): Promise<BatchDeletePlan> {
+    return previewBatchDelete(batchId);
+  }
+
+  /**
+   * Delete a batch natively — each member's folder and index state go back to
+   * how they were before it — then drop it here and rescan, so the Overview
+   * shows the restored folders. The caller stops the members' pending metadata
+   * autosaves first (`composables/useDeleteBatch`).
+   */
+  async function remove(batchId: string): Promise<void> {
+    await deleteBatch(batchId);
+    batches.value = batches.value.filter((b) => b.id !== batchId);
+    await useItemsStore().refresh();
+  }
+
+  /** Record that a batch is about to write to the backend (write-ahead). */
+  async function markBackendTouched(batchId: string): Promise<void> {
+    replaceInList(await markBatchBackendTouched(batchId));
+  }
+
   return {
     // state
     batches,
@@ -205,5 +231,8 @@ export const useBatchesStore = defineStore("batches", () => {
     update,
     persistRun,
     archive,
+    previewDelete,
+    remove,
+    markBackendTouched,
   };
 });

@@ -344,3 +344,41 @@ describe("emptiedKeys", () => {
     expect(store.emptiedKeys("i1")).toEqual([]);
   });
 });
+
+describe("forget", () => {
+  it("cancels a pending autosave so nothing is written after a batch delete", async () => {
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    vi.useFakeTimers();
+    try {
+      store.setFieldValue("i1", "title", "Typed just before the delete");
+      store.forget(["i1"]);
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(writeMirror).not.toHaveBeenCalled();
+    expect(store.getValues("i1")).toEqual({});
+    expect(store.loadedItems.has("i1")).toBe(false);
+  });
+
+  it("re-reads the item from disk on its next load", async () => {
+    mirrors.set("i1", {
+      backendId: null,
+      version: null,
+      targetState: null,
+      visibilityStatus: null,
+      metadata: { title: "Before the batch", collectionType: 0 },
+      syncedAt: "2026-09-29T00:00:00.000Z",
+    });
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    store.setFieldValue("i1", "title", "Changed in the batch");
+
+    store.forget(["i1"]);
+    await store.ensureItemLoaded(item());
+
+    expect(store.plainValues("i1").title).toBe("Before the batch");
+  });
+});

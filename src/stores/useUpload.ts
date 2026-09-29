@@ -17,6 +17,7 @@ import { missingParentMessage } from "@domain/parent";
 import {
   cleanupUnfinishedRecords,
   uploadBatch,
+  withBackendWriteMark,
   type ItemUploadResult,
   type UploadItemContext,
   type UploadProgress,
@@ -108,6 +109,19 @@ export const useUploadStore = defineStore("upload", () => {
     }
   }
 
+  /** Persist the batch's "reached the backend" mark; a failure stops the
+   * upload before anything is sent (see `withBackendWriteMark`). */
+  async function markBackendTouched(batchId: string): Promise<void> {
+    try {
+      await useBatchesStore().markBackendTouched(batchId);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Couldn't record that this batch is being uploaded, so nothing was sent: ${reason}`,
+      );
+    }
+  }
+
   /**
    * Upload a batch's items. `resolveContext` supplies each item's publish
    * decisions + working metadata + readiness (from the batch + metadata store).
@@ -135,6 +149,9 @@ export const useUploadStore = defineStore("upload", () => {
         onProgress: (p) => {
           progress.value = p;
         },
+        // Write-ahead: the batch is marked as having reached the backend
+        // before its first write, so it is never offered for delete after.
+        deps: withBackendWriteMark(() => markBackendTouched(batchId)),
       });
       for (const res of outcome.results) setResult(batchId, res);
       adopted = new Set(

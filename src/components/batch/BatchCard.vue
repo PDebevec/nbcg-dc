@@ -8,7 +8,7 @@ import Pill from "@ui/common/Pill.vue";
 
 const props = defineProps<{ card: BatchCardView }>();
 
-defineEmits<{ open: [id: string] }>();
+defineEmits<{ open: [id: string]; delete: [id: string] }>();
 
 const pct = computed(() => `${Math.round(props.card.progress.ratio * 100)}%`);
 </script>
@@ -28,6 +28,27 @@ const pct = computed(() => `${Math.round(props.card.progress.ratio * 100)}%`);
         {{ card.status }}
       </Pill>
       <span class="created">{{ card.createdAt }}</span>
+      <!-- The wrapper carries the tooltip (a disabled button gets no hover)
+           and stops the click from opening the card. -->
+      <span class="delete-wrap" :title="card.deleteBlocked ?? 'Delete batch'" @click.stop>
+        <button
+          class="delete-btn"
+          :disabled="card.deleteBlocked != null"
+          aria-label="Delete batch"
+          @click="$emit('delete', card.id)"
+        >
+          <svg
+            viewBox="0 0 20 20"
+            width="15"
+            height="15"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+          >
+            <path d="M3.5 5.5h13M8 5.5V4h4v1.5M5.5 5.5l.8 11h7.4l.8-11M8.5 8.5v5M11.5 8.5v5" />
+          </svg>
+        </button>
+      </span>
     </div>
     <div class="count">
       {{ card.itemCount }} item{{ card.itemCount === 1 ? "" : "s" }}
@@ -81,6 +102,30 @@ const pct = computed(() => `${Math.round(props.card.progress.ratio * 100)}%`);
   font-size: 11.5px;
   color: var(--c-text-dim);
   font-family: var(--font-mono);
+}
+
+.delete-wrap {
+  display: inline-flex;
+}
+
+.delete-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-sm);
+  color: #9aa1bb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.delete-btn:hover:not(:disabled) {
+  background: var(--c-danger-bg);
+  color: var(--c-danger-text);
+}
+
+.delete-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .count {

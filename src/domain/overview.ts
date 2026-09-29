@@ -77,6 +77,21 @@ export function isSelectableFilter(filter: OverviewFilter): boolean {
   return SELECTABLE_FILTERS.includes(filter);
 }
 
+/** What opening a row (a click on a non-selectable filter, or ⋯ → Open as batch) does. */
+export type OpenAction = "open-batch" | "start-batch" | "none";
+
+/**
+ * Opening an item already in a batch goes to that batch, from any filter. A
+ * new one-item batch is only ever started from a single-state filter — the
+ * same ones that allow selection — so a batch's `type` is always the state the
+ * operator was looking at. `All` mixes states, so opening an unbatched item
+ * there does nothing.
+ */
+export function openAction(filter: OverviewFilter, item: Pick<Item, "batchId">): OpenAction {
+  if (item.batchId) return "open-batch";
+  return isSelectableFilter(filter) ? "start-batch" : "none";
+}
+
 /** Whether an item (by its derived state) belongs under a filter. */
 export function filterMatchesState(
   filter: OverviewFilter,

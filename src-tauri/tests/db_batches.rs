@@ -291,3 +291,91 @@ fn a_failed_create_leaves_no_partial_batch() {
         .unwrap();
     assert_eq!(good.no, 1);
 }
+
+#[test]
+fn numbers_are_never_reused_after_deleting_the_newest_batch() {
+    let db = db_with_items(&["A", "B"]);
+    let a = item_id_for("A");
+    let b = item_id_for("B");
+
+    let first = db
+        .transaction(|t| batches::create(t, &batch_over(&[&a])))
+        .unwrap();
+    db.transaction(|t| batches::delete(t, &first.id)).unwrap();
+    let next = db
+        .transaction(|t| batches::create(t, &batch_over(&[&b])))
+        .unwrap();
+
+    assert_eq!(
+        next.no, 2,
+        "deleting batch #1 handed its number to the next batch"
+    );
+}
+
+#[test]
+fn delete_removes_the_batch_and_releases_its_items() {
+    let db = db_with_items(&["A"]);
+    let a = item_id_for("A");
+    let batch = db
+        .transaction(|t| batches::create(t, &batch_over(&[&a])))
+        .unwrap();
+
+    db.transaction(|t| batches::delete(t, &batch.id)).unwrap();
+
+    assert!(db.with(batches::list).unwrap().is_empty());
+    assert_eq!(db.with(|c| items::get(c, &a)).unwrap().batch_id, None);
+    let members: i64 = db
+        .with(|c| Ok(c.query_row("SELECT COUNT(*) FROM batch_items", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(members, 0, "membership rows outlived their batch");
+}
+
+#[test]
+fn delete_of_an_unknown_batch_is_not_found() {
+    let db = Db::open_in_memory().unwrap();
+    assert!(matches!(
+        db.transaction(|t| batches::delete(t, "nope")),
+        Err(nbcg_dc_lib::error::AppError::NotFound(_)),
+    ));
+}
+
+#[test]
+fn mark_backend_touched_keeps_the_first_timestamp() {
+    let db = db_with_items(&["A"]);
+    let a = item_id_for("A");
+    let batch = db
+        .transaction(|t| batches::create(t, &batch_over(&[&a])))
+        .unwrap();
+    assert_eq!(batch.backend_touched_at, None);
+
+    let first = db
+        .with(|c| batches::mark_backend_touched(c, &batch.id))
+        .unwrap();
+    let stamp = first.backend_touched_at.clone().expect("marked");
+    let again = db
+        .with(|c| batches::mark_backend_touched(c, &batch.id))
+        .unwrap();
+
+    assert_eq!(again.backend_touched_at, Some(stamp));
+}
+
+#[test]
+fn update_never_clears_the_backend_mark() {
+    let db = db_with_items(&["A"]);
+    let a = item_id_for("A");
+    let batch = db
+        .transaction(|t| batches::create(t, &batch_over(&[&a])))
+        .unwrap();
+    db.with(|c| batches::mark_backend_touched(c, &batch.id))
+        .unwrap();
+
+    // A copy the TS side read before the mark, sent back by a write-through.
+    let mut stale = batch.clone();
+    stale.backend_touched_at = None;
+    let saved = db.transaction(|t| batches::update(t, &stale)).unwrap();
+
+    assert!(
+        saved.backend_touched_at.is_some(),
+        "a stale update re-enabled Delete"
+    );
+}

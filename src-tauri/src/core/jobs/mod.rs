@@ -43,7 +43,7 @@ mod shapes;
 mod stages;
 
 pub use limits::JobLimits;
-pub use lock::{request_cancel, try_acquire, JobRunGuard, JobRunLock};
+pub use lock::{request_cancel, running_batch, try_acquire, JobRunGuard, JobRunLock};
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;

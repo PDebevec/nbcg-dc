@@ -69,6 +69,7 @@ function makeBatch(itemIds: string[]): Batch {
     visibility: VisibilityStatus.PRIVATE,
     overrides: {},
     archivedAt: null,
+    backendTouchedAt: null,
   };
 }
 

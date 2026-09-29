@@ -9,6 +9,7 @@ import {
   resolveExistingRecordWith,
   removableBackendIds,
   cleanupUnfinishedRecords,
+  withBackendWriteMark,
   type UploadDeps,
   type UploadItemContext,
   type ItemUploadResult,
@@ -1964,5 +1965,55 @@ describe("removableBackendIds — created provenance (regression)", () => {
     expect(res.backendId).toBe("new_rec_2");
     expect(res.created).toBe(true);
     expect(removableBackendIds([res])).toEqual(["new_rec_2"]);
+  });
+});
+
+describe("withBackendWriteMark", () => {
+  it("marks once, before the first backend write", async () => {
+    const order: string[] = [];
+    const mark = vi.fn(async () => {
+      order.push("mark");
+    });
+    const deps = withBackendWriteMark(mark, {
+      createItem: vi.fn(async () => {
+        order.push("create");
+        return {} as never;
+      }),
+      connectParent: vi.fn(async () => {
+        order.push("connect");
+        return {} as never;
+      }),
+    });
+
+    await deps.createItem!({} as never);
+    await deps.connectParent!("p1", "c1");
+
+    expect(mark).toHaveBeenCalledOnce();
+    expect(order).toEqual(["mark", "create", "connect"]);
+  });
+
+  it("never marks for a read", async () => {
+    const mark = vi.fn(async () => {});
+    const listFiles = vi.fn(async () => []);
+    const deps = withBackendWriteMark(mark, { listFiles });
+
+    await deps.listFiles!("rec-1");
+
+    expect(listFiles).toHaveBeenCalledOnce();
+    expect(mark).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing when the mark can't be saved", async () => {
+    const mark = vi.fn(async () => {
+      throw new Error("disk full");
+    });
+    const createItem = vi.fn();
+    const deps = withBackendWriteMark(mark, { createItem });
+
+    await expect(deps.createItem!({} as never)).rejects.toThrow("disk full");
+    await expect(deps.createItem!({} as never)).rejects.toThrow("disk full");
+
+    expect(createItem).not.toHaveBeenCalled();
+    expect(mark).toHaveBeenCalledOnce();
   });
 });

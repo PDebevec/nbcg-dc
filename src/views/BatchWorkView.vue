@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { useBatch } from "@composables/useBatch";
+import { useDeleteBatch } from "@composables/useDeleteBatch";
 import SetupTab from "./batch/SetupTab.vue";
 import MetadataTab from "./batch/MetadataTab.vue";
 import ProcessingTab from "./batch/ProcessingTab.vue";
 import StepIndicator from "@ui/batch/StepIndicator.vue";
 import ProgressBar from "@ui/batch/ProgressBar.vue";
+import DeleteBatchDialog from "@ui/batch/DeleteBatchDialog.vue";
 import Spinner from "@ui/common/Spinner.vue";
 import Pill from "@ui/common/Pill.vue";
 
@@ -13,6 +15,18 @@ const props = defineProps<{ batchId: string }>();
 const { header, tabs, steps, activeTab, setTab, unlock, back, editItemMetadata } = useBatch(
   () => props.batchId,
 );
+
+const {
+  open: deleteOpen,
+  loading: deleteLoading,
+  deleting,
+  error: deleteError,
+  plan: deletePlan,
+  canConfirm,
+  request: requestDelete,
+  cancel: cancelDelete,
+  confirm: confirmDelete,
+} = useDeleteBatch({ onDeleted: () => back() });
 </script>
 
 <template>
@@ -48,6 +62,20 @@ const { header, tabs, steps, activeTab, setTab, unlock, back, editItemMetadata }
         <div v-if="header" class="saved">
           <span class="saved-dot" />{{ header.savedLabel }}
         </div>
+        <!-- The wrapper carries the tooltip: a disabled button gets no hover. -->
+        <span
+          v-if="header"
+          class="delete-wrap"
+          :title="header.deleteBlocked ?? 'Delete this batch and put its items back as they were'"
+        >
+          <button
+            class="delete-btn"
+            :disabled="header.deleteBlocked != null"
+            @click="requestDelete(header.id)"
+          >
+            Delete batch
+          </button>
+        </span>
       </div>
 
       <div v-if="header" class="head-meta">
@@ -89,6 +117,17 @@ const { header, tabs, steps, activeTab, setTab, unlock, back, editItemMetadata }
       />
       <ProcessingTab v-else :batch-id="props.batchId" @edit-metadata="editItemMetadata" />
     </div>
+
+    <DeleteBatchDialog
+      :open="deleteOpen"
+      :loading="deleteLoading"
+      :deleting="deleting"
+      :can-confirm="canConfirm"
+      :error="deleteError"
+      :plan="deletePlan"
+      @cancel="cancelDelete()"
+      @confirm="confirmDelete()"
+    />
   </div>
 </template>
 
@@ -193,6 +232,31 @@ const { header, tabs, steps, activeTab, setTab, unlock, back, editItemMetadata }
   height: 7px;
   border-radius: 50%;
   background: var(--c-success-strong);
+}
+
+.delete-wrap {
+  display: inline-flex;
+  flex: none;
+}
+
+.delete-btn {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--c-danger-border);
+  background: var(--c-surface);
+  color: var(--c-danger-text);
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.delete-btn:hover:not(:disabled) {
+  background: var(--c-danger-bg);
+}
+
+.delete-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .head-meta {

@@ -98,10 +98,21 @@ A batch is the central working unit. Rules:
 - **Single-item short-circuit.** Opening one *To process* item (via the row's
   **⋯ → Open as batch**, or selecting it and hitting **Create batch**) creates a
   one-item batch and drops straight into **Metadata** (no Setup step).
-  Multi-item batches start at **Setup**.
+  Multi-item batches start at **Setup**. A batch is only ever started from a
+  single-state filter — never from **All**, where clicking a row only opens the
+  batch it is already in.
 - **Local-only.** Batches live in the SQLite index as operator-side working
   state — they are never sent to the backend; only the final per-item uploads
   are. Crash recovery is local.
+- **Deletable until it reaches the backend.** Creating a batch snapshots each
+  member folder (hard links under `<root>/.nbcg-snapshots/`) and its index
+  row. **Delete batch** (Batches list card, or top right of the workspace)
+  puts every member back exactly as it was — files the batch or anyone else
+  added are removed, changed or removed ones come back — after a confirmation
+  that lists every file and flags any the app didn't make. Once an upload is
+  about to make its first backend write the batch is marked, and from then on
+  it can only be closed, not deleted. See the
+  [delete-batch design](superpowers/specs/2026-09-29-delete-batch-design.md).
 
 ### Batch work — three tabs
 

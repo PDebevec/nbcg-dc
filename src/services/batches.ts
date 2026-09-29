@@ -7,7 +7,7 @@
  *  - map the raw {@link BatchDto} ↔ domain {@link Batch} (near-identity; the
  *    read path normalises: every member item gets a `proc` entry, and the
  *    collection fields default to empty);
- *  - expose list / create / update / archive.
+ *  - expose list / create / update / archive, and the delete dry run + delete.
  *
  * Non-Tauri fallback (a plain `vite` browser session — the GUI lane's dev mode):
  * the read path (`listBatches`) returns `[]` so the logic lane stays runnable
@@ -21,8 +21,10 @@ import {
   newBatchFields,
   ItemRunStatus,
   type Batch,
+  type BatchDeletePlan,
   type CreateBatchInput,
 } from "@domain/batch";
+import { toItem } from "./indexing";
 
 /** Map one native batch row to a domain {@link Batch}, normalising the maps so
  * every member item has a `proc` entry (defaults to `idle`). */
@@ -46,6 +48,7 @@ function toBatch(dto: BatchDto): Batch {
     visibility: dto.visibility,
     overrides: dto.overrides ?? {},
     archivedAt: dto.archivedAt ?? null,
+    backendTouchedAt: dto.backendTouchedAt ?? null,
   };
 }
 
@@ -80,4 +83,35 @@ export async function updateBatch(batch: Batch): Promise<Batch> {
 export async function archiveBatch(batchId: string): Promise<Batch> {
   const dto = await ipc.batch.archive(batchId);
   return toBatch(dto);
+}
+
+/** Dry-run a delete (read-only): per member, what goes, what comes back and
+ * the state it returns to. */
+export async function previewBatchDelete(batchId: string): Promise<BatchDeletePlan> {
+  const dto = await ipc.batch.deletePreview(batchId);
+  return {
+    batchId: dto.batchId,
+    hasSnapshot: dto.hasSnapshot,
+    blockedReason: dto.blockedReason ?? null,
+    items: dto.items.map((i) => ({
+      itemId: i.itemId,
+      folderName: i.folderName,
+      before: i.before ? toItem(i.before) : null,
+      remove: i.remove,
+      restore: i.restore,
+      error: i.error ?? null,
+    })),
+  };
+}
+
+/** Delete a batch, putting its members back as they were before it. Throws
+ * outside Tauri. */
+export async function deleteBatch(batchId: string): Promise<void> {
+  await ipc.batch.delete(batchId);
+}
+
+/** Record that a batch is about to write to the backend (write-ahead; see
+ * `stores/useUpload.run`). */
+export async function markBatchBackendTouched(batchId: string): Promise<Batch> {
+  return toBatch(await ipc.batch.markBackendTouched(batchId));
 }

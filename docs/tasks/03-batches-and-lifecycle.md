@@ -34,7 +34,8 @@ in `overrides`, which also carries the per-item `contentKind`).
 - **Single-item short-circuit** — opening one *To process* item (via the row's
   **⋯ → Open as batch**, or selecting it and hitting **Create batch**) creates a
   one-item batch and drops straight into **Metadata** (skip Setup). Multi-item
-  batches start at **Setup**.
+  batches start at **Setup**. Never from **All**: there a row click (or ⋯)
+  only opens the batch the item is already in (`domain/overview.openAction`).
 - **Revisitable, not linear** — Setup runs once at creation; **Metadata** and
   **Processing & Upload** stay open for the batch's life, so any item can be
   re-edited or any stage re-run at any time. `stage` tracks *furthest progress
@@ -44,6 +45,15 @@ in `overrides`, which also carries the per-item `contentKind`).
   loads from the local `metadata.json` / SQLite (the working source of truth until
   first upload, so a failed run loses nothing); an uploaded item treats the
   **backend** as source (local is a background-refreshed mirror).
+- **Deletable until it reaches the backend** — `batch_create` snapshots every
+  member (folder: hard links in `<root>/.nbcg-snapshots/<batch>/<item>/`;
+  index: a `batch_snapshots` row). **Delete batch** restores each member from
+  its snapshot and removes the batch; it is refused while the batch runs,
+  once it is archived, and once `backendTouchedAt` is set (written just before
+  an upload's first backend write — `services/upload.withBackendWriteMark`).
+  A batch made before snapshots existed is deleted by releasing its items only.
+  Batch numbers stay unique across deletes (`counters` table). Design:
+  [delete batch](../superpowers/specs/2026-09-29-delete-batch-design.md).
 - **Re-working published items is explicit** — a batch of already-uploaded (Done)
   items opens **READ-ONLY**; an explicit **Edit / re-process** action unlocks it,
   and any change flips the item to **Needs re-upload**. Metadata edits then go via
@@ -209,7 +219,16 @@ table** (local-only working state; never sent to the backend).
 - `batch_archive({ batchId })` → `BatchDto` — set `archivedAt` + `stage =
   uploaded`, `running = false`, and **release the items** (clear their `batchId`
   → they settle to Uploaded). Triggered by the upload flow (Epic 07). Return the
-  archived batch.
+  archived batch. Also drops the batch's snapshots.
+- `batch_delete_preview({ batchId })` → `BatchDeletePlanDto` — read-only dry
+  run: per member, the files a delete would remove (flagged when not named
+  like an app output) and put back, and the state it returns to.
+- `batch_delete({ batchId })` — restore every member's folder and index row
+  from its snapshot, then remove the batch (`core::batch_lifecycle::delete`).
+- `batch_mark_backend_touched({ batchId })` → `BatchDto` — the write-ahead
+  "reached the backend" mark that makes a batch undeletable.
+- `batch_create` snapshots every member before its transaction (see
+  `core::snapshot`), so it runs off the UI thread.
 - On relaunch the logic lane recovers batches left `running`; make sure
   `batch_list` returns the persisted `running`/`proc` truthfully so recovery can
   act on it (the `.ts` side write-backs the recovered rows via `batch_update`).

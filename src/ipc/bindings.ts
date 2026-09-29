@@ -82,6 +82,9 @@ export const Commands = {
   batchCreate: "batch_create",
   batchUpdate: "batch_update",
   batchArchive: "batch_archive",
+  batchDeletePreview: "batch_delete_preview",
+  batchDelete: "batch_delete",
+  batchMarkBackendTouched: "batch_mark_backend_touched",
   jobsStart: "jobs_start",
   jobsCancel: "jobs_cancel",
   jobsReprocess: "jobs_reprocess",
@@ -306,14 +309,57 @@ export interface BatchDto {
   visibility: VisibilityStatus;
   overrides: Record<string, BatchItemOverride>;
   archivedAt: string | null;
+  /**
+   * When the batch first wrote to the backend (set write-ahead, just before an
+   * upload's first backend write), or null. Once set it can't be deleted — its
+   * changes are no longer only local. Native-owned: `batch_update` never
+   * writes it, so a stale copy sent back can't clear it.
+   */
+  backendTouchedAt: string | null;
 }
 
 /** The create payload — everything except the native-assigned id/no/createdAt
- * (and archivedAt, always null at birth). */
+ * (and archivedAt/backendTouchedAt, always null at birth). */
 export type BatchCreateDto = Omit<
   BatchDto,
-  "id" | "no" | "createdAt" | "archivedAt"
+  "id" | "no" | "createdAt" | "archivedAt" | "backendTouchedAt"
 >;
+
+/** One file a batch delete would remove from an item folder. */
+export interface BatchDeleteFileDto {
+  /** `/`-joined path inside the item folder (`"a.pdf"`, `"source/a.pdf"`,
+   * `".nbcg-tmp-…/"` for a staging folder). */
+  path: string;
+  /** Named like one of the app's own outputs; false flags a file someone
+   * added by hand. */
+  generated: boolean;
+}
+
+/** What deleting a batch does to one member. */
+export interface BatchDeleteItemDto {
+  itemId: string;
+  folderName: string;
+  /** The item's index state after the delete — its pre-batch state, or for a
+   * batch without snapshots its current state minus the claim. Null when the
+   * item is no longer in the index. */
+  before: IndexedItemDto | null;
+  remove: BatchDeleteFileDto[];
+  /** Paths put back from the snapshot (missing now, or changed). */
+  restore: string[];
+  /** Why this item's folder can't be compared with its snapshot. */
+  error: string | null;
+}
+
+/** A read-only dry run of `batch.delete` — the confirmation's content. */
+export interface BatchDeletePlanDto {
+  batchId: string;
+  /** False for a batch made before snapshots existed: deleting it only
+   * releases its items. */
+  hasSnapshot: boolean;
+  /** Why the batch can't be deleted right now. */
+  blockedReason: string | null;
+  items: BatchDeleteItemDto[];
+}
 
 // ─── pipeline job DTOs (Seam 2, Epic 06) ─────────────────────────────────────
 // The logic lane computes the *plan* (which stages each item needs, the input
@@ -507,10 +553,13 @@ export const ipc = {
 
   /**
    * Batch persistence (Epic 03) — local-only working state in the SQLite index.
-   * `create` atomically writes the batch row, assigns the running `no`, and
-   * stamps `batchId` onto each member item (→ In progress); `archive` marks the
-   * batch uploaded and **releases** its items (clears `batchId` → Uploaded).
-   * Owned by `core/db` (Arch); the logic lane consumes via `services/batches`.
+   * `create` snapshots each member's folder for undo, then atomically writes
+   * the batch row, assigns the running `no`, and stamps `batchId` onto each
+   * member item (→ In progress); `archive` marks the batch uploaded,
+   * **releases** its items (clears `batchId` → Uploaded) and drops the
+   * snapshots; `delete` puts every member back from its snapshot. Owned by
+   * `core/db` + `core/batch_lifecycle` (Arch); the logic lane consumes via
+   * `services/batches`.
    */
   batch: {
     /** All batches (finished + unfinished); the store filters for the list. */
@@ -523,6 +572,17 @@ export const ipc = {
     /** Archive an uploaded batch and release its items (clears their `batchId`). */
     archive: (batchId: string) =>
       call<BatchDto>(Commands.batchArchive, { batchId }),
+    /** Dry-run a delete (read-only): per member, what goes and what comes back. */
+    deletePreview: (batchId: string) =>
+      call<BatchDeletePlanDto>(Commands.batchDeletePreview, { batchId }),
+    /** Delete a batch: put each member's folder and index state back from its
+     * pre-batch snapshot, then remove the batch. Refused once it has touched
+     * the backend. */
+    delete: (batchId: string) => call<void>(Commands.batchDelete, { batchId }),
+    /** Record, before an upload's first backend write, that this batch is about
+     * to change the backend (idempotent). */
+    markBackendTouched: (batchId: string) =>
+      call<BatchDto>(Commands.batchMarkBackendTouched, { batchId }),
   },
 
   /**

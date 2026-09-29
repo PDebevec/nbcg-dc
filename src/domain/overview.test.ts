@@ -8,6 +8,7 @@ import {
   filterItems,
   countByFilter,
   depthOf,
+  openAction,
 } from "./overview";
 import { ItemState, emptyStages, type Item } from "./item";
 
@@ -63,6 +64,27 @@ describe("selection scoping", () => {
   it("All and In progress are not selectable", () => {
     expect(isSelectableFilter(OverviewFilter.All)).toBe(false);
     expect(isSelectableFilter(OverviewFilter.InProgress)).toBe(false);
+  });
+});
+
+describe("openAction", () => {
+  const unbatched = makeItem();
+  const batched = makeItem({ batchId: "b1" });
+
+  it("never starts a batch from All", () => {
+    expect(openAction(OverviewFilter.All, unbatched)).toBe("none");
+  });
+
+  it("starts a one-item batch only from the single-state filters", () => {
+    expect(openAction(OverviewFilter.Unprocessed, unbatched)).toBe("start-batch");
+    expect(openAction(OverviewFilter.Stopped, unbatched)).toBe("start-batch");
+    expect(openAction(OverviewFilter.NeedsReupload, unbatched)).toBe("start-batch");
+    expect(openAction(OverviewFilter.Done, unbatched)).toBe("start-batch");
+  });
+
+  it("opens the batch an item is already in, from any filter", () => {
+    expect(openAction(OverviewFilter.All, batched)).toBe("open-batch");
+    expect(openAction(OverviewFilter.InProgress, batched)).toBe("open-batch");
   });
 });
 

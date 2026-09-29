@@ -520,6 +520,12 @@ pub struct BatchDto {
     pub visibility: VisibilityStatus,
     pub overrides: HashMap<String, BatchItemOverride>,
     pub archived_at: Option<String>,
+    /// When the batch first wrote to the backend (set write-ahead, just before
+    /// an upload's first backend write), or null. Once set the batch can't be
+    /// deleted. Native-owned: `batch_update` never writes it, so a stale copy
+    /// sent back from the TS side can't clear it.
+    #[serde(default)]
+    pub backend_touched_at: Option<String>,
 }
 
 /// The create payload — everything except the native-assigned `id`/`no`/
@@ -538,6 +544,48 @@ pub struct BatchCreateDto {
     pub publish: ItemType,
     pub visibility: VisibilityStatus,
     pub overrides: HashMap<String, BatchItemOverride>,
+}
+
+/// One file a batch delete would remove from an item folder.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchDeleteFileDto {
+    /// `/`-joined path inside the item folder (`"a.pdf"`, `"source/a.pdf"`,
+    /// `".nbcg-tmp-…/"` for a staging folder).
+    pub path: String,
+    /// Named like one of the app's own outputs; false flags a file someone
+    /// added by hand.
+    pub generated: bool,
+}
+
+/// What deleting a batch does to one member.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchDeleteItemDto {
+    pub item_id: String,
+    pub folder_name: String,
+    /// The item's index state after the delete: its pre-batch state, or for
+    /// a batch without snapshots its current state minus the claim. Null
+    /// when the item is no longer in the index.
+    pub before: Option<IndexedItemDto>,
+    pub remove: Vec<BatchDeleteFileDto>,
+    /// Paths put back from the snapshot (missing now, or changed).
+    pub restore: Vec<String>,
+    /// Why this item's folder can't be compared with its snapshot.
+    pub error: Option<String>,
+}
+
+/// A read-only dry run of `batch_delete` — the confirmation's content.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchDeletePlanDto {
+    pub batch_id: String,
+    /// False for a batch made before snapshots existed: deleting it only
+    /// releases its items.
+    pub has_snapshot: bool,
+    /// Why the batch can't be deleted right now.
+    pub blocked_reason: Option<String>,
+    pub items: Vec<BatchDeleteItemDto>,
 }
 
 // ─── job run DTOs (Epic 06) ──────────────────────────────────────────────────

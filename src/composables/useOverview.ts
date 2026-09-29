@@ -11,10 +11,11 @@
  * Cross-epic seams: `createBatch`, `openAsBatch`, and `openItem` create a batch
  * (via `useBatches`) and navigate to the batch workspace — wired in **Epic 03
  * (Batches)**. Selection is state-scoped, so a Create-batch selection is always
- * one item state → the batch's `type`.
+ * one item state → the batch's `type`; for the same reason `openAsBatch` never
+ * starts a batch from All.
  */
 
-import { computed, getCurrentInstance, onMounted, onUnmounted } from "vue";
+import { computed, getCurrentInstance, onMounted, onUnmounted, ref } from "vue";
 import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
 import { useItemsStore } from "@stores/useItems";
@@ -38,6 +39,8 @@ import {
   OverviewFilter,
   depthOf,
   isSelectableFilter,
+  openAction,
+  type OpenAction,
 } from "@domain/overview";
 import { logger } from "@lib/logger";
 
@@ -70,6 +73,9 @@ export interface OverviewRow {
   selectable: boolean;
   /** In-progress rows are locked to their batch (show a lock icon). */
   locked: boolean;
+  /** What opening this row does under the active filter (`none` on All for
+   * an unbatched item — see `domain/overview.openAction`). */
+  openAction: OpenAction;
   /** Operator-hidden — only ever true when shown via the "Show hidden" toggle
    * (a hidden row is otherwise excluded from `visibleItems` entirely). */
   hidden: boolean;
@@ -83,7 +89,11 @@ export interface FilterView {
   active: boolean;
 }
 
-function toRow(item: Item, selected: boolean, selectable: boolean): OverviewRow {
+function toRow(
+  item: Item,
+  selected: boolean,
+  filter: OverviewFilter,
+): OverviewRow {
   const state = deriveItemState(item);
   return {
     id: item.id,
@@ -101,8 +111,9 @@ function toRow(item: Item, selected: boolean, selectable: boolean): OverviewRow 
     })),
     errorMessage: firstStageError(item),
     selected,
-    selectable,
+    selectable: isSelectableFilter(filter),
     locked: state === "in-progress",
+    openAction: openAction(filter, item),
     hidden: item.hidden,
   };
 }
@@ -131,7 +142,7 @@ export function useOverview() {
 
   const rows = computed<OverviewRow[]>(() =>
     visibleItems.value.map((item) =>
-      toRow(item, store.isSelected(item.id), selectable.value),
+      toRow(item, store.isSelected(item.id), activeFilter.value),
     ),
   );
 
@@ -243,29 +254,42 @@ export function useOverview() {
     void router.push({ name: "batch-work", params: { batchId } });
   }
 
+  /** A batch is being created. Creating one snapshots every member for undo
+   * — a copy rather than a link on a volume that can't hard-link — so it can
+   * take a moment. */
+  const creatingBatch = ref(false);
+
   /** Create a batch from a set of same-state items and open its workspace. */
   async function createBatchFor(input: CreateBatchInput): Promise<void> {
+    if (creatingBatch.value) return;
+    creatingBatch.value = true;
     try {
       const batch = await batches.create(input);
       store.clearSelection();
       navigateToBatch(batch.id);
     } catch (err) {
       logger.error("overview", "Failed to create the batch.", err);
-      toasts.push("Couldn't create the batch.", "error");
+      // Tauri rejects with the native error as a plain string.
+      const reason = err instanceof Error ? err.message : typeof err === "string" ? err : null;
+      toasts.push(reason ? `Couldn't create the batch: ${reason}` : "Couldn't create the batch.", "error");
+    } finally {
+      creatingBatch.value = false;
     }
   }
 
-  /** ⋯ → Open as batch / opening a row: the single-item short-circuit. Creates a
-   * one-item batch (dropping straight into its stage's tab), or — if the item is
-   * already in a batch (In progress) — opens that batch. */
+  /** ⋯ → Open as batch / opening a row: the single-item short-circuit. Opens
+   * the batch the item is already in (In progress), or — on a single-state
+   * filter only — creates a one-item batch and drops into its stage's tab. On
+   * All an unbatched item is left alone (`domain/overview.openAction`). */
   async function openAsBatch(id: string): Promise<void> {
     const item = store.items.find((i) => i.id === id);
     if (!item) return;
-    if (item.batchId) {
+    const action = openAction(activeFilter.value, item);
+    if (action === "open-batch" && item.batchId) {
       navigateToBatch(item.batchId);
-      return;
+    } else if (action === "start-batch") {
+      await createBatchFor({ type: deriveItemState(item), itemIds: [id] });
     }
-    await createBatchFor({ type: deriveItemState(item), itemIds: [id] });
   }
 
   /** Open a row on a non-selectable filter (All / In progress). */
@@ -316,6 +340,7 @@ export function useOverview() {
     selectable,
     selectionCount,
     canCreateBatch,
+    creatingBatch,
     allVisibleSelected,
     showHidden,
     peekResult,

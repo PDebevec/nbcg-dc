@@ -189,6 +189,51 @@ function withDefaults(overrides?: Partial<UploadDeps>): UploadDeps {
   return { ...defaultDeps(), ...overrides };
 }
 
+/**
+ * `base` with every backend **write** made to await `mark()` first — once per
+ * run, before the first write. What keeps batch delete honest: a batch whose
+ * upload got as far as the backend is no longer only local, so it must never
+ * be offered for undo (docs/superpowers/specs/2026-09-29-delete-batch-design.md).
+ *
+ * Fails closed: if the mark can't be saved, no write is attempted — every
+ * write in the run rejects with the mark's error. Reads are left alone.
+ */
+export function withBackendWriteMark(
+  mark: () => Promise<void>,
+  base: Partial<UploadDeps> = {},
+): Partial<UploadDeps> {
+  const deps = withDefaults(base);
+  let marked: Promise<void> | null = null;
+  const beforeWrite = (): Promise<void> => (marked ??= mark());
+  return {
+    ...base,
+    createItem: async (...args) => {
+      await beforeWrite();
+      return deps.createItem(...args);
+    },
+    updateItem: async (...args) => {
+      await beforeWrite();
+      return deps.updateItem(...args);
+    },
+    uploadFiles: async (...args) => {
+      await beforeWrite();
+      return deps.uploadFiles(...args);
+    },
+    replaceFile: async (...args) => {
+      await beforeWrite();
+      return deps.replaceFile(...args);
+    },
+    setFileText: async (...args) => {
+      await beforeWrite();
+      return deps.setFileText(...args);
+    },
+    connectParent: async (...args) => {
+      await beforeWrite();
+      return deps.connectParent(...args);
+    },
+  };
+}
+
 // ─── per-item context + result ──────────────────────────────────────────────
 
 /** The publish decisions + working values for one item's upload — resolved by

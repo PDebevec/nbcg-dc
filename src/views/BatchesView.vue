@@ -1,8 +1,21 @@
 <script setup lang="ts">
 import { useBatches } from "@composables/useBatches";
+import { useDeleteBatch } from "@composables/useDeleteBatch";
 import BatchCard from "@ui/batch/BatchCard.vue";
+import DeleteBatchDialog from "@ui/batch/DeleteBatchDialog.vue";
 
 const { cards, isEmpty, loading, error, open, newFromOverview } = useBatches();
+const {
+  open: deleteOpen,
+  loading: deleteLoading,
+  deleting,
+  error: deleteError,
+  plan: deletePlan,
+  canConfirm,
+  request: requestDelete,
+  cancel: cancelDelete,
+  confirm: confirmDelete,
+} = useDeleteBatch();
 </script>
 
 <template>
@@ -39,8 +52,20 @@ const { cards, isEmpty, loading, error, open, newFromOverview } = useBatches();
         :key="card.id"
         :card="card"
         @open="open"
+        @delete="requestDelete"
       />
     </div>
+
+    <DeleteBatchDialog
+      :open="deleteOpen"
+      :loading="deleteLoading"
+      :deleting="deleting"
+      :can-confirm="canConfirm"
+      :error="deleteError"
+      :plan="deletePlan"
+      @cancel="cancelDelete()"
+      @confirm="confirmDelete()"
+    />
   </div>
 </template>
 

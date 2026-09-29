@@ -25,6 +25,7 @@ import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
 import { useBatchesStore } from "@stores/useBatches";
 import { useBatchWorkStore } from "@stores/useBatchWork";
+import { useUploadStore } from "@stores/useUpload";
 import {
   BATCH_STAGE_LABELS,
   BATCH_STAGE_TONES,
@@ -32,6 +33,7 @@ import {
   BATCH_TAB_LABELS,
   batchLabel,
   batchProgress,
+  deleteBlockedReason,
   singleRunBlockedMessage,
   stepIndexForStage,
   type BatchProgress,
@@ -57,6 +59,8 @@ export interface BatchHeaderView {
   /** "Archived" once uploaded, else "All changes saved". */
   savedLabel: string;
   progress: BatchProgress;
+  /** Why the Delete batch button is disabled, or null when it isn't. */
+  deleteBlocked: string | null;
 }
 
 /** One tab in the workspace tab bar. */
@@ -76,6 +80,7 @@ export interface BatchStepView {
 export function useBatch(batchId: MaybeRefOrGetter<string>) {
   const batches = useBatchesStore();
   const work = useBatchWorkStore();
+  const upload = useUploadStore();
   const router = useRouter();
 
   const { current, resolvedTab, availableTabs, readOnly, showsUnlock } =
@@ -106,6 +111,7 @@ export function useBatch(batchId: MaybeRefOrGetter<string>) {
       showsUnlock: showsUnlock.value,
       savedLabel: b.archivedAt != null ? "Archived" : "All changes saved",
       progress: batchProgress(b),
+      deleteBlocked: deleteBlockedReason(b, { uploading: upload.activeBatchId === b.id }),
     };
   });
 

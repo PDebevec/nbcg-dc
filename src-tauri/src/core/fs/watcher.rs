@@ -79,6 +79,10 @@ where
             return;
         };
         for path in event.paths {
+            // Taking or dropping a batch snapshot is not a change to any item.
+            if crate::core::snapshot::is_snapshot_path(&path) {
+                continue;
+            }
             emit(FsChangedEvent {
                 root,
                 kind,

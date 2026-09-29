@@ -15,7 +15,7 @@ pub mod core;
 pub mod dto;
 pub mod error;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -109,9 +109,18 @@ pub fn run() {
                 python_runtime,
             };
 
-            // Start watching whatever is already configured. A first run has no
-            // roots yet; `config_save` re-points the watcher once they are set.
+            // Start watching whatever is already configured, and clear out
+            // snapshots of batches that ended while a crash kept their folder
+            // cleanup from running. A first run has no roots yet;
+            // `config_save` re-points the watcher once they are set.
             if let Ok((unprocessed, processed)) = state.roots() {
+                let roots: Vec<PathBuf> = [unprocessed.clone(), processed.clone()]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                if let Err(e) = core::batch_lifecycle::sweep(&state.db, &roots) {
+                    eprintln!("[nbcg-dc] could not clean up old batch snapshots: {e}");
+                }
                 rewatch(
                     &handle,
                     &state,
@@ -148,6 +157,9 @@ pub fn run() {
             commands::batch::batch_create,
             commands::batch::batch_update,
             commands::batch::batch_archive,
+            commands::batch::batch_mark_backend_touched,
+            commands::batch::batch_delete_preview,
+            commands::batch::batch_delete,
             commands::sync::sync_log_append,
             commands::sync::sync_log_list,
             commands::jobs::jobs_start,

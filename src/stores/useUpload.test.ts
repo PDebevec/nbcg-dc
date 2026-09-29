@@ -14,6 +14,7 @@ function makeBatch(over: Partial<Batch> = {}): Batch {
     no: 1,
     createdAt: "2026-09-20T00:00:00.000Z",
     archivedAt: null,
+    backendTouchedAt: null,
     ...over,
   };
 }
@@ -275,6 +276,26 @@ describe("useUpload.run", () => {
     expect(refresh).toHaveBeenCalled();
     expect(reload).toHaveBeenCalledWith(item, { values: false });
     expect(store.activeBatchId).toBeNull();
+  });
+
+  it("marks the batch before the upload's first backend write", async () => {
+    const batches = useBatchesStore();
+    batches.batches = [makeBatch()];
+    const mark = vi.spyOn(batches, "markBackendTouched").mockResolvedValue();
+    let markedBeforeWrite = false;
+    vi.mocked(uploadBatch).mockImplementationOnce(async (_items, options) => {
+      const before = mark.mock.calls.length;
+      // No API client is configured here, so the write itself fails without
+      // reaching the network — only whether the mark came first matters.
+      await options.deps?.createItem?.({} as never).catch(() => undefined);
+      markedBeforeWrite = before === 0 && mark.mock.calls.length === 1;
+      return { results: [], allUploaded: false, missingParentIds: [] };
+    });
+
+    await useUploadStore().run("b1", [item], () => ctx);
+
+    expect(markedBeforeWrite).toBe(true);
+    expect(mark).toHaveBeenCalledWith("b1");
   });
 
   it("logs a failed reload instead of failing the run", async () => {

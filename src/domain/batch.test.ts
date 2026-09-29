@@ -11,6 +11,8 @@ import {
   anyOtherRunning,
   batchLabel,
   batchProgress,
+  DELETE_BLOCKED,
+  deleteBlockedReason,
   enterMetadata,
   enterProcessing,
   failedItemIds,
@@ -57,6 +59,7 @@ function makeBatch(overrides: Partial<Batch> = {}): Batch {
     visibility: VisibilityStatus.PRIVATE,
     overrides: {},
     archivedAt: null,
+    backendTouchedAt: null,
     ...overrides,
   };
 }
@@ -441,5 +444,27 @@ describe("newBatchFields — create defaults", () => {
     const f = newBatchFields({ type: ItemState.ToProcess, itemIds: ids });
     ids.push("b");
     expect(f.itemIds).toEqual(["a"]);
+  });
+});
+
+describe("deleteBlockedReason", () => {
+  const idle = { uploading: false };
+
+  it("allows a batch that has not reached the backend", () => {
+    expect(deleteBlockedReason(makeBatch(), idle)).toBeNull();
+  });
+
+  it("blocks while the batch processes or uploads", () => {
+    expect(deleteBlockedReason(makeBatch({ running: true }), idle)).toBe(DELETE_BLOCKED.running);
+    expect(deleteBlockedReason(makeBatch(), { uploading: true })).toBe(DELETE_BLOCKED.uploading);
+  });
+
+  it("blocks an archived batch and one that has touched the backend", () => {
+    expect(deleteBlockedReason(makeBatch({ archivedAt: "2026-09-29T10:00:00.000Z" }), idle)).toBe(
+      DELETE_BLOCKED.archived,
+    );
+    expect(
+      deleteBlockedReason(makeBatch({ backendTouchedAt: "2026-09-29T10:00:00.000Z" }), idle),
+    ).toBe(DELETE_BLOCKED.backend);
   });
 });

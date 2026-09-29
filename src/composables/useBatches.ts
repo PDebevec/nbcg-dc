@@ -5,8 +5,9 @@
  *
  * It shapes the unfinished batches into ready-to-render **cards** (number,
  * status pill + running flag, created time, item count, the three-step
- * indicator, and a progress bar), the empty state, the rail badge count, and the
- * open action (navigates to the batch workspace).
+ * indicator, a progress bar, and whether the card's delete button is enabled),
+ * the empty state, the rail badge count, and the open action (navigates to the
+ * batch workspace). The delete dialog itself is `useDeleteBatch`.
  */
 
 import { computed, getCurrentInstance, onMounted } from "vue";
@@ -14,12 +15,14 @@ import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
 import { useBatchesStore } from "@stores/useBatches";
 import { useToastsStore } from "@stores/useToasts";
+import { useUploadStore } from "@stores/useUpload";
 import {
   BATCH_STAGE_LABELS,
   BATCH_STAGE_TONES,
   BATCH_STEPS,
   batchLabel,
   batchProgress,
+  deleteBlockedReason,
   stepIndexForStage,
   type Batch,
   type BatchProgress,
@@ -50,9 +53,11 @@ export interface BatchCardView {
   itemCount: number;
   steps: BatchStepView[];
   progress: BatchProgress;
+  /** Why the card's delete button is disabled, or null when it isn't. */
+  deleteBlocked: string | null;
 }
 
-function toCard(batch: Batch): BatchCardView {
+function toCard(batch: Batch, uploadingId: string | null): BatchCardView {
   const currentStep = stepIndexForStage(batch.stage);
   return {
     id: batch.id,
@@ -68,6 +73,7 @@ function toCard(batch: Batch): BatchCardView {
       active: i === currentStep,
     })),
     progress: batchProgress(batch),
+    deleteBlocked: deleteBlockedReason(batch, { uploading: batch.id === uploadingId }),
   };
 }
 
@@ -77,8 +83,11 @@ export function useBatches() {
   const router = useRouter();
 
   const { unfinished, badgeCount, loading, error, loaded } = storeToRefs(store);
+  const { activeBatchId: uploadingId } = storeToRefs(useUploadStore());
 
-  const cards = computed<BatchCardView[]>(() => unfinished.value.map(toCard));
+  const cards = computed<BatchCardView[]>(() =>
+    unfinished.value.map((b) => toCard(b, uploadingId.value)),
+  );
 
   /** Show the "No batches yet" empty state once loaded with nothing unfinished. */
   const isEmpty = computed(() => loaded.value && cards.value.length === 0);

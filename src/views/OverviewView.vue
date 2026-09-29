@@ -15,6 +15,7 @@ const {
   selectable,
   selectionCount,
   canCreateBatch,
+  creatingBatch,
   allVisibleSelected,
   showHidden,
   peekResult,
@@ -177,10 +178,10 @@ function rowClick(id: string): void {
       <span class="sel-note">→ new batch, moved to In&nbsp;progress</span>
       <button
         class="btn-primary create-btn"
-        :disabled="!canCreateBatch"
+        :disabled="!canCreateBatch || creatingBatch"
         @click="createBatch()"
       >
-        <span class="batch-glyph">▤</span>Create batch
+        <span class="batch-glyph">▤</span>{{ creatingBatch ? "Creating…" : "Create batch" }}
       </button>
       <button class="clear-btn" @click="clearSelection()">Clear</button>
     </div>
@@ -219,6 +220,7 @@ function rowClick(id: string): void {
               stopped: row.state === 'stopped',
               'in-batch': row.locked,
               'hidden-row': row.hidden,
+              inert: !row.selectable && row.openAction === 'none',
             }"
             @click.stop="rowClick(row.id)"
           >
@@ -277,7 +279,7 @@ function rowClick(id: string): void {
                 ⋯
               </button>
               <div v-if="openMenuId === row.id" class="row-menu">
-                <button @click="menuOpenAsBatch(row.id)">
+                <button v-if="row.openAction !== 'none'" @click="menuOpenAsBatch(row.id)">
                   <svg
                     viewBox="0 0 20 20"
                     width="15"
@@ -289,7 +291,7 @@ function rowClick(id: string): void {
                     <rect x="2.5" y="3.5" width="12" height="12" rx="2" />
                     <line x1="7" y1="3.5" x2="7" y2="15.5" />
                   </svg>
-                  {{ row.locked ? "Open batch" : "Open as batch" }}
+                  {{ row.openAction === "open-batch" ? "Open batch" : "Open as batch" }}
                 </button>
                 <button @click="menuOpenInExplorer(row.id)">
                   <svg
@@ -748,6 +750,11 @@ tbody tr {
 
 tbody tr:hover {
   background: var(--c-primary-faint);
+}
+
+/* On All, clicking an unbatched row does nothing — don't advertise a click. */
+tbody tr.inert {
+  cursor: default;
 }
 
 tbody tr.stopped {

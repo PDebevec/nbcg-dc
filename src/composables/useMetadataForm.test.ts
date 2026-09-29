@@ -31,6 +31,7 @@ function makeBatch(itemIds: string[], over: Partial<Batch> = {}): Batch {
     visibility: VisibilityStatus.PRIVATE,
     overrides: {},
     archivedAt: null,
+    backendTouchedAt: null,
     ...over,
   };
 }

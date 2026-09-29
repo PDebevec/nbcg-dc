@@ -65,6 +65,14 @@ pub fn try_acquire<'a>(lock: &'a Mutex<JobRunLock>, batch_id: &str) -> Result<Jo
     Ok(JobRunGuard { lock, cancel })
 }
 
+/// The batch currently holding the lock, if any.
+pub fn running_batch(lock: &Mutex<JobRunLock>) -> Option<String> {
+    lock.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .batch_id
+        .clone()
+}
+
 /// Request cancellation of `batch_id`'s run, if it's the one currently
 /// running. Returns whether it actually matched something.
 pub fn request_cancel(lock: &Mutex<JobRunLock>, batch_id: &str) -> bool {

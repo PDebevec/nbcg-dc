@@ -92,6 +92,41 @@ pub fn make_item_dir(root: &Path, name: &str, files: &[(&str, &str)]) -> std::pa
     dir
 }
 
+/// Write `contents` to `path`, creating its folder.
+pub fn write_file(path: &Path, contents: &str) {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("create parent");
+    }
+    std::fs::write(path, contents).expect("write file");
+}
+
+/// Every file under `dir`, recursively, with its contents — `/`-joined
+/// relative paths, sorted. The whole truth about a folder, nested items and
+/// snapshot links included.
+pub fn tree(dir: &Path) -> Vec<(String, String)> {
+    fn walk(base: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
+        for entry in std::fs::read_dir(dir).expect("read dir") {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                walk(base, &path, out);
+            } else {
+                let rel = path
+                    .strip_prefix(base)
+                    .expect("under base")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                out.push((rel, std::fs::read_to_string(&path).unwrap_or_default()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    if dir.is_dir() {
+        walk(dir, dir, &mut out);
+    }
+    out.sort();
+    out
+}
+
 pub fn metadata_mirror(backend_id: Option<&str>, title: &str) -> LocalMetadataFile {
     LocalMetadataFile {
         backend_id: backend_id.map(String::from),

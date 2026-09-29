@@ -39,6 +39,7 @@ function makeBatch(over: Partial<Batch> = {}): Batch {
     no: 17,
     createdAt: "2026-08-08T00:00:00.000Z",
     archivedAt: null,
+    backendTouchedAt: null,
     ...over,
   };
 }
