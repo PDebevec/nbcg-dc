@@ -144,7 +144,7 @@ export interface UploadGateInput {
    * cover.
    */
   contentKind?: ContentKind;
-  /** Names of the batch's parents that are not on the backend: gone (refused
+  /** Names of the item's parents that are not on the backend: gone (refused
    * on an upload) or not found (search 404). Either blocks. */
   missingParents?: MissingParentNames;
 }

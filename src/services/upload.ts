@@ -6,12 +6,13 @@
  * The whole *policy* is in `domain/upload.ts` (pure); this service is the
  * executor that does the I/O in the right order:
  *
- *   new item:  preflight → create with `parentIds` → write-through
+ *   new item:  preflight → create with its `parentIds` → write-through
  *              (`metadata.json` + SQLite) → adopt the parents' new versions
  *              → upload assets (roles + OCR text) → move folder to /processed
  *   re-upload: preflight → PATCH (changed keys, `null` for emptied ones)
- *              → write-through → replace / add assets → connect parents
- *              → adopt the parents' new versions
+ *              → write-through → replace / add assets → link added parents,
+ *              then unlink removed ones → adopt the parents' new versions
+ *              → record the item's links in its mirror
  *
  * A create that collides with an existing record (409) adopts it and goes on
  * as a re-upload, without clearing any field.
@@ -54,7 +55,7 @@ import {
   uploadFiles as apiUploadFiles,
   type UploadFile,
 } from "./api/files";
-import { connectParent as apiConnectParent } from "./api/relations";
+import { connectParent as apiConnectParent, disconnectParent as apiDisconnectParent } from "./api/relations";
 import { previewCobiss } from "./api/cobiss";
 import { getRecordSchemaV2 } from "./api/schemaV2";
 import { deterministicItemId } from "./api/deterministicId";
@@ -78,7 +79,15 @@ import type {
 import type { Item } from "@domain/item";
 import type { DiscoveredAsset } from "@domain/files";
 import { isMangledFilename, isSameUploadedFilename } from "@domain/naming";
-import { missingParentMessage, type MissingParentNames } from "@domain/parent";
+import {
+  itemParentIds,
+  linkChanges,
+  missingParentMessage,
+  nextBackendLinks,
+  sameParentIds,
+  type MissingParentNames,
+  type ParentChanges,
+} from "@domain/parent";
 import { resolveVersion } from "@domain/sync";
 import {
   changedMetadata,
@@ -113,6 +122,9 @@ export interface UploadDeps {
   /** Connect one child under one parent (`POST /api/relations/connect`). Resolves
    * to the parent's post-write state — see {@link ItemUploadResult.parentStates}. */
   connectParent: (parentId: string, childId: string) => Promise<RelationWriteResult>;
+  /** Unlink one child from one parent (`POST /api/relations/disconnect`).
+   * Resolves to the parent's post-write state, like {@link connectParent}. */
+  disconnectParent: (parentId: string, childId: string) => Promise<RelationWriteResult>;
   /** Read a file's raw bytes off disk (native `fs_read_file`). */
   readFileBytes: (path: string) => Promise<ArrayBuffer>;
   /** Read a UTF-8 text file (OCR `.txt`) off disk. */
@@ -165,6 +177,7 @@ function defaultDeps(): UploadDeps {
     listFiles: apiListFiles,
     setFileText: apiSetFileText,
     connectParent: (parentId, childId) => apiConnectParent(parentId, childId),
+    disconnectParent: (parentId, childId) => apiDisconnectParent(parentId, childId),
     readFileBytes: (path) => ipc.fs.readFile(path),
     readTextFile: async (path) => new TextDecoder().decode(await ipc.fs.readFile(path)),
     readMirror: (item) => readItemMetadata(item),
@@ -231,6 +244,10 @@ export function withBackendWriteMark(
       await beforeWrite();
       return deps.connectParent(...args);
     },
+    disconnectParent: async (...args) => {
+      await beforeWrite();
+      return deps.disconnectParent(...args);
+    },
   };
 }
 
@@ -244,8 +261,10 @@ export interface UploadItemContext {
   targetState: ItemType;
   /** Visibility — the batch default or the item override. */
   visibility: VisibilityStatus;
-  /** Linked parent ids to connect this item under (one connect call each). */
-  parentIds: string[];
+  /** This item's pending parent-link changes in the batch. A new item is
+   * created under its adds; a re-upload links the adds the backend lacks and
+   * unlinks the removes it has (`domain/parent.linkChanges`). */
+  parentChanges: Pick<ParentChanges, "add" | "remove">;
   /** The working metadata to publish. Defaults to the folder mirror's metadata
    * when omitted (the persisted pre-upload working source of truth). */
   metadata?: RecordMetadataInput;
@@ -253,7 +272,7 @@ export interface UploadItemContext {
   metadataReady: boolean;
   /** The chosen primary-thumbnail filename, or null. */
   primaryThumbnail: string | null;
-  /** Names of batch parents that are not on the backend (a blocker). */
+  /** Names of the item's parents that are not on the backend (a blocker). */
   missingParents?: MissingParentNames;
   /** Schema keys the operator emptied; a re-upload clears them on the backend. */
   emptied?: string[];
@@ -284,6 +303,13 @@ export type ItemUploadStatus =
   | "duplicate"
   /** Any other failure (validation, concurrency, transport, …). */
   | "error";
+
+/** A parent link or unlink that failed; the record itself still uploaded. */
+export interface RelationError {
+  parentId: string;
+  message: string;
+  action: "link" | "unlink";
+}
 
 export interface ItemUploadResult {
   itemId: string;
@@ -317,8 +343,9 @@ export interface ItemUploadResult {
   fieldErrors: BackendFieldError[];
   /** The backend refused the metadata (`METADATA_VALIDATION_FAILED`). */
   metadataRejected: boolean;
-  /** Per-parent connect failures (the record still uploaded). */
-  relationErrors: Array<{ parentId: string; message: string }>;
+  /** Per-parent link/unlink failures (the record still uploaded; the batch
+   * stays open so the next upload retries them). */
+  relationErrors: RelationError[];
   /**
    * Each successfully-connected parent's state **after** the write — its new
    * `version` and rewritten children counts.
@@ -530,7 +557,8 @@ function collidingCobissId(pruned: RecordMetadataInput, item: Item): string | nu
   return item.catalogueId;
 }
 
-/** Persist the write-through mirror + index row after a successful upload. */
+/** Persist the write-through mirror + index row after a successful upload, and
+ * return the mirror written. */
 async function writeThrough(
   item: Item,
   deps: UploadDeps,
@@ -540,13 +568,15 @@ async function writeThrough(
     targetState: ItemType;
     visibility: VisibilityStatus;
     metadata: RecordMetadata;
+    parentIds: string[] | null;
   },
-): Promise<void> {
+): Promise<LocalMetadataFile> {
   const mirror: LocalMetadataFile = {
     backendId: facts.backendId,
     version: facts.version,
     targetState: facts.targetState,
     visibilityStatus: facts.visibility,
+    parentIds: facts.parentIds,
     metadata: facts.metadata,
     syncedAt: deps.now(),
   };
@@ -557,30 +587,37 @@ async function writeThrough(
     targetState: facts.targetState,
     visibilityStatus: facts.visibility,
   });
+  return mirror;
 }
 
-/**
- * The links a create made through `parentIds`, or null when the response does
- * not report them (a backend without `parentIds`) and the upload has to
- * connect as before.
- */
-function linkedByCreate(created: CreatedItemEntity, ctx: UploadItemContext): RelationWriteResult[] | null {
+/** The links a create made through `parentIds`, or null when the response does
+ * not report them (an older backend) and `finishUpload` has to link. */
+function linkedByCreate(created: CreatedItemEntity, parentIds: readonly string[]): RelationWriteResult[] | null {
   if (created.parents) return created.parents;
-  return ctx.parentIds.length === 0 ? [] : null;
+  return parentIds.length === 0 ? [] : null;
+}
+
+/** The item's link state as this upload left it, for {@link finishUpload}. */
+interface LinkState {
+  /** The mirror this upload last wrote for the item. */
+  mirror: LocalMetadataFile;
+  /** The links a create made itself (`parentIds`), already adopted. */
+  created: RelationWriteResult[];
+  /** False on a record taken over after a create `409` (the operator never saw
+   * its links) and on a brand-new record: nothing is unlinked. */
+  mayUnlink: boolean;
 }
 
 /**
- * Finish an upload once the record and its assets are already on the
- * backend: connect parents, adopt their bumped versions, reposition the
- * folder to `/processed`, and build the `"uploaded"` result.
+ * Finish an upload once the record and its assets are on the backend: link and
+ * unlink parents so the backend matches the item's parents, adopt the parents'
+ * bumped versions, record the item's links in its mirror, reposition the folder
+ * to `/processed`, and build the `"uploaded"` result.
  *
- * Shared tail for all three paths that end in a successful write — the
- * create branch of {@link uploadItem}, {@link replaceOnBackend}, and
- * {@link recreateOrphaned} (an orphaned replace re-created as a fresh
- * record). It used to be copied into each; extracted so the parent-linking
- * and move-to-processed behaviour can't drift between them.
- *
- * Links parents only when the create did not already (see `linkedOnCreate`).
+ * Shared tail for the create branch of {@link uploadItem}, {@link replaceOnBackend}
+ * and {@link recreateOrphaned}. Links before unlinks: an issue moved from one
+ * serial to another never passes through a state with no serial, which the
+ * backend's re-check on each call could refuse.
  */
 async function finishUpload(
   item: Item,
@@ -589,24 +626,24 @@ async function finishUpload(
   deps: UploadDeps,
   warnings: UploadWarning[],
   run: RunCreation,
-  /** The links a create made itself (`parentIds`), already adopted — null
-   * when this path still has to connect (re-upload, takeover). */
-  linkedOnCreate: RelationWriteResult[] | null = null,
+  links: LinkState,
 ): Promise<ItemUploadResult> {
-  let relationErrors: Array<{ parentId: string; message: string }> = [];
-  let parentStates: RelationWriteResult[];
-  if (linkedOnCreate) {
-    parentStates = linkedOnCreate;
-  } else {
-    // Link parents (idempotent server-side); a per-parent failure doesn't undo
-    // the upload — record it and continue. Each success reports the parent's
-    // new version, which the caller needs to keep that parent's mirror usable.
-    const connected = await connectParents(backendId, ctx.parentIds, deps);
-    relationErrors = connected.errors;
-    parentStates = connected.states;
-    // Each connect bumped the parent's version server-side; adopt it now or the
-    // parent's next PATCH 409s. Never throws — see `applyParentStates`.
-    await applyParentStates(parentStates, deps);
+  const before = links.mirror.parentIds ?? null;
+  const plan = linkChanges(before, ctx.parentChanges);
+  // A per-parent failure doesn't undo the upload: it is reported, and keeps the
+  // batch open so the next upload retries it (`uploadBatch`).
+  const connected = await connectParents(backendId, plan.connect, deps);
+  const disconnected = links.mayUnlink
+    ? await disconnectParents(backendId, plan.disconnect, deps)
+    : { errors: [] as RelationError[], states: [] as RelationWriteResult[], unlinked: [] as string[] };
+  const states = [...connected.states, ...disconnected.states];
+  // Each link and unlink bumped the parent's version; adopt it now or the
+  // parent's next PATCH 409s. Never throws — see `applyParentStates`.
+  await applyParentStates(states, deps);
+
+  const after = nextBackendLinks(before, connected.linked, disconnected.unlinked);
+  if (!sameParentIds(before, after)) {
+    await deps.writeMirror(item, { ...links.mirror, parentIds: after, syncedAt: deps.now() });
   }
 
   // Reposition to `/processed` on first upload (a replace already lives there).
@@ -627,8 +664,8 @@ async function finishUpload(
     backendId,
     created: run.created,
     warnings,
-    relationErrors,
-    parentStates,
+    relationErrors: [...connected.errors, ...disconnected.errors],
+    parentStates: [...links.created, ...states],
   });
 }
 
@@ -678,9 +715,6 @@ export async function uploadItem(
   // non-`uploaded` result. The OCR and mangled-filename warnings the operator
   // needs in order to know *what* to fix rode on the same list.
   const warnings: UploadWarning[] = [...plan.warnings];
-  // The links a create made itself (`parentIds`) — passed to `finishUpload` so
-  // it does not connect a second time. Stays null on the replace path.
-  let linked: RelationWriteResult[] | null = null;
 
   try {
     // Resolve the working metadata (ctx override, else the folder mirror) and the
@@ -692,10 +726,8 @@ export async function uploadItem(
     const pruned = pruneResult.metadata;
     fieldKeys = pruneResult.fieldKeys;
 
-    let version: number | null;
-    let mirrorMetadata: RecordMetadata;
-
     if (plan.mode === "create") {
+      const parentIds = itemParentIds([], ctx.parentChanges);
       let created: CreatedItemEntity;
       try {
         created = await createOnBackend(
@@ -703,7 +735,7 @@ export async function uploadItem(
             visibilityStatus: ctx.visibility,
             targetState: ctx.targetState,
             metadata: pruned,
-            parentIds: ctx.parentIds,
+            parentIds,
           },
           deps,
         );
@@ -782,7 +814,7 @@ export async function uploadItem(
           deps,
           warnings,
           run,
-          { suppressVisibility: true, keepEmptied: true },
+          { suppressVisibility: true, keepEmptied: true, keepLinks: true },
         );
       }
       backendId = created.id;
@@ -790,35 +822,38 @@ export async function uploadItem(
       // below fails, close-time cleanup may delete it.
       run.created = true;
       run.backendId = created.id;
-      version = created.version;
-      mirrorMetadata = created.metadata;
+      // The links the create made itself — null when the response doesn't say
+      // (an older backend); `finishUpload` then links as before.
+      const linked = linkedByCreate(created, parentIds);
 
       // Persist the connection + mirror BEFORE the assets, so a mid-flight
       // failure (or crash) leaves a recoverable link — a retry then REPLACEs
       // (never double-creates). The item reads `uploaded` briefly while assets
       // are still pending, but the batch only archives on an all-`uploaded` run,
       // so it stays In progress until the assets land.
-      await writeThrough(item, deps, {
+      const written = await writeThrough(item, deps, {
         backendId,
-        version,
+        version: created.version,
         targetState: ctx.targetState,
         visibility: ctx.visibility,
-        metadata: mirrorMetadata,
+        metadata: created.metadata,
+        parentIds: linked ? linked.map((s) => s.parentId) : [],
       });
 
       // The create linked the parents and bumped their versions: adopt them now,
       // before the files — if an asset fails, the links still exist.
-      linked = linkedByCreate(created, ctx);
       if (linked) await applyParentStates(linked, deps);
 
       const attachments = await uploadCreateAssets(backendId, plan, deps, warnings);
       warnings.push(...textQualityWarnings(attachments));
-    } else {
-      // Replace (re-upload) — stable id, stays in `/processed`.
-      return await replaceOnBackend(item, ctx, plan, pruned, mirror, deps, warnings, run);
+      return await finishUpload(item, backendId, ctx, deps, warnings, run, {
+        mirror: written,
+        created: linked ?? [],
+        mayUnlink: false,
+      });
     }
-
-    return await finishUpload(item, backendId, ctx, deps, warnings, run, linked);
+    // Replace (re-upload) — stable id, stays in `/processed`.
+    return await replaceOnBackend(item, ctx, plan, pruned, mirror, deps, warnings, run);
   } catch (err) {
     // Prefer the id this run actually minted. They agree on the create branch;
     // they diverge only when `recreateOrphaned` replaced a 404'd link with a
@@ -848,6 +883,8 @@ interface ReplaceOnBackendOptions {
   suppressVisibility?: boolean;
   /** Never clear keys (a taken-over record: the operator never saw its fields). */
   keepEmptied?: boolean;
+  /** Never unlink (a taken-over record: the operator never saw its links). */
+  keepLinks?: boolean;
 }
 
 /**
@@ -930,12 +967,13 @@ async function replaceOnBackend(
   //
   // The state is the mirror's: a PATCH never changes it, so the batch's choice
   // must not overwrite what the Draft/Record lock reads (as in `recreateOrphaned`).
-  await writeThrough(item, deps, {
+  const written = await writeThrough(item, deps, {
     backendId,
     version,
     targetState: mirror.targetState ?? ctx.targetState,
     visibility: ctx.visibility,
     metadata: mirrorMetadata,
+    parentIds: mirror.parentIds ?? null,
   });
 
   const attachments = await pushReplaceAssets(
@@ -947,7 +985,11 @@ async function replaceOnBackend(
   );
   warnings.push(...textQualityWarnings(attachments));
 
-  return await finishUpload(item, backendId, ctx, deps, warnings, run);
+  return await finishUpload(item, backendId, ctx, deps, warnings, run, {
+    mirror: written,
+    created: [],
+    mayUnlink: !options.keepLinks,
+  });
 }
 
 /** A backend record that already exists at the id this item would have created.
@@ -959,6 +1001,8 @@ export interface ExistingRecord {
   targetState: ItemType;
   visibilityStatus: VisibilityStatus | null;
   metadata: RecordMetadata;
+  /** The record's own parent ids, when the read carried them. */
+  parentIds?: string[] | null;
 }
 
 /** The two reads `resolveExistingRecordWith` needs, injectable for tests. */
@@ -986,6 +1030,7 @@ function hitToExisting(
     targetState: remote.targetState,
     visibilityStatus: remote.visibilityStatus,
     metadata: remote.metadata,
+    parentIds: remote.parentIds,
   };
 }
 
@@ -1073,22 +1118,14 @@ async function adoptExistingRecord(
   // one somebody curated.
   const visibilityStatus = existing.visibilityStatus ?? "PRIVATE";
 
-  const mirror: LocalMetadataFile = {
-    backendId: existing.id,
-    version: existing.version,
-    targetState: existing.targetState,
-    visibilityStatus,
-    metadata: existing.metadata,
-    syncedAt: deps.now(),
-  };
-  await writeThrough(item, deps, {
+  return writeThrough(item, deps, {
     backendId: existing.id,
     version: existing.version,
     targetState: existing.targetState,
     visibility: visibilityStatus,
     metadata: existing.metadata,
+    parentIds: existing.parentIds ?? null,
   });
-  return mirror;
 }
 
 /**
@@ -1128,8 +1165,11 @@ async function recreateOrphaned(
   });
   const targetState = mirror.targetState ?? ctx.targetState;
   const visibility = mirror.visibilityStatus ?? ctx.visibility;
+  // The old links went with the deleted record: re-create it under the item's
+  // parents — the ones it had, minus the removed, plus the added.
+  const parentIds = itemParentIds(mirror.parentIds ?? [], ctx.parentChanges);
   const created = await createOnBackend(
-    { targetState, visibilityStatus: visibility, metadata: pruned, parentIds: ctx.parentIds },
+    { targetState, visibilityStatus: visibility, metadata: pruned, parentIds },
     deps,
   );
   // The second (and last) create site. The old link was authoritatively 404'd
@@ -1137,14 +1177,15 @@ async function recreateOrphaned(
   // here but a record this run stranded.
   run.created = true;
   run.backendId = created.id;
-  await writeThrough(item, deps, {
+  const linked = linkedByCreate(created, parentIds);
+  const written = await writeThrough(item, deps, {
     backendId: created.id,
     version: created.version,
     targetState,
     visibility,
     metadata: created.metadata,
+    parentIds: linked ? linked.map((s) => s.parentId) : [],
   });
-  const linked = linkedByCreate(created, ctx);
   if (linked) await applyParentStates(linked, deps);
   const attachments = await uploadCreateAssets(
     created.id,
@@ -1153,7 +1194,15 @@ async function recreateOrphaned(
     warnings,
   );
   warnings.push(...textQualityWarnings(attachments));
-  return await finishUpload(item, created.id, ctx, deps, warnings, run, linked);
+  return await finishUpload(
+    item,
+    created.id,
+    { ...ctx, parentChanges: { add: parentIds, remove: [] } },
+    deps,
+    warnings,
+    run,
+    { mirror: written, created: linked ?? [], mayUnlink: false },
+  );
 }
 
 // ─── backend steps ───────────────────────────────────────────────────────────
@@ -1637,14 +1686,17 @@ async function connectParents(
   parentIds: string[],
   deps: UploadDeps,
 ): Promise<{
-  errors: Array<{ parentId: string; message: string }>;
+  errors: RelationError[];
   states: RelationWriteResult[];
+  linked: string[];
 }> {
-  const errors: Array<{ parentId: string; message: string }> = [];
+  const errors: RelationError[] = [];
   const states: RelationWriteResult[] = [];
+  const linked: string[] = [];
   for (const parentId of parentIds) {
     try {
       const state = await withRetry(() => deps.connectParent(parentId, childId), deps);
+      linked.push(parentId);
       // Tolerate a version skew: this endpoint returned `204` + an empty body
       // before 2026-08-07, which decodes to `undefined`. The app is installed on a
       // workstation while the backend is deployed independently, so a newer app
@@ -1658,10 +1710,40 @@ async function connectParents(
       if (err instanceof ApiError && parentNotFoundIds(err.body)) throw err;
       const message = err instanceof Error ? err.message : String(err);
       logger.warn("upload", `Failed to link ${childId} under parent ${parentId}.`, err);
-      errors.push({ parentId, message });
+      errors.push({ parentId, message, action: "link" });
     }
   }
-  return { errors, states };
+  return { errors, states, linked };
+}
+
+/**
+ * Unlink the item from each parent (one call each). A `404` means the parent
+ * itself is gone — deleting an item deletes its links — so it counts as
+ * unlinked. Other failures are collected like {@link connectParents}'.
+ */
+async function disconnectParents(
+  childId: string,
+  parentIds: string[],
+  deps: UploadDeps,
+): Promise<{ errors: RelationError[]; states: RelationWriteResult[]; unlinked: string[] }> {
+  const errors: RelationError[] = [];
+  const states: RelationWriteResult[] = [];
+  const unlinked: string[] = [];
+  for (const parentId of parentIds) {
+    try {
+      const state = await withRetry(() => deps.disconnectParent(parentId, childId), deps);
+      unlinked.push(parentId);
+      if (state && typeof state.version === "number") states.push(state);
+    } catch (err) {
+      if (err instanceof ApiError && err.kind === "not_found") {
+        unlinked.push(parentId);
+        continue;
+      }
+      logger.warn("upload", `Failed to unlink ${childId} from parent ${parentId}.`, err);
+      errors.push({ parentId, message: err instanceof Error ? err.message : String(err), action: "unlink" });
+    }
+  }
+  return { errors, states, unlinked };
 }
 
 /**
@@ -1774,8 +1856,9 @@ export interface UploadProgress {
 
 export interface BatchUploadResult {
   results: ItemUploadResult[];
-  /** True when every attempted item reached `uploaded` — the caller then
-   * archives the batch READ-ONLY and releases its items. */
+  /** True when every attempted item reached `uploaded` with all its link
+   * changes made — the caller then archives the batch. A failed link or
+   * unlink keeps the batch open so the next upload retries it. */
   allUploaded: boolean;
   /** Parents the backend said no longer exist; the run stopped at the item
    * that hit it. */
@@ -1819,7 +1902,7 @@ export async function uploadBatch(
       return { results, allUploaded: false, missingParentIds: res.missingParentIds };
     }
   }
-  return { results, allUploaded: results.every((r) => r.status === "uploaded"), missingParentIds: [] };
+  return { results, allUploaded: results.every((r) => r.status === "uploaded" && r.relationErrors.length === 0), missingParentIds: [] };
 }
 
 // ─── close-time cleanup ──────────────────────────────────────────────────────

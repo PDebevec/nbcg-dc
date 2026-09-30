@@ -5,6 +5,7 @@ import {
   connectRelations,
   connectParent,
   disconnectRelations,
+  disconnectParent,
 } from "./relations";
 
 interface Call {
@@ -98,5 +99,12 @@ describe("disconnectRelations", () => {
     expect(calls[0].url).toBe("https://api.test/api/relations/disconnect");
     expect(res.childrenInDrafts).toBe(1);
     expect(res.parentId).toBe("par_1");
+  });
+
+  it("disconnectParent wraps a single child", async () => {
+    const { client, calls } = harness(() => json(STATE, 200));
+    await disconnectParent("par_1", "c1", { client });
+    expect(calls[0].url).toBe("https://api.test/api/relations/disconnect");
+    expect(JSON.parse(calls[0].body!)).toEqual({ parentId: "par_1", childIds: ["c1"] });
   });
 });

@@ -33,6 +33,7 @@ import {
   BatchStage,
   ItemRunStatus,
   isArchived,
+  parentChangesOf,
   resolveItemPublish,
   resolveItemVisibility,
   singleRunBlockedMessage,
@@ -284,7 +285,7 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
         : (r.message ??
           (r.status === "uploaded"
             ? r.relationErrors.length
-              ? `Uploaded, but ${r.relationErrors.length} parent link${r.relationErrors.length === 1 ? "" : "s"} failed.`
+              ? `Uploaded, but ${r.relationErrors.length} parent link change${r.relationErrors.length === 1 ? "" : "s"} failed — upload again to retry.`
               : ""
             : "")),
       fieldErrors: blocked
@@ -472,29 +473,40 @@ export function useProcessing(batchId: MaybeRefOrGetter<string>) {
     if (!b || !canUpload.value) return;
     const members = items.value;
     await Promise.all(members.map((m) => metadata.ensureItemLoaded(m)));
-    // The gate reads the parents' state: wait for any still loading.
-    await metadata.ensureParents(b.parents.map((p) => p.id));
+    // The gate reads each item's parents: wait for its links and their records.
+    await Promise.all(members.map((m) => metadata.ensureItemParents(m)));
     await metadata.flush();
-    const resolveContext = (item: Item): UploadItemContext => ({
-      // An uploaded item keeps its backend state; the batch's choice is for new ones.
-      targetState: metadata.backendStates.get(item.id) ?? resolveItemPublish(b, item.id),
-      visibility: resolveItemVisibility(b, item.id),
-      parentIds: b.parents.map((p) => p.id),
-      metadata: metadata.wireMetadata(item.id),
-      metadataReady: metadata.isReady(item),
-      primaryThumbnail: null,
-      missingParents: metadata.missingParentNamesOf(item),
-      emptied: metadata.emptiedKeys(item.id),
-    });
+    const resolveContext = (item: Item): UploadItemContext => {
+      const changes = parentChangesOf(b, item.id);
+      return {
+        // An uploaded item keeps its backend state; the batch's choice is for new ones.
+        targetState: metadata.backendStates.get(item.id) ?? resolveItemPublish(b, item.id),
+        visibility: resolveItemVisibility(b, item.id),
+        parentChanges: { add: changes.add, remove: changes.remove },
+        metadata: metadata.wireMetadata(item.id),
+        metadataReady: metadata.isReady(item),
+        primaryThumbnail: null,
+        missingParents: metadata.missingParentNamesOf(item),
+        emptied: metadata.emptiedKeys(item.id),
+      };
+    };
     const ok = await uploadStore.run(b.id, members, resolveContext);
     if (ok) {
       toasts.push(`Batch uploaded — ${members.length} item${members.length === 1 ? "" : "s"} published.`, "success");
     } else if (uploadError.value) {
       toasts.push(uploadError.value, "error");
     } else {
-      const res = uploadStore.resultsFor(b.id);
-      const failed = Array.from(res.values()).filter((r) => r.status !== "uploaded").length;
-      toasts.push(`${failed} item${failed === 1 ? "" : "s"} did not upload — see the list.`, "warning");
+      const res = Array.from(uploadStore.resultsFor(b.id).values());
+      const failed = res.filter((r) => r.status !== "uploaded").length;
+      const linkFailed = res.filter((r) => r.status === "uploaded" && r.relationErrors.length > 0).length;
+      if (failed === 0 && linkFailed > 0) {
+        toasts.push(
+          `${linkFailed} item${linkFailed === 1 ? "" : "s"} uploaded, but a parent link change failed — upload again to retry.`,
+          "warning",
+        );
+      } else {
+        toasts.push(`${failed} item${failed === 1 ? "" : "s"} did not upload — see the list.`, "warning");
+      }
     }
   }
 

@@ -150,7 +150,7 @@ const metadataFake = {
   ready: true,
   backendStates: new Map<string, "DRAFT" | "RECORD" | null>(),
   async ensureItemLoaded() {},
-  async ensureParents(_ids: readonly string[]) {},
+  async ensureItemParents(_item: Item) {},
   isReady(): boolean {
     return metadataFake.ready;
   },
@@ -212,11 +212,12 @@ beforeEach(() => {
   itemsFake.refreshCalls = 0;
   metadataFake.ready = true;
   metadataFake.backendStates = new Map();
-  metadataFake.ensureParents = async () => {};
+  metadataFake.ensureItemParents = async () => {};
   uploadFake.run = async () => true;
   uploadFake.results.value = new Map();
   uploadFake.error.value = null;
   uploadFake.closeBatch = vi.fn(async (_batchId: string) => {});
+  uploadFake.resultsFor = () => new Map();
 });
 
 describe("showCancel", () => {
@@ -409,25 +410,18 @@ describe("canUpload", () => {
 });
 
 describe("upload", () => {
-  it("waits for the batch's parents before building the upload contexts", async () => {
+  it("waits for each item's parents before building the upload contexts", async () => {
     const item = makeItem({
       id: "nb",
       folderName: "nb",
       assets: [asset("nb", "nb.pdf"), asset("nb", "cover.jpg")],
       stages: stagesWith({ pdf: "done", thumbnail: "done", ocr: "done" }),
     });
-    seed(
-      makeBatch(["nb"], {
-        stage: BatchStage.Processing,
-        proc: { nb: ItemRunStatus.Done },
-        parents: [{ id: "p1", passesData: false }],
-      }),
-      [item],
-    );
+    seed(makeBatch(["nb"], { stage: BatchStage.Processing, proc: { nb: ItemRunStatus.Done } }), [item]);
     const events: string[] = [];
-    metadataFake.ensureParents = async (ids) => {
+    metadataFake.ensureItemParents = async (i: Item) => {
       await new Promise((resolve) => setTimeout(resolve, 0));
-      events.push(`parents loaded: ${ids.join(",")}`);
+      events.push(`parents loaded: ${i.id}`);
     };
     uploadFake.run = async (_batchId, members, resolveContext) => {
       members.forEach(resolveContext);
@@ -438,7 +432,74 @@ describe("upload", () => {
 
     await view.upload();
 
-    expect(events).toEqual(["parents loaded: p1", "contexts built"]);
+    expect(events).toEqual(["parents loaded: nb", "contexts built"]);
+  });
+
+  it("hands each item its own pending parent-link changes", async () => {
+    const done = { stages: stagesWith({ pdf: "done", thumbnail: "done", ocr: "done" }) };
+    const a = makeItem({ id: "a", folderName: "a", assets: [asset("a", "a.pdf")], ...done });
+    const b = makeItem({ id: "b", folderName: "b", assets: [asset("b", "b.pdf")], ...done });
+    seed(
+      makeBatch(["a", "b"], {
+        stage: BatchStage.Processing,
+        proc: { a: ItemRunStatus.Done, b: ItemRunStatus.Done },
+        overrides: { a: { parents: { add: ["p9"], remove: ["p1"], passing: null } } },
+      }),
+      [a, b],
+    );
+    const seen: Record<string, unknown> = {};
+    uploadFake.run = async (_batchId, members, resolveContext) => {
+      for (const m of members) seen[m.id] = resolveContext(m).parentChanges;
+      return true;
+    };
+    const view = useProcessing(() => "b1");
+
+    await view.upload();
+
+    expect(seen).toEqual({ a: { add: ["p9"], remove: ["p1"] }, b: { add: [], remove: [] } });
+  });
+
+  it("says the items uploaded but a link change failed, when that is all that went wrong", async () => {
+    const item = makeItem({
+      id: "nb",
+      folderName: "nb",
+      assets: [asset("nb", "nb.pdf")],
+      stages: stagesWith({ pdf: "done", thumbnail: "done", ocr: "done" }),
+    });
+    seed(makeBatch(["nb"], { stage: BatchStage.Processing, proc: { nb: ItemRunStatus.Done } }), [item]);
+    uploadFake.run = async () => false;
+    uploadFake.resultsFor = () =>
+      new Map([
+        [
+          "nb",
+          {
+            itemId: "nb",
+            status: "uploaded" as const,
+            backendId: "rec_1",
+            created: false,
+            blockers: [],
+            warnings: [],
+            fieldErrors: [],
+            metadataRejected: false,
+            relationErrors: [{ parentId: "p1", message: "Missing scope", action: "unlink" as const }],
+            parentStates: [],
+            missingParentIds: [],
+            message: null,
+          },
+        ],
+      ]);
+    const toasts = useToastsStore();
+    const view = useProcessing(() => "b1");
+
+    await view.upload();
+
+    expect(
+      toasts.toasts.some(
+        (t) =>
+          t.message === "1 item uploaded, but a parent link change failed — upload again to retry." &&
+          t.kind === "warning",
+      ),
+    ).toBe(true);
   });
 
   it("uploads an item in the state it has on the backend, else the batch's choice", async () => {

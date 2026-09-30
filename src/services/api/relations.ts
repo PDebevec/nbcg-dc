@@ -77,3 +77,12 @@ export function disconnectRelations(
     signal: options.signal,
   });
 }
+
+/** Convenience: unlink one child from one parent. */
+export function disconnectParent(
+  parentId: string,
+  childId: string,
+  options?: RelationsServiceOptions,
+): Promise<RelationWriteResult> {
+  return disconnectRelations({ parentId, childIds: [childId] }, options);
+}

@@ -198,7 +198,7 @@ describe("useUpload.run", () => {
   const ctx: UploadItemContext = {
     targetState: "DRAFT",
     visibility: "PRIVATE",
-    parentIds: ["p1"],
+    parentChanges: { add: ["p1"], remove: [] },
     metadataReady: true,
     primaryThumbnail: null,
   };

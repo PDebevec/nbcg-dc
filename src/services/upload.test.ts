@@ -142,6 +142,12 @@ function fakeDeps(over: Partial<UploadDeps> = {}): UploadDeps {
       childrenInDrafts: 1,
       childrenInRecords: 0,
     })),
+    disconnectParent: vi.fn(async (parentId: string) => ({
+      parentId,
+      version: 8,
+      childrenInDrafts: 0,
+      childrenInRecords: 0,
+    })),
     readFileBytes: vi.fn(async (path: string) => bytes(path)),
     readTextFile: vi.fn(async () => "OCR text"),
     readMirror: vi.fn(async () => null),
@@ -160,7 +166,7 @@ function fakeDeps(over: Partial<UploadDeps> = {}): UploadDeps {
 const CTX: UploadItemContext = {
   targetState: "RECORD",
   visibility: "PUBLIC",
-  parentIds: ["par1"],
+  parentChanges: { add: ["par1"], remove: [] },
   metadata: { title: "Gorski vijenac", year: "2020" },
   metadataReady: true,
   primaryThumbnail: null,
@@ -205,9 +211,12 @@ describe("uploadItem — create", () => {
       version: 0,
       targetState: "RECORD",
       visibilityStatus: "PUBLIC",
+      parentIds: [],
       metadata: ENTITY.metadata,
       syncedAt: "2026-08-06T12:00:00.000Z",
     });
+    // …then the link the connect made is recorded.
+    expect((deps.writeMirror as any).mock.calls.at(-1)[1].parentIds).toEqual(["par1"]);
     expect(deps.recordUpload).toHaveBeenCalledWith("item-1", {
       backendId: "rec_1",
       version: 0,
@@ -318,7 +327,7 @@ describe("uploadItem — create", () => {
     expect(deps.recordUpload).not.toHaveBeenCalled();
   });
 
-  it("creates a new item under the batch's parents and does not connect it afterwards", async () => {
+  it("creates a new item under its parents and does not connect it afterwards", async () => {
     const linked = [{ parentId: "par1", version: 9, childrenInDrafts: 1, childrenInRecords: 0 }];
     const deps = fakeDeps({ createItem: vi.fn(async () => ({ ...ENTITY, parents: linked })) });
     const res = await uploadItem(makeItem(), CTX, deps);
@@ -326,6 +335,14 @@ describe("uploadItem — create", () => {
     expect(deps.connectParent).not.toHaveBeenCalled();
     expect(res.status).toBe("uploaded");
     expect(res.parentStates).toEqual(linked);
+  });
+
+  it("records the links the create made, without a second write", async () => {
+    const linked = [{ parentId: "par1", version: 9, childrenInDrafts: 1, childrenInRecords: 0 }];
+    const deps = fakeDeps({ createItem: vi.fn(async () => ({ ...ENTITY, parents: linked })) });
+    await uploadItem(makeItem(), CTX, deps);
+    expect((deps.writeMirror as any).mock.calls[0][1].parentIds).toEqual(["par1"]);
+    expect(deps.writeMirror).toHaveBeenCalledTimes(1);
   });
 
   it("adopts the parents' new versions right after the create, even when the files then fail", async () => {
@@ -604,6 +621,23 @@ describe("create collision — adoption", () => {
     expect(res.status).toBe("duplicate");
     expect(res.message).toMatch(/sync/i);
   });
+
+  it("records the adopted record's own links and never unlinks one", async () => {
+    const writeMirror = vi.fn(async () => {});
+    const deps = fakeDeps({
+      createItem: vi.fn(async () => conflict()),
+      resolveExistingRecord: vi.fn(async () => ({ ...existing, parentIds: ["p_old"] })),
+      updateItem: vi.fn(async () => ({ version: 8 })),
+      writeMirror,
+    });
+
+    await uploadItem(makeItem(), { ...CTX, parentChanges: { add: ["par1"], remove: ["p_old"] } }, deps);
+
+    expect(deps.connectParent).toHaveBeenCalledWith("par1", existing.id);
+    expect(deps.disconnectParent).not.toHaveBeenCalled();
+    const last = (writeMirror as any).mock.calls.at(-1)[1] as LocalMetadataFile;
+    expect(last.parentIds).toEqual(["p_old", "par1"]);
+  });
 });
 
 // ── which record adoption actually resolves ────────────────────────────────
@@ -823,6 +857,7 @@ describe("uploadItem — error outcomes", () => {
     expect(res.status).toBe("uploaded");
     expect(res.relationErrors).toHaveLength(1);
     expect(res.relationErrors[0].parentId).toBe("par1");
+    expect(res.relationErrors[0].action).toBe("link");
     // A failed connect contributes no parent state.
     expect(res.parentStates).toEqual([]);
   });
@@ -948,7 +983,7 @@ describe("uploadItem — error outcomes", () => {
     });
     const res = await uploadItem(
       makeItem(),
-      { ...CTX, parentIds: ["par1", "bad", "par2"] },
+      { ...CTX, parentChanges: { add: ["par1", "bad", "par2"], remove: [] } },
       deps,
     );
     expect(res.parentStates.map((s) => s.parentId)).toEqual(["par1", "par2"]);
@@ -1211,6 +1246,106 @@ describe("uploadItem — replace", () => {
   });
 });
 
+describe("uploadItem — parent links on a re-upload", () => {
+  const MIRROR: LocalMetadataFile = {
+    backendId: "rec_1",
+    version: 3,
+    targetState: "RECORD",
+    visibilityStatus: "PUBLIC",
+    parentIds: ["p1", "p2"],
+    metadata: { title: "Gorski vijenac", year: "2020" },
+    syncedAt: "2026-08-01T00:00:00.000Z",
+  };
+  const reupload = () =>
+    makeItem({ root: "processed", backendId: "rec_1", flags: { uploaded: true, reupload: false, reuploadTextOnly: false } });
+  const ctx = (add: string[], remove: string[]): UploadItemContext => ({
+    ...CTX,
+    metadata: { title: "Gorski vijenac", year: "2020" },
+    parentChanges: { add, remove },
+  });
+
+  it("links what was added and unlinks what was removed — nothing else", async () => {
+    const deps = fakeDeps({ readMirror: vi.fn(async () => MIRROR) });
+    const res = await uploadItem(reupload(), ctx(["p2", "p9"], ["p1"]), deps);
+
+    expect(res.status).toBe("uploaded");
+    expect(deps.connectParent).toHaveBeenCalledTimes(1);
+    expect(deps.connectParent).toHaveBeenCalledWith("p9", "rec_1");
+    expect(deps.disconnectParent).toHaveBeenCalledTimes(1);
+    expect(deps.disconnectParent).toHaveBeenCalledWith("p1", "rec_1");
+  });
+
+  it("links before it unlinks", async () => {
+    const order: string[] = [];
+    const deps = fakeDeps({
+      readMirror: vi.fn(async () => MIRROR),
+      connectParent: vi.fn(async (parentId: string) => {
+        order.push(`link ${parentId}`);
+        return { parentId, version: 7, childrenInDrafts: 1, childrenInRecords: 0 };
+      }),
+      disconnectParent: vi.fn(async (parentId: string) => {
+        order.push(`unlink ${parentId}`);
+        return { parentId, version: 8, childrenInDrafts: 0, childrenInRecords: 0 };
+      }),
+    });
+    await uploadItem(reupload(), ctx(["p9"], ["p1"]), deps);
+    expect(order).toEqual(["link p9", "unlink p1"]);
+  });
+
+  it("makes no relation calls when the links didn't change", async () => {
+    const deps = fakeDeps({ readMirror: vi.fn(async () => MIRROR) });
+    await uploadItem(reupload(), ctx([], []), deps);
+    expect(deps.connectParent).not.toHaveBeenCalled();
+    expect(deps.disconnectParent).not.toHaveBeenCalled();
+  });
+
+  it("records the links the backend now has in the mirror", async () => {
+    const deps = fakeDeps({ readMirror: vi.fn(async () => MIRROR) });
+    await uploadItem(reupload(), ctx(["p9"], ["p1"]), deps);
+    const last = (deps.writeMirror as any).mock.calls.at(-1)[1] as LocalMetadataFile;
+    expect(last.parentIds).toEqual(["p2", "p9"]);
+  });
+
+  it("counts an unlink answered 404 as done — deleting the parent deleted its links", async () => {
+    const deps = fakeDeps({
+      readMirror: vi.fn(async () => MIRROR),
+      disconnectParent: vi.fn(async () => {
+        throw apiError("not_found", 404);
+      }),
+    });
+    const res = await uploadItem(reupload(), ctx([], ["p1"]), deps);
+    expect(res.relationErrors).toEqual([]);
+    const last = (deps.writeMirror as any).mock.calls.at(-1)[1] as LocalMetadataFile;
+    expect(last.parentIds).toEqual(["p2"]);
+  });
+
+  it("reports a failed unlink and records nothing, so the next upload retries it", async () => {
+    const deps = fakeDeps({
+      readMirror: vi.fn(async () => MIRROR),
+      disconnectParent: vi.fn(async () => {
+        throw apiError("forbidden", 403);
+      }),
+    });
+    const res = await uploadItem(reupload(), ctx([], ["p1"]), deps);
+    expect(res.status).toBe("uploaded");
+    expect(res.relationErrors).toEqual([{ parentId: "p1", message: expect.any(String), action: "unlink" }]);
+    const recorded = (deps.writeMirror as any).mock.calls.map((c: any[]) => c[1].parentIds);
+    expect(recorded.every((ids: string[] | null) => ids?.includes("p1"))).toBe(true);
+  });
+
+  it("adopts an unlinked parent's new version", async () => {
+    const parentItem = makeItem({ id: "parent-item", folderPath: "/parent", backendId: "p1" });
+    const parentMirror: LocalMetadataFile = { ...MIRROR, backendId: "p1", version: 3, parentIds: [] };
+    const deps = fakeDeps({
+      readMirror: vi.fn(async (target: Item) => (target.id === "parent-item" ? parentMirror : MIRROR)),
+      listItems: vi.fn(async () => [parentItem]),
+    });
+    await uploadItem(reupload(), ctx([], ["p1"]), deps);
+    const write = (deps.writeMirror as any).mock.calls.find((c: any[]) => c[0].id === "parent-item");
+    expect(write[1].version).toBe(8);
+  });
+});
+
 // ── orphan recovery ──────────────────────────────────────────────────────────
 // A PATCH 404 reads Postgres directly, unlike a search 404 which is CDC-lagged
 // — so it is authoritative: the record really is gone, and re-creating it
@@ -1336,6 +1471,23 @@ describe("orphan recovery", () => {
     expect(createItem).not.toHaveBeenCalled();
     expect(res.status).toBe("error");
   });
+
+  it("re-creates the record under its links: old ones kept, removed ones dropped, added ones added", async () => {
+    const createItem = vi.fn(async () => ({ ...ENTITY, id: "new_rec", version: 0, metadata: {} }));
+    const deps = fakeDeps({
+      readMirror: vi.fn(async () => ({ ...ORPHAN_MIRROR, parentIds: ["p1", "p2"] })),
+      updateItem: vi.fn(async () => {
+        throw apiError("not_found", 404);
+      }),
+      createItem,
+    });
+    const item = { ...makeItem(), backendId: "cbwkbr9guqs3w11xylpri1ylw" };
+
+    await uploadItem(item, { ...CTX, parentChanges: { add: ["p9"], remove: ["p1"] } }, deps);
+
+    expect((createItem as any).mock.calls[0][0].parentIds).toEqual(["p2", "p9"]);
+    expect(deps.disconnectParent).not.toHaveBeenCalled();
+  });
 });
 
 // ── connected parents adopt their bumped version ─────────────────────────────
@@ -1440,6 +1592,17 @@ describe("uploadBatch", () => {
     const out = await uploadBatch([makeItem()], { resolveContext: () => CTX, deps });
     expect(out.allUploaded).toBe(false);
     expect(out.results[0].status).toBe("forbidden");
+  });
+
+  it("keeps the batch open when a parent link change failed", async () => {
+    const deps = fakeDeps({
+      connectParent: vi.fn(async () => {
+        throw apiError("forbidden", 403);
+      }),
+    });
+    const out = await uploadBatch([makeItem()], { resolveContext: () => CTX, deps });
+    expect(out.results[0].status).toBe("uploaded");
+    expect(out.allUploaded).toBe(false);
   });
 });
 
@@ -1663,6 +1826,22 @@ describe("resolveExistingRecord (default dep)", () => {
     );
     expect(found).toBeNull();
     expect(findById).not.toHaveBeenCalled();
+  });
+
+  it("carries the record's own parent links", async () => {
+    const hit: SearchHit = {
+      id: "cbwkbr9guqs3w11xylpri1ylw",
+      index: "records",
+      score: 1,
+      source: {
+        version: 7,
+        visibilityStatus: "PUBLIC",
+        metadata: { cobissId: "12345" },
+        parent_relations: [{ parentId: "p1", parentType: "RECORD" }],
+      },
+    };
+    const found = await resolveExistingRecordWith("12345", { findById: vi.fn(async () => hit), previewCobiss: vi.fn() });
+    expect(found?.parentIds).toEqual(["p1"]);
   });
 });
 
@@ -2015,5 +2194,14 @@ describe("withBackendWriteMark", () => {
 
     expect(createItem).not.toHaveBeenCalled();
     expect(mark).toHaveBeenCalledOnce();
+  });
+
+  it("marks before an unlink too — a run that only unlinks has changed the backend", async () => {
+    const mark = vi.fn(async () => {});
+    const disconnectParent = vi.fn(async () => ({}) as never);
+    const deps = withBackendWriteMark(mark, { disconnectParent });
+    await deps.disconnectParent!("p1", "c1");
+    expect(mark).toHaveBeenCalledOnce();
+    expect(disconnectParent).toHaveBeenCalledOnce();
   });
 });
