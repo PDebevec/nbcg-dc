@@ -185,4 +185,25 @@ describe("passing data", () => {
     await links.togglePassesData("s1");
     expect(changesOf("i1")).toBeNull();
   });
+
+  it("Link to all leaves an item that already has the parent alone", async () => {
+    metadataFake.parentRecords.value = new Map([["s1", record("s1", SERIAL)]]);
+    const { links, changesOf, passing } = setup({ targets: ["i1"], members: ["i1", "i2"], backend: { i2: ["s1"] } });
+    await links.linkParentToAll("s1");
+    expect(changesOf("i1")).toEqual({ add: ["s1"], remove: [], passing: "s1" });
+    expect(changesOf("i2")).toBeNull();
+    expect(passing).toEqual([{ itemId: "i1", parent: record("s1", SERIAL) }]);
+  });
+
+  it("linking a backend link back after a pending unlink doesn't start it passing", async () => {
+    metadataFake.parentRecords.value = new Map([["s1", record("s1", SERIAL)]]);
+    const { links, changesOf, passing } = setup({
+      targets: ["i1"],
+      backend: { i1: ["s1"] },
+      changes: { i1: { parents: { add: [], remove: ["s1"], passing: null } } },
+    });
+    await links.linkParent("s1");
+    expect(changesOf("i1")).toBeNull();
+    expect(passing).toEqual([]);
+  });
 });

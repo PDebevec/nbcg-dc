@@ -289,7 +289,12 @@ export function useParentLinks(
   async function linkTo(items: Item[], id: string): Promise<void> {
     await metadata.ensureParent(id);
     const saved = await apply(items, (l) => {
+      // Only a parent new to the item may start passing: an item that already
+      // has it keeps its choice, and a backend link never starts passing on
+      // its own (restoring a pending unlink leaves `passing` alone).
+      if (l.ids.includes(id)) return l.changes;
       const linked = withParentLinked(l.changes, l.backend, id);
+      if (l.backend.includes(id)) return linked;
       const ids = itemParentIds(l.backend, linked);
       return { ...linked, passing: passingAfterLink(linked.passing, ids, id, isEligible) };
     });
