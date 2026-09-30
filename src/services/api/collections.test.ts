@@ -95,6 +95,39 @@ describe("searchParents", () => {
     expect(calls[0].url).toContain("limit=5");
     expect(calls[0].url).toContain("fields=metadata");
   });
+
+  it("asks for collections only, ranking a typed query by relevance", async () => {
+    const { client, calls } = harness(() => json(RESULT));
+    await searchParents("dan", { client });
+    const params = new URL(calls[0].url).searchParams;
+    expect(params.get("q")).toBe("dan");
+    expect(params.get("collectionType")).toBe(">0");
+    expect(params.has("sort")).toBe(false);
+  });
+
+  it("lists the newest collections when nothing is typed", async () => {
+    const { client, calls } = harness(() => json(RESULT));
+    await searchParents("", { client });
+    const params = new URL(calls[0].url).searchParams;
+    expect(params.has("q")).toBe(false);
+    expect(params.get("sort")).toBe("newest");
+    expect(params.get("collectionType")).toBe(">0");
+  });
+
+  it("drops hits that aren't collections, which a backend without the filter returns", async () => {
+    const { client } = harness(() =>
+      json({
+        ...RESULT,
+        total: 3,
+        hits: [
+          hit({ id: "plain", source: { metadata: { title: "An item", collectionType: 0 } } }),
+          hit({ id: "untyped", source: { metadata: { title: "No type" } } }),
+          hit({ id: "fond", source: { metadata: { title: "A fond", collectionType: 3 } } }),
+        ],
+      }),
+    );
+    expect((await searchParents("x", { client })).map((p) => p.id)).toEqual(["fond"]);
+  });
 });
 
 describe("getParentById", () => {

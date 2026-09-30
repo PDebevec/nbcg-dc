@@ -61,7 +61,11 @@ export function hitToParent(hit: SearchHit): ParentRecord {
   return { id: hit.id, title, collectionType, metadata };
 }
 
-/** Build the `/api/search` query for the parent picker. */
+/** Every collection type, including ones added later. */
+const COLLECTIONS_ONLY = ">0";
+
+/** Build the `/api/search` query for the parent picker: collections only, and
+ * with nothing typed, the newest first (an empty `q` is dropped and lists all). */
 function parentSearchQuery(
   query: string,
   options: SearchParentsOptions,
@@ -71,6 +75,8 @@ function parentSearchQuery(
     type: options.type ?? "all",
     limit: options.limit ?? 20,
     page: options.page,
+    collectionType: COLLECTIONS_ONLY,
+    sort: query.trim() === "" ? "newest" : undefined,
     // Keep the payload small but ensure `metadata` (→ collectionType/title) is
     // included; `id` is always added server-side.
     fields: "metadata",
@@ -78,9 +84,10 @@ function parentSearchQuery(
 }
 
 /**
- * Search backend records/drafts for candidate parents. Returns domain
- * {@link ParentRecord}s; the caller applies eligibility with the configured
- * data-passing set. CDC-lagged (search lags writes).
+ * Search backend records/drafts for collections to offer as parents; with
+ * nothing typed, the newest ones. Returns domain {@link ParentRecord}s; the
+ * caller applies eligibility with the configured data-passing set.
+ * CDC-lagged (search lags writes).
  */
 export async function searchParents(
   query: string,
@@ -90,7 +97,11 @@ export async function searchParents(
     client: options.client,
     signal: options.signal,
   });
-  return result.hits.map(hitToParent);
+  // A backend without the `collectionType` filter drops it silently and
+  // returns every item, so keep only collections here too.
+  return result.hits
+    .map(hitToParent)
+    .filter((p) => p.collectionType != null && p.collectionType > 0);
 }
 
 /**

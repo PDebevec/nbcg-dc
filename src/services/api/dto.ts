@@ -403,6 +403,11 @@ export interface SearchQuery {
   isbn?: string;
   issn?: string;
   cobissId?: string;
+  /** Collection types: comma-separated codes (`1,3`) or one comparison (`>0`,
+   * `>=1`, `<5`, `<=4`), never both. `>0` = every collection, `0` = everything
+   * that isn't one. A backend without the filter drops it silently; a bad value
+   * is a `400`. */
+  collectionType?: string;
   /** Comma-separated `_source` includes; `id` is always added server-side. */
   fields?: string;
   sort?: SearchSort;

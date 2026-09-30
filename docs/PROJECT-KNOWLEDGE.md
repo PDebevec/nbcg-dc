@@ -181,18 +181,26 @@ extractedText?, filename, mimeType, sizeBytes, textExtractionStatus, createdAt }
 **Search** — `src/modules/search` (OpenSearch; **CDC-lagged** — lags writes)
 - `GET /api/search` — query params `q, type(all|records|drafts), page, limit(≤100),
   title, author, fullText, publisher, language, materialType, yearFrom, yearTo,
-  isbn, issn, cobissId, fields, sort(relevance|newest)` → `{ total, page, limit,
-  pages, hits[] }`. `hits[]` = `{ id, index, score, source, matchedFiles?,
-  highlights? }` (`source` = indexed doc; `extractedText` always excluded).
+  isbn, issn, cobissId, collectionType, fields, sort(relevance|newest)` →
+  `{ total, page, limit, pages, hits[] }`. `hits[]` = `{ id, index, score, source,
+  matchedFiles?, highlights? }` (`source` = indexed doc; `extractedText` always
+  excluded). `collectionType` (dev since 2026-09-29; also on `/:id/children`)
+  takes comma-separated codes (`1,3`) or one comparison (`>0`, `>=1`, `<5`,
+  `<=4`), never both; a bad value is a `400`. **A param the backend doesn't know
+  is dropped without an error**, so against an older backend the filter is
+  silently not applied.
 - `GET /api/search/:id` — a single `SearchHit` (404 if not found/not visible).
   Ignores `?fields`; returns a constant `score: 1`.
 - `GET /api/search/:id/children` — same envelope, children of `:id` (filters on
   `parent_relations.parentId`).
 - `GET /api/search/suggest?field=&q=&limit=&type=` — typeahead (bonus endpoint),
   15-field allowlist; an unknown `field` is a `400`.
-- Deep pagination past ~10k (`from+size ≥ 10000`) → `400`. No collections
-  endpoint — the **parent picker uses search**; `collectionType` comes from a
-  hit's `source.metadata.collectionType`.
+- Deep pagination past ~10k (`from+size ≥ 10000`) → `400`.
+- No collections endpoint — the **parent picker uses search** with
+  `collectionType=>0` (every collection, including types added later); with
+  nothing typed it sends no `q` and `sort=newest`. `collectionType` comes from a
+  hit's `source.metadata.collectionType`, and the app drops hits whose type isn't
+  above 0, for a backend without the filter.
 
 **The indexed document** (`SearchHit.source`) — verified against
 `nbcg/infrastructure/docker/pgsync/schema.json`: `{ id, visibilityStatus,
