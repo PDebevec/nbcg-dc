@@ -15,12 +15,25 @@ const unreadableMirrors = new Set<string>();
 const writeMirror = vi.fn(async (item: Item, file: LocalMetadataFile) => {
   mirrors.set(item.id, file);
 });
+type Changes = { add: string[]; remove: string[]; passing: string | null };
 const batch = {
   id: "b1",
-  parents: [] as Array<{ id: string; passesData: boolean }>,
   publish: "DRAFT" as "DRAFT" | "RECORD",
-  overrides: {} as Record<string, { publish?: "DRAFT" | "RECORD" | null }>,
+  overrides: {} as Record<string, { publish?: "DRAFT" | "RECORD" | null; parents?: Changes | null }>,
 };
+/** Each uploaded item's parent ids on the backend, by backend id (absent → 404). */
+const itemLinks = new Map<string, string[]>();
+/** Backend ids whose read throws (offline), as opposed to a 404. */
+const unreachableItems = new Set<string>();
+const getItemParentIds = vi.fn(async (backendId: string) => {
+  if (unreachableItems.has(backendId)) throw new Error("Network error");
+  return itemLinks.get(backendId) ?? null;
+});
+
+/** Give `itemId` pending parent links in the batch. */
+function pendingLinks(itemId: string, ...add: string[]): void {
+  batch.overrides = { ...batch.overrides, [itemId]: { parents: { add, remove: [], passing: null } } };
+}
 
 vi.mock("@services/api/schemaV2", () => ({ getRecordSchemaV2: async () => SNAPSHOT }));
 vi.mock("@services/indexing", () => ({
@@ -37,6 +50,7 @@ vi.mock("@services/api/collections", () => ({
     return backendParents.get(id) ?? null;
   },
   searchParents: async () => [],
+  getItemParentIds: (id: string) => getItemParentIds(id),
 }));
 vi.mock("@lib/logger", () => ({ logger: { debug() {}, info() {}, warn() {}, error() {} } }));
 vi.mock("./useBatches", () => ({
@@ -60,7 +74,9 @@ beforeEach(() => {
   movedFolders.clear();
   unreadableMirrors.clear();
   writeMirror.mockClear();
-  batch.parents = [];
+  itemLinks.clear();
+  unreachableItems.clear();
+  getItemParentIds.mockClear();
   batch.publish = "DRAFT";
   batch.overrides = {};
 });
@@ -101,20 +117,20 @@ describe("useMetadataStore on schema v2", () => {
     expect(store.checkOf(item())?.missing.map((m) => m.path)).toEqual(["extent"]);
   });
 
-  it("is not ready while a batch parent is missing on the backend", async () => {
-    batch.parents = [{ id: "gone", passesData: false }];
+  it("is not ready while one of its parents is missing on the backend", async () => {
+    pendingLinks("i1", "gone");
     const store = useMetadataStore();
     await store.ensureItemLoaded(item());
     await store.ensureParents(["gone"]);
     store.setFieldValue("i1", "title", "T");
     store.setFieldValue("i1", "materialType", BOOK);
-    expect(store.batchParentsOf(item()).missing).toEqual(["gone"]);
+    expect(store.parentsOf(item()).missing).toEqual(["gone"]);
     expect(store.missingParentNamesOf(item())).toEqual({ gone: [], notFound: ["gone"] });
     expect(store.isReady(item())).toBe(false);
   });
 
   it("holds a parent the backend refused on upload as gone, though its record had loaded", async () => {
-    batch.parents = [{ id: "p1", passesData: false }];
+    pendingLinks("i1", "p1");
     backendParents.set("p1", { id: "p1", title: "Pobjeda", collectionType: null, metadata: {} });
     const store = useMetadataStore();
     await store.ensureItemLoaded(item());
@@ -127,11 +143,11 @@ describe("useMetadataStore on schema v2", () => {
 
     expect(store.isReady(item())).toBe(false);
     expect(store.missingParentNamesOf(item())).toEqual({ gone: ["Pobjeda"], notFound: [] });
-    expect(store.batchParentsOf(item())).toMatchObject({ records: [], gone: ["p1"], missing: [] });
+    expect(store.parentsOf(item())).toMatchObject({ records: [], gone: ["p1"], missing: [] });
   });
 
   it("keeps a gone parent gone when a later search finds it", async () => {
-    batch.parents = [{ id: "p1", passesData: false }];
+    pendingLinks("i1", "p1");
     const pobjeda = { id: "p1", title: "Pobjeda", collectionType: null, metadata: {} };
     backendParents.set("p1", pobjeda);
     const store = useMetadataStore();
@@ -141,25 +157,25 @@ describe("useMetadataStore on schema v2", () => {
 
     store.rememberParent(pobjeda);
 
-    expect(store.batchParentsOf(item()).gone).toEqual(["p1"]);
+    expect(store.parentsOf(item()).gone).toEqual(["p1"]);
     expect(store.parentGone.has("p1")).toBe(true);
   });
 
-  it("keeps the form open but not ready while a batch parent failed to load", async () => {
-    batch.parents = [{ id: "p1", passesData: false }];
+  it("keeps the form open but not ready while one of its parents failed to load", async () => {
+    pendingLinks("i1", "p1");
     unreachableParents.add("p1");
     const store = useMetadataStore();
     await store.ensureItemLoaded(item());
     await store.ensureParents(["p1"]);
     store.setFieldValue("i1", "title", "T");
     store.setFieldValue("i1", "materialType", BOOK);
-    expect(store.batchParentsOf(item()).failed).toEqual(["p1"]);
+    expect(store.parentsOf(item()).failed).toEqual(["p1"]);
     expect(store.checkOf(item())).not.toBeNull();
     expect(store.isReady(item())).toBe(false);
   });
 
   it("clears the failure when a retry loads the parent, and the item can become ready", async () => {
-    batch.parents = [{ id: "p1", passesData: false }];
+    pendingLinks("i1", "p1");
     unreachableParents.add("p1");
     const store = useMetadataStore();
     await store.ensureItemLoaded(item());
@@ -169,7 +185,7 @@ describe("useMetadataStore on schema v2", () => {
     unreachableParents.clear();
     backendParents.set("p1", { id: "p1", title: "Pobjeda", collectionType: null, metadata: {} });
     await store.ensureParents(["p1"]);
-    expect(store.batchParentsOf(item()).failed).toEqual([]);
+    expect(store.parentsOf(item()).failed).toEqual([]);
     expect(store.parentFailed.has("p1")).toBe(false);
     expect(store.isReady(item())).toBe(true);
   });
@@ -380,5 +396,78 @@ describe("forget", () => {
     await store.ensureItemLoaded(item());
 
     expect(store.plainValues("i1").title).toBe("Before the batch");
+  });
+});
+
+describe("each item's own parents", () => {
+  const SERIAL = { id: "s1", title: "Pobjeda", collectionType: 4, metadata: { title: "Pobjeda", collectionType: 4 } };
+
+  function uploaded(parentIds?: string[]): LocalMetadataFile {
+    return {
+      backendId: "rec_1",
+      version: 1,
+      targetState: "DRAFT",
+      visibilityStatus: "PUBLIC",
+      ...(parentIds ? { parentIds } : {}),
+      metadata: { title: "T", materialType: BOOK, collectionType: 0 },
+      syncedAt: "2026-09-29T00:00:00.000Z",
+    };
+  }
+
+  it("checks each item against its own parents", async () => {
+    backendParents.set("s1", SERIAL);
+    mirrors.set("i1", uploaded(["s1"]));
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item("i1"));
+    await store.ensureItemLoaded(item("i2"));
+    await store.ensureItemParents(item("i1"));
+
+    expect(store.checkOf(item("i1"))?.context.parentCollectionType).toEqual([4]);
+    expect(store.checkOf(item("i2"))?.context.parentCollectionType).toEqual([]);
+  });
+
+  it("adds the batch's pending links and drops its pending unlinks", async () => {
+    mirrors.set("i1", uploaded(["p1"]));
+    batch.overrides = { i1: { parents: { add: ["p9"], remove: ["p1"], passing: null } } };
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    expect(store.parentIdsOf(item())).toEqual(["p9"]);
+  });
+
+  it("reads an uploaded item's links once when its mirror has none, and records them", async () => {
+    mirrors.set("i1", uploaded());
+    itemLinks.set("rec_1", ["p1"]);
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    await store.ensureItemParents(item());
+
+    expect(store.parentIdsOf(item())).toEqual(["p1"]);
+    expect(mirrors.get("i1")?.parentIds).toEqual(["p1"]);
+    expect(getItemParentIds).toHaveBeenCalledTimes(1);
+  });
+
+  it("is not ready while an uploaded item's links can't be read, until a retry reads them", async () => {
+    mirrors.set("i1", uploaded());
+    unreachableItems.add("rec_1");
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    await store.ensureItemParents(item());
+    expect(store.parentsOf(item()).linksUnknown).toBe(true);
+    expect(store.isReady(item())).toBe(false);
+
+    unreachableItems.clear();
+    itemLinks.set("rec_1", []);
+    await store.retryItemParents(item());
+
+    expect(store.parentsOf(item()).linksUnknown).toBe(false);
+    expect(store.isReady(item())).toBe(true);
+  });
+
+  it("never asks the backend about an item that was never uploaded", async () => {
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    await store.ensureItemParents(item());
+    expect(getItemParentIds).not.toHaveBeenCalled();
+    expect(store.parentIdsOf(item())).toEqual([]);
   });
 });

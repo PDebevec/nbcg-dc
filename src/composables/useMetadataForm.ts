@@ -318,23 +318,27 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
       : "",
   );
 
-  /** The batch parents that failed to load (e.g. offline), '' = none. The
-   * form still works; the items are not ready until the parents load. A
-   * batch's parent ref carries only the id, so the id names the parent. */
+  /** Why the current item's parents aren't usable yet, '' = they are: its own
+   * links couldn't be read, or a parent's record failed to load (offline). The
+   * form still works; the item is not ready until they load. */
   const parentsBanner = computed(() => {
     const c = current.value;
     if (!c) return "";
-    const names = metadata.batchParentsOf(c).failed.map((id) => `'${id}'`);
+    const parents = metadata.parentsOf(c);
+    if (parents.linksUnknown) {
+      return "Couldn't read this item's parent links from the backend. Check the connection and retry.";
+    }
+    const names = parents.failed.map((id) => `'${id}'`);
     if (names.length === 0) return "";
     const list =
       names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
     return `Couldn't load the parent${names.length === 1 ? "" : "s"} ${list}. Check the connection and retry.`;
   });
 
-  /** Fetch the batch's parents again (after a failed load). */
+  /** Try the current item's parents again (after a failed load). */
   function retryParents(): Promise<void> {
-    const b = batch.value;
-    return b ? metadata.ensureParents(b.parents.map((p) => p.id)) : Promise.resolve();
+    const c = current.value;
+    return c ? metadata.retryItemParents(c) : Promise.resolve();
   }
 
   /** One banner when a batch parent is not on the backend (it blocks every

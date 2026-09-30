@@ -6,7 +6,7 @@
  * Built on metadata schema v2 (`GET /api/schema/v2/record`): one schema for
  * every item. Which fields show, which are required and whose rules apply come
  * from the schema's rules (`domain/schemaRules`), evaluated against the item's
- * values, its batch's parents and its state — a new item is checked against its
+ * values, its own parents and its state — a new item is checked against its
  * Draft/Record choice, an uploaded one against the state it has on the backend.
  * Values are kept in the shape the backend stores (`domain/schema-values`).
  *
@@ -30,8 +30,8 @@ import type { Item } from "@domain/item";
 import type { FieldV2, RecordSchemaV2 } from "@domain/schema";
 import type { TargetState } from "@domain/schemaRules";
 import type { LocalMetadataFile, MetadataValues } from "@domain/metadata";
-import type { MissingParentNames, ParentRecord } from "@domain/parent";
-import { resolveItemPublish } from "@domain/batch";
+import { itemParentIds, NO_PARENT_CHANGES, type MissingParentNames, type ParentRecord } from "@domain/parent";
+import { parentChangesOf, resolveItemPublish } from "@domain/batch";
 import { orderedFields } from "@domain/schema-form";
 import { checkItem, type ItemCheck, type ItemReadiness } from "@domain/schema-check";
 import { defaultValues, isUntouched, normalizeRecord, pruneForUpload } from "@domain/schema-values";
@@ -47,7 +47,7 @@ import {
   type FillOutcome,
 } from "@domain/provenance";
 import { getRecordSchemaV2 } from "@services/api/schemaV2";
-import { getParentById, searchParents } from "@services/api/collections";
+import { getItemParentIds, getParentById, searchParents } from "@services/api/collections";
 import { itemFolderExists, readItemMetadata, writeItemMetadata } from "@services/indexing";
 import { logger } from "@lib/logger";
 import { useBatchesStore } from "./useBatches";
@@ -56,8 +56,9 @@ import { useItemsStore } from "./useItems";
 /** Autosave debounce for the `metadata.json` working mirror. */
 const SAVE_DEBOUNCE_MS = 800;
 
-/** A batch's parents as far as this session knows them. */
-export interface BatchParents {
+/** An item's parents as far as this session knows them — its backend links
+ * plus its batch's pending changes. */
+export interface ItemParents {
   /** The parents whose records have loaded (and that are not gone). */
   records: ParentRecord[];
   /** Ids the backend refused on an upload (`PARENT_NOT_FOUND`) — authoritative,
@@ -67,8 +68,11 @@ export interface BatchParents {
   missing: string[];
   /** Ids whose fetch failed without proving they are gone (e.g. offline). */
   failed: string[];
-  /** Some have not been fetched yet (neither loaded, missing nor failed). */
+  /** Something is still loading: a parent's record, or the item's own links. */
   pending: boolean;
+  /** An uploaded item whose backend links couldn't be read (offline, a 404).
+   * The rules run with its pending links only, and it is not ready. */
+  linksUnknown: boolean;
 }
 
 /** An item's editor values from its mirror, normalised on the way in. A new
@@ -126,6 +130,13 @@ export const useMetadataStore = defineStore("metadata", () => {
   const saveError = ref<string | null>(null);
   /** Each loaded item's state on the backend (null = not uploaded yet). */
   const backendStates = ref<Map<string, TargetState | null>>(new Map());
+  /** Each loaded item's backend links, from its mirror: `[]` before its first
+   * upload, `null` while not known (a mirror from before they were kept). */
+  const backendLinks = ref<Map<string, string[] | null>>(new Map());
+  /** Items whose backend links are being read / couldn't be read. */
+  const linksLoading = ref<Set<string>>(new Set());
+  const linksFailed = ref<Set<string>>(new Set());
+  const linkPromises = new Map<string, Promise<void>>();
 
   /** The last-read `metadata.json` per item (null = none on disk). Not reactive:
    * it only feeds the next write; its backend state lives in `backendStates`. */
@@ -175,6 +186,9 @@ export const useMetadataStore = defineStore("metadata", () => {
     const map = new Map(backendStates.value);
     map.set(itemId, backendStateOf(mirror));
     backendStates.value = map;
+    const links = new Map(backendLinks.value);
+    links.set(itemId, mirror?.backendId ? (mirror.parentIds ?? null) : []);
+    backendLinks.value = links;
   }
 
   function setLoading(itemId: string, on: boolean): void {
@@ -215,7 +229,7 @@ export const useMetadataStore = defineStore("metadata", () => {
         const done = new Set(loadedItems.value);
         done.add(item.id);
         loadedItems.value = done;
-        void ensureParents(batchParentIds(item));
+        void ensureItemParents(item);
       } finally {
         setLoading(item.id, false);
         loadPromises.delete(item.id);
@@ -379,6 +393,7 @@ export const useMetadataStore = defineStore("metadata", () => {
       mirrors.delete(id);
       knownItems.delete(id);
       loadPromises.delete(id);
+      linkPromises.delete(id);
     }
     const keep = <T>(map: Map<string, T>) => new Map([...map].filter(([id]) => !ids.has(id)));
     const keepSet = (set: Set<string>) => new Set([...set].filter((id) => !ids.has(id)));
@@ -388,6 +403,9 @@ export const useMetadataStore = defineStore("metadata", () => {
     loadedItems.value = keepSet(loadedItems.value);
     loadingItems.value = keepSet(loadingItems.value);
     saving.value = keepSet(saving.value);
+    backendLinks.value = keep(backendLinks.value);
+    linksLoading.value = keepSet(linksLoading.value);
+    linksFailed.value = keepSet(linksFailed.value);
   }
 
   // ── the save check + readiness ───────────────────────────────────────────
@@ -396,18 +414,27 @@ export const useMetadataStore = defineStore("metadata", () => {
     return item.batchId ? useBatchesStore().get(item.batchId) : null;
   }
 
-  function batchParentIds(item: Item): string[] {
-    return batchOf(item)?.parents.map((p) => p.id) ?? [];
+  function changesOf(item: Item) {
+    const b = batchOf(item);
+    return b ? parentChangesOf(b, item.id) : NO_PARENT_CHANGES;
   }
 
-  /** The item's batch's parents, as far as this session knows them. */
-  function batchParentsOf(item: Item): BatchParents {
+  /** The item's parents (backend links + its batch's pending changes), or null
+   * while its backend links are not known. */
+  function parentIdsOf(item: Item): string[] | null {
+    const backend = backendLinks.value.get(item.id);
+    return backend == null ? null : itemParentIds(backend, changesOf(item));
+  }
+
+  /** The item's parents, as far as this session knows them. */
+  function parentsOf(item: Item): ItemParents {
+    const backend = backendLinks.value.get(item.id);
     const records: ParentRecord[] = [];
     const gone: string[] = [];
     const missing: string[] = [];
     const failed: string[] = [];
-    let pending = false;
-    for (const id of batchParentIds(item)) {
+    let pending = backend === undefined || linksLoading.value.has(item.id);
+    for (const id of itemParentIds(backend ?? [], changesOf(item))) {
       // Gone first: the record loaded when the editor opened stays cached.
       const record = parentRecords.value.get(id);
       if (parentGone.value.has(id)) gone.push(id);
@@ -416,7 +443,65 @@ export const useMetadataStore = defineStore("metadata", () => {
       else if (parentFailed.value.has(id)) failed.push(id);
       else pending = true;
     }
-    return { records, gone, missing, failed, pending };
+    return { records, gone, missing, failed, pending, linksUnknown: !pending && backend === null };
+  }
+
+  /**
+   * Read an uploaded item's backend links once when its mirror has none
+   * (written before they were kept), and record them in its metadata.json —
+   * re-read first, only that field changes. An upload awaits this for every
+   * member before it starts, so the write never races the upload's own.
+   */
+  function ensureBackendLinks(item: Item): Promise<void> {
+    const mirror = mirrors.get(item.id);
+    if (!mirror?.backendId || mirror.parentIds != null) return Promise.resolve();
+    const inFlight = linkPromises.get(item.id);
+    if (inFlight) return inFlight;
+    const backendId = mirror.backendId;
+    const p = (async () => {
+      linksLoading.value = new Set(linksLoading.value).add(item.id);
+      try {
+        const ids = await getItemParentIds(backendId);
+        if (ids === null) {
+          linksFailed.value = new Set(linksFailed.value).add(item.id);
+          return;
+        }
+        const fresh = (await readItemMetadata(item)) ?? mirror;
+        if (fresh.backendId !== backendId) {
+          rememberMirror(item.id, fresh);
+          return;
+        }
+        const next: LocalMetadataFile = { ...fresh, parentIds: ids };
+        rememberMirror(item.id, next);
+        linksFailed.value = without(linksFailed.value, item.id);
+        try {
+          await writeItemMetadata(item, next);
+        } catch (err) {
+          logger.warn("metadata", `Couldn't record the parent links of ${item.id}.`, err);
+        }
+      } catch (err) {
+        logger.warn("metadata", `Couldn't read the parent links of ${item.id}.`, err);
+        linksFailed.value = new Set(linksFailed.value).add(item.id);
+      } finally {
+        linksLoading.value = without(linksLoading.value, item.id);
+        linkPromises.delete(item.id);
+      }
+    })();
+    linkPromises.set(item.id, p);
+    return p;
+  }
+
+  /** Load what the item's parents need: its backend links (once), then the
+   * records of its parents. */
+  async function ensureItemParents(item: Item): Promise<void> {
+    await ensureBackendLinks(item);
+    await ensureParents(itemParentIds(backendLinks.value.get(item.id) ?? [], changesOf(item)));
+  }
+
+  /** Try again after the item's links or one of its parents failed to load. */
+  function retryItemParents(item: Item): Promise<void> {
+    linksFailed.value = without(linksFailed.value, item.id);
+    return ensureItemParents(item);
   }
 
   /** Whose rules apply to the item and what they still need — null while the
@@ -425,7 +510,7 @@ export const useMetadataStore = defineStore("metadata", () => {
   function checkOf(item: Item): ItemCheck | null {
     const s = schema.value;
     if (!s) return null;
-    const parents = batchParentsOf(item);
+    const parents = parentsOf(item);
     if (parents.pending) return null;
     const batch = batchOf(item);
     return checkItem({
@@ -441,14 +526,14 @@ export const useMetadataStore = defineStore("metadata", () => {
   function isReady(item: Item): boolean {
     const check = checkOf(item);
     if (check == null || !check.ok) return false;
-    const parents = batchParentsOf(item);
-    return parents.gone.length === 0 && parents.missing.length === 0 && parents.failed.length === 0;
+    const parents = parentsOf(item);
+    return !parents.linksUnknown && parents.gone.length === 0 && parents.missing.length === 0 && parents.failed.length === 0;
   }
 
   /** Names of the item's batch parents that are not on the backend: gone
    * (refused on an upload) and not found (search 404). Either blocks. */
   function missingParentNamesOf(item: Item): MissingParentNames {
-    const parents = batchParentsOf(item);
+    const parents = parentsOf(item);
     const nameOf = (id: string) => parentRecords.value.get(id)?.title ?? id;
     return { gone: parents.gone.map(nameOf), notFound: parents.missing.map(nameOf) };
   }
@@ -619,7 +704,10 @@ export const useMetadataStore = defineStore("metadata", () => {
     reloadMirrors,
     forget,
     // check + readiness
-    batchParentsOf,
+    parentsOf,
+    parentIdsOf,
+    ensureItemParents,
+    retryItemParents,
     checkOf,
     readinessOf,
     isReady,
@@ -629,6 +717,7 @@ export const useMetadataStore = defineStore("metadata", () => {
     applyParentTo,
     chooseSource,
     // parents
+    backendLinks,
     parentRecords,
     parentLoading,
     parentGone,
