@@ -15,16 +15,18 @@ pub mod items;
 pub mod snapshots;
 pub mod sync_runs;
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 
 use rusqlite::Connection;
 
+use crate::dto::{BatchItemOverride, BatchParentRef, ParentChanges};
 use crate::error::Result;
 
 /// The schema version stored in `PRAGMA user_version`. Bump it and add a step
 /// to [`migrate`] when the schema changes.
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 /// How many sync runs to retain. The Sync screen shows a recent-runs log, not
 /// an audit trail, so old rows are pruned on append.
@@ -264,8 +266,51 @@ fn migrate(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 5 {
+        // Per-item parents (docs/superpowers/specs/2026-09-29-per-item-parents-design.md).
+        fold_batch_parents_into_items(&tx)?;
+    }
+
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     tx.commit()?;
+    Ok(())
+}
+
+/// Schema v5: copy each live batch's batch-wide `parents` into every member's
+/// `overrides[item].parents` as pending links — the data-passing one kept —
+/// then empty the batch-wide list. Archived batches keep theirs as history.
+fn fold_batch_parents_into_items(conn: &Connection) -> Result<()> {
+    let batches: Vec<(String, String, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, parents, overrides FROM batches \
+             WHERE archived_at IS NULL AND parents <> '[]'",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect::<std::result::Result<_, _>>()?
+    };
+    for (batch_id, parents, overrides) in batches {
+        let parents: Vec<BatchParentRef> = serde_json::from_str(&parents)?;
+        let mut overrides: HashMap<String, BatchItemOverride> = serde_json::from_str(&overrides)?;
+        let changes = ParentChanges {
+            add: parents.iter().map(|p| p.id.clone()).collect(),
+            remove: Vec::new(),
+            passing: parents.iter().find(|p| p.passes_data).map(|p| p.id.clone()),
+        };
+        let members: Vec<String> = {
+            let mut stmt = conn.prepare(
+                "SELECT item_id FROM batch_items WHERE batch_id = ?1 ORDER BY position",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![batch_id], |r| r.get(0))?;
+            rows.collect::<std::result::Result<_, _>>()?
+        };
+        for item_id in members {
+            overrides.entry(item_id).or_default().parents = Some(changes.clone());
+        }
+        conn.execute(
+            "UPDATE batches SET parents = '[]', overrides = ?2 WHERE id = ?1",
+            rusqlite::params![batch_id, serde_json::to_string(&overrides)?],
+        )?;
+    }
     Ok(())
 }
 
@@ -369,6 +414,56 @@ mod tests {
             )
             .expect("counter");
         assert_eq!(value, 7);
+    }
+
+    #[test]
+    fn migrating_to_v5_moves_a_live_batchs_parents_onto_its_items() {
+        use crate::dto::{BatchItemOverride, ItemType, ParentChanges};
+        use std::collections::HashMap;
+
+        let conn = Connection::open_in_memory().expect("open");
+        migrate(&conn).expect("migrate");
+        conn.execute_batch(
+            r#"
+            INSERT INTO batches (id, batch_no, created_at, item_type, stage, publish, visibility, parents, overrides)
+                VALUES ('live', 1, 'now', 'to-process', 'setup', 'DRAFT', 'PRIVATE',
+                        '[{"id":"p1","passesData":true},{"id":"p2","passesData":false}]',
+                        '{"a":{"publish":"RECORD"}}');
+            INSERT INTO batches (id, batch_no, created_at, item_type, stage, publish, visibility, parents, archived_at)
+                VALUES ('done', 2, 'now', 'to-process', 'uploaded', 'DRAFT', 'PRIVATE',
+                        '[{"id":"p9","passesData":false}]', 'then');
+            INSERT INTO batch_items (batch_id, item_id, position)
+                VALUES ('live', 'a', 0), ('live', 'b', 1), ('done', 'c', 0);
+            "#,
+        )
+        .expect("seed");
+        conn.pragma_update(None, "user_version", 4i64).expect("rewind");
+
+        migrate(&conn).expect("migrate to v5");
+
+        let (parents, overrides): (String, String) = conn
+            .query_row(
+                "SELECT parents, overrides FROM batches WHERE id = 'live'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("live batch");
+        assert_eq!(parents, "[]");
+        let overrides: HashMap<String, BatchItemOverride> =
+            serde_json::from_str(&overrides).expect("overrides json");
+        let moved = ParentChanges {
+            add: vec!["p1".into(), "p2".into()],
+            remove: vec![],
+            passing: Some("p1".into()),
+        };
+        assert_eq!(overrides["a"].parents.as_ref(), Some(&moved));
+        assert_eq!(overrides["a"].publish, Some(ItemType::Record), "the item's other overrides stay");
+        assert_eq!(overrides["b"].parents.as_ref(), Some(&moved));
+
+        let archived: String = conn
+            .query_row("SELECT parents FROM batches WHERE id = 'done'", [], |r| r.get(0))
+            .expect("archived batch");
+        assert_eq!(archived, r#"[{"id":"p9","passesData":false}]"#, "an archived batch keeps its history");
     }
 
     #[test]
