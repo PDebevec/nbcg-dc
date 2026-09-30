@@ -252,3 +252,115 @@ export function wouldCreateCycle(
   // A cycle forms iff the child is already an ancestor of the proposed parent.
   return collectAncestors([parentId], getParentIds).has(childId);
 }
+
+// ── per-item links (docs/superpowers/specs/2026-09-29-per-item-parents-design.md) ──
+
+/**
+ * One item's unsent parent-link changes in a batch (`BatchItemOverride.parents`).
+ * The item's parents are its backend links + `add` − `remove`
+ * ({@link itemParentIds}); an upload makes the backend match ({@link linkChanges}).
+ * Kept as changes, not a full list, so an upload never undoes a link someone
+ * made on the website since the last sync.
+ */
+export interface ParentChanges {
+  /** Parents to link that the item doesn't have on the backend. */
+  add: string[];
+  /** Backend links to unlink. */
+  remove: string[];
+  /** Which of the item's parents fills its empty shared fields, or null. */
+  passing: string | null;
+}
+
+/** An item with nothing to change. */
+export const NO_PARENT_CHANGES: ParentChanges = { add: [], remove: [], passing: null };
+
+/** The item's parents: its backend links, then pending links, minus pending unlinks. */
+export function itemParentIds(
+  backend: readonly string[],
+  changes: Pick<ParentChanges, "add" | "remove">,
+): string[] {
+  const ids: string[] = [];
+  for (const id of [...backend, ...changes.add]) {
+    if (!changes.remove.includes(id) && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
+/** Link `id` to an item: take back a pending unlink, else queue a link the
+ * backend doesn't have yet. */
+export function withParentLinked(
+  changes: ParentChanges,
+  backend: readonly string[],
+  id: string,
+): ParentChanges {
+  const add = backend.includes(id) || changes.add.includes(id) ? changes.add : [...changes.add, id];
+  return { ...changes, add, remove: changes.remove.filter((x) => x !== id) };
+}
+
+/** Unlink `id` from an item: drop a pending link, and queue an unlink when the
+ * backend has it. It stops passing data. */
+export function withParentUnlinked(
+  changes: ParentChanges,
+  backend: readonly string[],
+  id: string,
+): ParentChanges {
+  const remove =
+    backend.includes(id) && !changes.remove.includes(id) ? [...changes.remove, id] : changes.remove;
+  return {
+    add: changes.add.filter((x) => x !== id),
+    remove,
+    passing: changes.passing === id ? null : changes.passing,
+  };
+}
+
+/**
+ * Which parent passes data after `linkedId` was linked: an existing choice
+ * stays; otherwise `linkedId`, when it is the item's only eligible parent. A
+ * backend link never starts passing on its own — a re-work batch must not fill
+ * an uploaded item's fields unasked.
+ */
+export function passingAfterLink(
+  current: string | null,
+  parentIds: readonly string[],
+  linkedId: string,
+  isEligible: (id: string) => boolean,
+): string | null {
+  if (current !== null) return current;
+  if (!isEligible(linkedId)) return null;
+  return parentIds.filter(isEligible).length === 1 ? linkedId : null;
+}
+
+/**
+ * What an upload must call so the backend matches the item's parents: link the
+ * adds the backend lacks, unlink the removes it still has. With the backend
+ * links unknown (`null`) every change is sent — linking a parent twice and
+ * unlinking one that's gone both change nothing.
+ */
+export function linkChanges(
+  backend: readonly string[] | null,
+  changes: Pick<ParentChanges, "add" | "remove">,
+): { connect: string[]; disconnect: string[] } {
+  return {
+    connect: changes.add.filter((id) => !changes.remove.includes(id) && !(backend ?? []).includes(id)),
+    disconnect: changes.remove.filter((id) => backend === null || backend.includes(id)),
+  };
+}
+
+/** The backend links after an upload linked and unlinked some; unknown stays unknown. */
+export function nextBackendLinks(
+  before: readonly string[] | null,
+  linked: readonly string[],
+  unlinked: readonly string[],
+): string[] | null {
+  return before === null ? null : itemParentIds(before, { add: [...linked], remove: [...unlinked] });
+}
+
+/** Whether two parent-id lists hold the same ids (order ignored). A missing
+ * list equals an unknown one; neither equals an empty one. */
+export function sameParentIds(
+  a: readonly string[] | null | undefined,
+  b: readonly string[] | null | undefined,
+): boolean {
+  if (a == null || b == null) return a == null && b == null;
+  return a.length === b.length && a.every((id) => b.includes(id));
+}

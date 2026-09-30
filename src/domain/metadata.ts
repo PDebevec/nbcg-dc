@@ -115,4 +115,11 @@ export interface LocalMetadataFile {
   metadata: RecordMetadata;
   /** ISO timestamp this mirror was last written from the backend. */
   syncedAt: string;
+  /**
+   * The parent ids the backend is known to have for this item — written only
+   * from backend answers (create, link/unlink calls, sync, a one-off read).
+   * Absent or null: not recorded yet (a mirror from before per-item parents).
+   * Ignored while `backendId` is null.
+   */
+  parentIds?: string[] | null;
 }

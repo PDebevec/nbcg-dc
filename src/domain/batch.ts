@@ -15,6 +15,7 @@
 import { ItemState, type Item } from "./item";
 import { PublishTarget, VisibilityStatus } from "./enums";
 import type { ContentKind } from "./pipeline";
+import { NO_PARENT_CHANGES, type ParentChanges } from "./parent";
 
 /**
  * The batch lifecycle stages, in order. `stage` records the **furthest progress
@@ -144,6 +145,12 @@ export interface BatchItemOverride {
    * has a home and a path to the runner.
    */
   splitSpreads?: boolean | null;
+  /**
+   * This item's unsent parent-link changes — links are per item
+   * (docs/superpowers/specs/2026-09-29-per-item-parents-design.md). Null or
+   * absent: none; the item keeps its backend links.
+   */
+  parents?: ParentChanges | null;
 }
 
 /**
@@ -429,6 +436,23 @@ export function resolveItemVisibility(
   itemId: string,
 ): VisibilityStatus {
   return batch.overrides[itemId]?.visibility ?? batch.visibility;
+}
+
+/** An item's unsent parent-link changes in this batch (none when absent). */
+export function parentChangesOf(batch: Batch, itemId: string): ParentChanges {
+  return batch.overrides[itemId]?.parents ?? NO_PARENT_CHANGES;
+}
+
+/** `batch` with one item's parent-link changes replaced; an empty set is stored as null. */
+export function withParentChanges(batch: Batch, itemId: string, changes: ParentChanges): Batch {
+  const none = changes.add.length === 0 && changes.remove.length === 0 && changes.passing === null;
+  return {
+    ...batch,
+    overrides: {
+      ...batch.overrides,
+      [itemId]: { ...batch.overrides[itemId], parents: none ? null : changes },
+    },
+  };
 }
 
 /** "Batch #017" — the human label from the running number (zero-padded to 3). */

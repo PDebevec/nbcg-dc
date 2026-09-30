@@ -37,7 +37,10 @@ import {
   tabForStage,
   withItemRun,
   withRunning,
+  parentChangesOf,
+  withParentChanges,
 } from "./batch";
+import { NO_PARENT_CHANGES } from "./parent";
 
 /** A batch with sensible defaults; override any field per case. */
 function makeBatch(overrides: Partial<Batch> = {}): Batch {
@@ -466,5 +469,26 @@ describe("deleteBlockedReason", () => {
     expect(
       deleteBlockedReason(makeBatch({ backendTouchedAt: "2026-09-29T10:00:00.000Z" }), idle),
     ).toBe(DELETE_BLOCKED.backend);
+  });
+});
+
+describe("per-item parent changes on the batch", () => {
+  it("reads no changes for an item without any", () => {
+    expect(parentChangesOf(makeBatch(), "i1")).toEqual(NO_PARENT_CHANGES);
+  });
+
+  it("stores an item's changes next to its other overrides", () => {
+    const b = makeBatch({ overrides: { i1: { publish: PublishTarget.RECORD } } });
+    const next = withParentChanges(b, "i1", { add: ["p9"], remove: [], passing: null });
+    expect(next.overrides.i1).toEqual({
+      publish: PublishTarget.RECORD,
+      parents: { add: ["p9"], remove: [], passing: null },
+    });
+    expect(parentChangesOf(next, "i1").add).toEqual(["p9"]);
+  });
+
+  it("stores an empty set as null", () => {
+    const b = withParentChanges(makeBatch(), "i1", { add: ["p9"], remove: [], passing: null });
+    expect(withParentChanges(b, "i1", NO_PARENT_CHANGES).overrides.i1).toEqual({ parents: null });
   });
 });
