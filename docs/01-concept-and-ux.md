@@ -125,10 +125,13 @@ revisitable** — you can re-edit a field or re-run a stage on any item at any t
 1. **Setup** (multi-item batches) — batch-wide defaults applied to all items,
    each still overridable later:
    - **Prefill from COBISS** — a batch COBISS ID that prefills every item.
-   - **Parent records** — link one or more parents (by id); a parent is
-     **eligible to pass data** only if its `collectionType` is in the data-passing
-     set (serial-type; exact value TBD). Among eligible parents, exactly **one
-     passes data** at a time (its shared fields copy down); ineligible types can be
+   - **Parent records** — link one or more parents (by id) to every item in the
+     batch. Links belong to each item, not the batch: an item keeps its parents
+     in its `metadata.json` and shows them in any later batch; removing one from
+     an uploaded item unlinks it at the next upload. A parent is **eligible to
+     pass data** only if its `collectionType` is in the data-passing set
+     (serial-type; exact value TBD). Among an item's eligible parents, at most
+     **one passes data** (its shared fields copy down); ineligible types can be
      linked but never pass data.
    - **Publish as** — Draft / Record. **Visibility** — Public / Private / Hidden.
      (**Batch defaults** — each item can override both in its Metadata screen.)

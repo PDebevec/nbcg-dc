@@ -37,7 +37,7 @@ uploads it.
   data, sit in a collapsed "Other fields" section. They stay editable and still
   upload. The section opens by itself when one of its fields has an error.
 - **Main/child switch removed.** The navigator pill shows "Standalone record",
-  "In a collection" or "Issue of a serial", worked out from the batch's parents.
+  "In a collection" or "Issue of a serial", worked out from the item's parents.
 - **Draft/Record lock.** Once an item is on the backend, its Draft/Record
   switch is locked to the backend's state.
 - The tab is read-only while its batch is uploading.
@@ -89,9 +89,9 @@ uploads it.
 2. Autosave writes the pruned values to `metadata.json`. That is exactly what
    an upload sends.
 3. `checkItem` runs the vendored `checkMetadata` on those values, plus the
-   local format check. It uses the batch's parents and the item's backend state
+   local format check. It uses the item's parents and its backend state
    (or its Draft/Record choice before the first upload).
-4. An item is ready when nothing is missing or invalid and every batch parent
+4. An item is ready when nothing is missing or invalid and every one of its parents
    has loaded and exists.
 
 **Keeping `metadata.json` (the mirror) correct**
@@ -148,13 +148,13 @@ benefit.
    |---|---|
    | A book, no parent, Draft: title + material type | Ready. The note says "1 more field needed to publish as a record." Upload creates a draft. |
    | The same, Record, no page count | Blocked at "Go to processing", with "Broj strana" marked required. |
-   | An issue of *Pobjeda* (batch parent: Serial collection), Record | Authors, ISBN and collection type hidden; issue number and date required. Upload creates it under the serial with no separate connect. |
+   | An issue of *Pobjeda* (parent: Serial collection), Record | Authors, ISBN and collection type hidden; issue number and date required. Upload creates it under the serial with no separate connect. |
    | A map in "Old maps of Montenegro" (Collection) | Full form, including author and scale; scale required as Record. |
    | "Get data" on a book with COBISS 215 | Page count, keywords and summary filled; hidden-but-filled fields under "Other fields". |
    | Languages: type "crn" | Crnogorski offered; picking it adds a chip. |
    | Upload an item, then reopen it | Draft/Record switch locked, showing its backend state. |
    | Empty a field on an uploaded item and re-upload | The field is gone on the website. |
-   | Remove a batch parent on the website, then upload | The batch stops with "The parent '…' no longer exists…"; the Metadata tab then shows that banner and the upload stays blocked. |
+   | Remove an item's parent on the website, then upload | The batch stops with "The parent '…' no longer exists…"; the Metadata tab then shows that banner and the upload stays blocked. |
    | Force a backend refusal | The processing row lists the field with its label; "Edit metadata" opens that item with validation shown. |
 
 2. **Tell the backend side** that v1 (`GET /api/schema/record`) can be removed
@@ -171,7 +171,7 @@ These go beyond the design doc; each was made while building and reviewing.
 
 - **A parent that fails to load for a network reason:** the editor stays open
   with the parents that did load, the item is not ready, and a banner offers
-  Retry. The upload waits for the batch's parents before it checks readiness.
+  Retry. The upload waits for each item's parents before it checks readiness.
 - **A parent the backend refuses with `PARENT_NOT_FOUND`** is marked "gone" for
   the rest of the session, even if search still returns it. It blocks the batch
   until the app restarts.

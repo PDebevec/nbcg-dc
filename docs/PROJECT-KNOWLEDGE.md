@@ -682,7 +682,7 @@ Added by Epic 09 (2026-08-07), all verified against the backend source:
     `nbcg/frontend/src/api/search.ts` and nothing more). It cannot be used to
     mark child/issue items — but nothing needs it to: since schema v2 there is
     no hand-set main/child level. An item's role — standalone record, in a
-    collection, or issue of a serial — is derived from its batch's parents'
+    collection, or issue of a serial — is derived from its parents'
     `collectionType`s: `itemRole` in `domain/schema-check.ts` labels it for the
     navigator, and `routeCase` in `domain/provenance.ts` takes the same
     `parentCollectionTypes` to route prefill. Backend tech debt, not an

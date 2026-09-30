@@ -6,6 +6,12 @@
 > a re-upload clears emptied fields, and `PARENT_NOT_FOUND` / `METADATA_VALIDATION_FAILED`
 > are handled. The current behaviour is in
 > [metadata-schema-v2.md](metadata-schema-v2.md).
+>
+> **Per-item parents, 2026-09-29.** A new item is created under its own parents; a
+> re-upload links added parents, then unlinks removed ones
+> (`POST /api/relations/disconnect`, a `404` counts as done), records the item's
+> links in `metadata.json`, and a failed link change keeps the batch open. See
+> [the design](../superpowers/specs/2026-09-29-per-item-parents-design.md).
 
 Goal: the **Upload** half of the Processing & Upload tab — turn a processed,
 described batch into records/drafts on the backend (single source of truth),

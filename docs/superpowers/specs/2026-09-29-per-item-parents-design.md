@@ -1,6 +1,6 @@
 # Per-item parent links — design
 
-_2026-09-29 · status: proposed_
+_2026-09-29 · status: implemented (plan: `docs/superpowers/plans/2026-09-29-per-item-parents.md`)_
 
 ## Goal
 
