@@ -21,6 +21,7 @@ const {
   linkParent,
   removeParent,
   togglePassesData,
+  restoreParent,
   publish,
   setPublish,
   visibility,
@@ -86,10 +87,11 @@ async function onContinue(): Promise<void> {
       :results="parentResults"
       :searching="parentSearching"
       :search-error="parentSearchError"
-      description="Link one or more parents. Only one passes data at a time — its shared fields copy down to the items. Click can pass data on another to switch the source."
+      description="Link one or more parents to every item in the batch. Only one passes data at a time — its shared fields copy down to the items that have it. Click can pass data on another to switch the source."
       @update-query="setParentQuery($event)"
       @link="linkParent($event)"
       @remove="removeParent($event)"
+      @restore="restoreParent($event)"
       @toggle-pass="togglePassesData($event)"
     />
 

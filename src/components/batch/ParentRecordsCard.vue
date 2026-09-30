@@ -13,12 +13,16 @@ const props = defineProps<{
   results: ParentSearchRow[];
   searching: boolean;
   searchError: string | null;
+  /** Items "Link to all" reaches; below 2 it isn't offered. */
+  linkAllCount?: number;
 }>();
 
 const emit = defineEmits<{
   updateQuery: [value: string];
   link: [id: string];
+  linkAll: [id: string];
   remove: [id: string];
+  restore: [id: string];
   togglePass: [id: string];
 }>();
 
@@ -35,6 +39,16 @@ const noMatches = computed(
 function onInput(event: Event): void {
   emit("updateQuery", (event.target as HTMLInputElement).value);
 }
+
+const offerLinkAll = computed(() => (props.linkAllCount ?? 0) > 1);
+
+/** " · on all 4 items" / " · on 2 of 4 items" in Setup; "" for one item. */
+function countLabel(p: ParentRowView): string {
+  if (!p.count) return "";
+  return p.count.on === p.count.of
+    ? ` · on all ${p.count.of} items`
+    : ` · on ${p.count.on} of ${p.count.of} items`;
+}
 </script>
 
 <template>
@@ -43,44 +57,50 @@ function onInput(event: Event): void {
     <div v-if="description" class="desc">{{ description }}</div>
 
     <div v-if="parents.length > 0" class="list">
-      <div v-for="p in parents" :key="p.id" class="parent-row">
+      <div
+        v-for="p in parents"
+        :key="p.id"
+        :class="['parent-row', { unlinking: p.status === 'unlinking' }]"
+      >
         <span class="type-chip">{{ p.typeLabel.charAt(0) }}</span>
         <div class="parent-text">
           <div class="parent-name">{{ p.name }}</div>
-          <div class="parent-meta">{{ p.typeLabel }} · {{ p.id }}</div>
+          <div class="parent-meta">{{ p.typeLabel }} · {{ p.id }}{{ countLabel(p) }}</div>
         </div>
-        <button
-          v-if="p.canPassData && editable"
-          class="pass-btn"
-          :class="{ passing: p.passesData }"
-          :title="
-            p.passesData
-              ? 'Passing its shared fields down — click to stop'
-              : 'Click to make this the data-passing parent'
-          "
-          @click="$emit('togglePass', p.id)"
-        >
-          {{ p.passesData ? "↧ passes data" : "○ can pass data" }}
-        </button>
-        <span v-else-if="p.passesData" class="pass-btn passing static">↧ passes data</span>
-        <button
-          v-if="editable"
-          class="remove-btn"
-          title="Unlink"
-          @click="$emit('remove', p.id)"
-        >
-          <svg
-            viewBox="0 0 20 20"
-            width="13"
-            height="13"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.8"
+        <template v-if="p.status === 'unlinking'">
+          <span class="status-tag unlinking">Unlinks on upload</span>
+          <button v-if="editable" class="undo-btn" @click="emit('restore', p.id)">Undo</button>
+        </template>
+        <template v-else>
+          <span v-if="p.status === 'new'" class="status-tag new">New — links on upload</span>
+          <button
+            v-if="p.canPassData && editable"
+            class="pass-btn"
+            :class="{ passing: p.passesData }"
+            :title="
+              p.passesData
+                ? 'Passing its shared fields down — click to stop'
+                : 'Click to make this the data-passing parent'
+            "
+            @click="emit('togglePass', p.id)"
           >
-            <line x1="5" y1="5" x2="15" y2="15" />
-            <line x1="15" y1="5" x2="5" y2="15" />
-          </svg>
-        </button>
+            {{ p.passesData ? "↧ passes data" : "○ can pass data" }}
+          </button>
+          <span v-else-if="p.passesData" class="pass-btn passing static">↧ passes data</span>
+          <button v-if="editable" class="remove-btn" title="Unlink" @click="emit('remove', p.id)">
+            <svg
+              viewBox="0 0 20 20"
+              width="13"
+              height="13"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+            >
+              <line x1="5" y1="5" x2="15" y2="15" />
+              <line x1="15" y1="5" x2="5" y2="15" />
+            </svg>
+          </button>
+        </template>
       </div>
     </div>
     <div v-else-if="!editable" class="empty">No parent records linked.</div>
@@ -108,19 +128,23 @@ function onInput(event: Event): void {
 
       <div v-if="showResults" class="results">
         <div v-if="searchError" class="results-note error">✗ {{ searchError }}</div>
-        <button
-          v-for="r in results"
-          :key="r.id"
-          class="result-row"
-          :disabled="r.linked"
-          @click="emit('link', r.id)"
-        >
-          <span class="result-text">
-            <span class="result-title">{{ r.title }}</span>
-            <span class="result-meta">{{ r.meta }} · {{ r.id }}</span>
-          </span>
-          <span class="result-action">{{ r.linked ? "Linked" : "+ Link" }}</span>
-        </button>
+        <div v-for="r in results" :key="r.id" class="result-line">
+          <button class="result-row" :disabled="r.linked" @click="emit('link', r.id)">
+            <span class="result-text">
+              <span class="result-title">{{ r.title }}</span>
+              <span class="result-meta">{{ r.meta }} · {{ r.id }}</span>
+            </span>
+            <span class="result-action">{{ r.linked ? "Linked" : "+ Link" }}</span>
+          </button>
+          <button
+            v-if="offerLinkAll"
+            class="link-all"
+            :disabled="r.linkedAll"
+            @click="emit('linkAll', r.id)"
+          >
+            Link to all {{ linkAllCount }} items
+          </button>
+        </div>
         <div v-if="noMatches" class="results-note">
           No matches.
           <button class="link-id" @click="emit('link', trimmedQuery)">
@@ -253,6 +277,41 @@ function onInput(event: Event): void {
   color: var(--c-text-muted);
 }
 
+.parent-row.unlinking {
+  opacity: 0.7;
+}
+
+.parent-row.unlinking .parent-name {
+  text-decoration: line-through;
+}
+
+.status-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: var(--r-sm);
+  white-space: nowrap;
+  flex: none;
+}
+
+.status-tag.new {
+  color: var(--c-primary);
+  background: var(--c-primary-soft);
+}
+
+.status-tag.unlinking {
+  color: var(--c-danger-text);
+  background: var(--c-danger-bg);
+}
+
+.undo-btn {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-parent-btn);
+  padding: 4px 8px;
+  flex: none;
+}
+
 .add-slot {
   position: relative;
 }
@@ -351,6 +410,35 @@ function onInput(event: Event): void {
   font-weight: 600;
   color: var(--c-parent-btn);
   white-space: nowrap;
+}
+
+.result-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.result-line .result-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.link-all {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-parent-btn);
+  white-space: nowrap;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.link-all:hover:not(:disabled) {
+  background: var(--c-parent-card);
+}
+
+.link-all:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .results-note {

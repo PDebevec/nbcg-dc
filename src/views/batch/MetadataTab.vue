@@ -58,6 +58,9 @@ const {
   linkParent,
   removeParent,
   togglePassesData,
+  restoreParent,
+  linkParentToAll,
+  memberCount,
   retryParents,
   publish,
   publishLocked,
@@ -246,10 +249,13 @@ const enumLabel: Record<string, string> = {
         :results="parentResults"
         :searching="parentSearching"
         :search-error="parentSearchError"
-        description="Linked parents apply to the whole batch. The data-passing parent fills this item's empty shared fields."
+        :link-all-count="memberCount"
+        description="This item's parents. Changes are sent to the backend when the batch uploads."
         @update-query="setParentQuery($event)"
         @link="linkParent($event)"
+        @link-all="linkParentToAll($event)"
         @remove="removeParent($event)"
+        @restore="restoreParent($event)"
         @toggle-pass="togglePassesData($event)"
       />
 
