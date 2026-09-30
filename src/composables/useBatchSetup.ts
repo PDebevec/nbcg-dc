@@ -182,6 +182,7 @@ export function useBatchSetup(batchId: MaybeRefOrGetter<string>) {
     parents: links.parents,
     parentQuery: links.parentQuery,
     setParentQuery: links.setQuery,
+    openParentPicker: links.openPicker,
     parentResults: links.results,
     parentSearching: links.searching,
     parentSearchError: links.searchError,

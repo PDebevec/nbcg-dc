@@ -19,6 +19,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   updateQuery: [value: string];
+  /** The search box got focus: list the newest collections if nothing is typed. */
+  open: [];
   link: [id: string];
   linkAll: [id: string];
   remove: [id: string];
@@ -27,10 +29,13 @@ const emit = defineEmits<{
 }>();
 
 const trimmedQuery = computed(() => props.query.trim());
-const showResults = computed(() => trimmedQuery.value.length > 0);
+/** Typed text searches; with nothing typed, the newest collections show once listed. */
+const showResults = computed(
+  () => trimmedQuery.value.length > 0 || props.results.length > 0 || props.searchError != null,
+);
 const noMatches = computed(
   () =>
-    showResults.value &&
+    trimmedQuery.value.length > 0 &&
     !props.searching &&
     !props.searchError &&
     props.results.length === 0,
@@ -113,10 +118,11 @@ function countLabel(p: ParentRowView): string {
             :value="query"
             placeholder="Search serials & collections to link… (title or id)"
             @input="onInput"
+            @focus="emit('open')"
           />
           <Spinner v-if="searching" tone="primary" />
           <button
-            v-else-if="query"
+            v-else-if="query || showResults"
             class="clear-btn"
             title="Clear"
             @click="emit('updateQuery', '')"

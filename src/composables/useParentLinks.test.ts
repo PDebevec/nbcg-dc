@@ -53,7 +53,7 @@ const metadataFake = {
   backendLinks: ref(new Map<string, string[] | null>()),
   ensureParents: async () => {},
   ensureParent: async () => {},
-  findParents: async () => [] as ParentRecord[],
+  findParents: async (_q: string, _signal?: AbortSignal) => [] as ParentRecord[],
 };
 vi.mock("@stores/useMetadata", () => ({ useMetadataStore: () => metadataFake }));
 
@@ -89,6 +89,7 @@ beforeEach(() => {
   metadataFake.parentGone.value = new Set();
   metadataFake.parentMissing.value = new Set();
   metadataFake.parentFailed.value = new Set();
+  metadataFake.findParents = async () => [];
   useSettingsStore().config = { ...DEFAULT_CONFIG, dataPassingCollectionTypes: [SERIAL] };
 });
 
@@ -213,5 +214,28 @@ describe("passing data", () => {
     await links.linkParent("s1");
     expect(changesOf("i1")).toBeNull();
     expect(passing).toEqual([]);
+  });
+});
+
+describe("the picker's list", () => {
+  it("lists the newest collections when opened with nothing typed, once", async () => {
+    const asked: string[] = [];
+    metadataFake.findParents = async (q: string) => {
+      asked.push(q);
+      return [record("c1", 3)];
+    };
+    const { links } = setup({ targets: ["i1"] });
+    await links.openPicker();
+    await links.openPicker(); // already listed: no second request
+    expect(asked).toEqual([""]);
+    expect(links.results.value.map((r) => r.id)).toEqual(["c1"]);
+  });
+
+  it("closes the list at once when the typed text is cleared, as × does", async () => {
+    metadataFake.findParents = async () => [record("c1", 3)];
+    const { links } = setup({ targets: ["i1"] });
+    await links.openPicker();
+    links.setQuery("");
+    expect(links.results.value).toEqual([]);
   });
 });

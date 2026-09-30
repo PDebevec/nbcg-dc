@@ -243,10 +243,12 @@ export function useParentLinks(
     });
   });
 
-  async function search(): Promise<void> {
+  /** Search the typed text. With nothing typed, clear the list, or with
+   * `listNewest`, list the newest collections instead. */
+  async function search(listNewest = false): Promise<void> {
     const q = parentQuery.value.trim();
     abort?.abort();
-    if (!q) {
+    if (!q && !listNewest) {
       searchResults.value = [];
       searchError.value = null;
       return;
@@ -271,10 +273,25 @@ export function useParentLinks(
   function setQuery(value: string): void {
     parentQuery.value = value;
     if (debounce) clearTimeout(debounce);
+    debounce = null;
+    // Clearing the text closes the list at once (× sends an empty query too).
+    if (value.trim() === "") {
+      void search();
+      return;
+    }
     debounce = setTimeout(() => {
       debounce = null;
       void search();
     }, SEARCH_DEBOUNCE_MS);
+  }
+
+  /** The search box got focus: with nothing typed, list the newest collections.
+   * Nothing to do while text is typed, a list shows or a search runs. */
+  function openPicker(): Promise<void> {
+    if (parentQuery.value.trim() !== "" || searchResults.value.length > 0 || searching.value) {
+      return Promise.resolve();
+    }
+    return search(true);
   }
 
   function clearSearch(): void {
@@ -355,6 +372,7 @@ export function useParentLinks(
     searching,
     searchError,
     search,
+    openPicker,
     clearSearch,
     // actions
     linkParent,

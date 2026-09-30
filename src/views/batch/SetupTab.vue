@@ -15,6 +15,7 @@ const {
   parents,
   parentQuery,
   setParentQuery,
+  openParentPicker,
   parentResults,
   parentSearching,
   parentSearchError,
@@ -89,6 +90,7 @@ async function onContinue(): Promise<void> {
       :search-error="parentSearchError"
       description="Link one or more parents to every item in the batch. Only one passes data at a time — its shared fields copy down to the items that have it. Click can pass data on another to switch the source."
       @update-query="setParentQuery($event)"
+      @open="openParentPicker()"
       @link="linkParent($event)"
       @remove="removeParent($event)"
       @restore="restoreParent($event)"

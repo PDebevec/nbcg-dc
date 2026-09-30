@@ -68,4 +68,13 @@ describe("ParentRecordsCard", () => {
     expect(await render({ query: "pob", results, linkAllCount: 3 })).toContain("Link to all 3 items");
     expect(await render({ query: "pob", results, linkAllCount: 1 })).not.toContain("Link to all");
   });
+
+  it("shows the listed collections while nothing is typed", async () => {
+    const results: ParentSearchRow[] = [
+      { id: "c1", title: "Zbirka A", meta: "Record", linked: false, linkedAll: false },
+    ];
+    const html = await render({ query: "", results });
+    expect(html).toContain("Zbirka A");
+    expect(html).not.toContain("No matches");
+  });
 });
