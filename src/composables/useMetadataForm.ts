@@ -147,16 +147,30 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
       : "",
   );
 
-  // ── parents (batch-level links; data passes to the current item) ─────────
+  // ── parents (the current item's own links; Link to all reaches every item) ──
 
   const links = useParentLinks(
     () => batch.value,
+    () => (current.value ? [current.value] : []),
     {
-      onPassingChanged: (parent) => {
-        if (parent && current.value && editable.value) {
-          const r = metadata.applyParentTo(current.value.id, parent);
-          if (r.applied.length) toasts.push(`Filled ${r.applied.length} field${r.applied.length === 1 ? "" : "s"} from the parent.`, "success");
+      members: () => items.value,
+      onPassingChanged: (changes) => {
+        if (!editable.value) return;
+        let fields = 0;
+        let filled = 0;
+        for (const { itemId, parent } of changes) {
+          if (!parent) continue;
+          const applied = metadata.applyParentTo(itemId, parent).applied.length;
+          fields += applied;
+          if (applied > 0) filled += 1;
         }
+        if (fields === 0) return;
+        toasts.push(
+          filled === 1
+            ? `Filled ${fields} field${fields === 1 ? "" : "s"} from the parent.`
+            : `Filled ${fields} fields in ${filled} items from the parent.`,
+          "success",
+        );
       },
     },
   );
@@ -746,6 +760,9 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
     parentSearchError: links.searchError,
     linkParent: links.linkParent,
     removeParent: links.removeParent,
+    restoreParent: links.restoreParent,
+    linkParentToAll: links.linkParentToAll,
+    memberCount: computed(() => items.value.length),
     togglePassesData: links.togglePassesData,
     retryParents,
     // publish / visibility (per item)

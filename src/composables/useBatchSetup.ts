@@ -1,10 +1,11 @@
 /**
  * `useBatchSetup` (Epic 03/05) — the view-model the batch **Setup tab** binds to
  * (Seam 1). Batch-wide defaults: the COBISS prefill id, the linked parent
- * records (+ which one passes data), the publish target and visibility — all
- * persisted on the batch — and **Apply & continue**, which copies the
- * data-passing parent's shared fields and the COBISS record onto every member
- * item's empty fields, then hands over to the Metadata tab.
+ * records (+ which one passes data) — linked to every member item —, the
+ * publish target and visibility — all persisted on the batch — and
+ * **Apply & continue**, which copies the data-passing parent's shared fields
+ * and the COBISS record onto every member item's empty fields, then hands
+ * over to the Metadata tab.
  */
 
 import { computed, getCurrentInstance, onMounted, onUnmounted, ref, toValue, type MaybeRefOrGetter } from "vue";
@@ -35,12 +36,6 @@ export function useBatchSetup(batchId: MaybeRefOrGetter<string>) {
   const { readOnly } = storeToRefs(work);
 
   const batch = computed<Batch | null>(() => batches.get(toValue(batchId)));
-  const links = useParentLinks(() => batch.value);
-
-  const editable = computed(
-    () => batch.value != null && batch.value.archivedAt == null && !readOnly.value,
-  );
-  const itemCount = computed(() => batch.value?.itemIds.length ?? 0);
 
   /** Member items in batch order (those the index currently knows). */
   const memberItems = computed<Item[]>(() => {
@@ -49,6 +44,13 @@ export function useBatchSetup(batchId: MaybeRefOrGetter<string>) {
     const byId = new Map(items.items.map((i) => [i.id, i]));
     return b.itemIds.map((id) => byId.get(id)).filter((i): i is Item => i != null);
   });
+
+  const links = useParentLinks(() => batch.value, () => memberItems.value);
+
+  const editable = computed(
+    () => batch.value != null && batch.value.archivedAt == null && !readOnly.value,
+  );
+  const itemCount = computed(() => batch.value?.itemIds.length ?? 0);
 
   async function persistBatch(patch: Partial<Batch>): Promise<void> {
     const b = batch.value;
@@ -120,7 +122,6 @@ export function useBatchSetup(batchId: MaybeRefOrGetter<string>) {
       const members = memberItems.value;
       await Promise.all(members.map((m) => metadata.ensureItemLoaded(m)));
 
-      const passing = links.passingParent.value;
       let preview: Record<string, unknown> | null = null;
       const id = (batch.value?.cobissId ?? "").trim();
       if (id) {
@@ -134,14 +135,20 @@ export function useBatchSetup(batchId: MaybeRefOrGetter<string>) {
 
       let parentApplied = 0;
       let cobissApplied = 0;
+      let fromParent = false;
       for (const m of members) {
-        if (passing) parentApplied += metadata.applyParentTo(m.id, passing).applied.length;
+        // Each item's own passing parent — items may have different ones.
+        const passing = links.passingParentOf(m.id);
+        if (passing) {
+          fromParent = true;
+          parentApplied += metadata.applyParentTo(m.id, passing).applied.length;
+        }
         if (preview) cobissApplied += metadata.applyCobissTo(m.id, preview).applied.length;
       }
       await metadata.flush();
 
       if (parentApplied + cobissApplied > 0) {
-        const sources = [passing ? "the parent" : null, preview ? "COBISS" : null]
+        const sources = [fromParent ? "the parent" : null, preview ? "COBISS" : null]
           .filter(Boolean)
           .join(" and ");
         toasts.push(`Prefilled ${members.length} item${members.length === 1 ? "" : "s"} from ${sources}.`, "success");
@@ -180,6 +187,7 @@ export function useBatchSetup(batchId: MaybeRefOrGetter<string>) {
     parentSearchError: links.searchError,
     linkParent: links.linkParent,
     removeParent: links.removeParent,
+    restoreParent: links.restoreParent,
     togglePassesData: links.togglePassesData,
     // publish
     publish,

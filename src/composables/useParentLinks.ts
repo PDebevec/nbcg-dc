@@ -1,25 +1,27 @@
 /**
- * `useParentLinks` (Epic 05) — the parent-record linking slice shared by the
- * Setup and Metadata tabs: the linked-parent rows, the search box, link/unlink,
- * and the "exactly one passes data" toggle.
+ * `useParentLinks` (Epic 05) — the parent-link slice shared by the Setup and
+ * Metadata tabs: the rows, the search box, link / unlink / undo, the
+ * passes-data toggle and link-to-all.
  *
- * Links are persisted on the batch (`Batch.parents`, `{ id, passesData }`); the
- * resolved records + eligibility come from the metadata store's parent cache
- * and the configured `dataPassingCollectionTypes`. Persisting goes through
- * `useBatches.update` (write-through), so both tabs and the upload read the same
- * list.
+ * Links are per item (docs/superpowers/specs/2026-09-29-per-item-parents-design.md).
+ * An item's parents are its backend links — its `metadata.json`, held by the
+ * metadata store — plus the batch's pending changes for it
+ * (`overrides[item].parents`). `targets` are the items an action applies to:
+ * the current item in Metadata, every member in Setup. Changes persist through
+ * `useBatches.update`; the upload makes the backend match.
  */
 
 import { computed, onUnmounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
-import type { Batch } from "@domain/batch";
+import { parentChangesOf, withParentChanges, type Batch } from "@domain/batch";
+import type { Item } from "@domain/item";
 import {
-  dataPassingParent,
-  resolveLinkedParents,
-  toParentRefs,
-  toggleDataPassing,
-  withDefaultPassing,
-  type LinkedParent,
+  isEligibleParent,
+  itemParentIds,
+  passingAfterLink,
+  withParentLinked,
+  withParentUnlinked,
+  type ParentChanges,
   type ParentRecord,
 } from "@domain/parent";
 import { useBatchesStore } from "@stores/useBatches";
@@ -28,16 +30,22 @@ import { useSettingsStore } from "@stores/useSettings";
 import { useToastsStore } from "@stores/useToasts";
 import { logger } from "@lib/logger";
 
-/** A linked parent record, as the Setup/Metadata parent lists render it. */
+/** Where a row's parent stands: on the backend, linked on upload, or unlinked on upload. */
+export type ParentRowStatus = "linked" | "new" | "unlinking";
+
+/** A parent of the targets, as the Setup/Metadata parent lists render it. */
 export interface ParentRowView {
   id: string;
   name: string;
-  /** "Serial" (data-passing type) / "Record" — shown under the name. */
+  /** "Serial" (data-passing type) / "Record", or why it isn't usable. */
   typeLabel: string;
   /** Eligible to pass data (serial-type collectionType). */
   canPassData: boolean;
-  /** The one parent currently passing its shared fields down. */
+  /** Passing its shared fields down to every target that has it. */
   passesData: boolean;
+  status: ParentRowStatus;
+  /** With several targets (Setup): how many of them have it; null for one item. */
+  count: { on: number; of: number } | null;
 }
 
 /** One search hit in the parent picker. */
@@ -46,95 +54,168 @@ export interface ParentSearchRow {
   title: string;
   /** "Serial · can pass data" / "Record". */
   meta: string;
-  /** Already linked to this batch. */
+  /** Already a parent of every target. */
   linked: boolean;
+  /** Already a parent of every item in the batch — Link to all has nothing to do. */
+  linkedAll: boolean;
+}
+
+/** An item whose passing parent an action changed, and the parent now passing. */
+export interface PassingChange {
+  itemId: string;
+  parent: ParentRecord | null;
 }
 
 const SEARCH_DEBOUNCE_MS = 350;
 
 export interface UseParentLinksOptions {
-  /** Called after the data-passing parent changes (link / toggle) with the
-   * parent now passing, or null. Lets the caller copy its fields down. */
-  onPassingChanged?: (parent: ParentRecord | null) => void;
+  /** Every item in the batch, for {@link linkParentToAll}; defaults to the targets. */
+  members?: () => Item[];
+  /** After an action changed which parent passes data to some items — once per
+   * action, so the caller can fill their empty fields and say so once. */
+  onPassingChanged?: (changes: PassingChange[]) => void;
 }
+
+/** One item's side: backend links ([] while unknown), pending changes, and the parents they make. */
+interface ItemLinks {
+  backend: string[];
+  changes: ParentChanges;
+  ids: string[];
+}
+
+type Saved = Map<string, { before: ParentChanges; after: ParentChanges }>;
 
 export function useParentLinks(
   batch: () => Batch | null,
+  targets: () => Item[],
   options: UseParentLinksOptions = {},
 ) {
   const batches = useBatchesStore();
   const metadata = useMetadataStore();
   const settings = useSettingsStore();
   const toasts = useToastsStore();
-  const { parentRecords, parentLoading, parentGone, parentMissing, parentFailed } =
+  const { parentRecords, parentLoading, parentGone, parentMissing, parentFailed, backendLinks } =
     storeToRefs(metadata);
   const { config } = storeToRefs(settings);
 
   const dataPassingTypes = computed(() => config.value.dataPassingCollectionTypes);
+  const members = (): Item[] => options.members?.() ?? targets();
 
-  /** The batch's links resolved against fetched records + config. */
-  const linkedParents = computed<LinkedParent[]>(() => {
+  function isEligible(id: string): boolean {
+    const record = parentRecords.value.get(id);
+    return record != null && isEligibleParent(record, dataPassingTypes.value);
+  }
+
+  function linksOf(b: Batch, itemId: string): ItemLinks {
+    const backend = backendLinks.value.get(itemId) ?? [];
+    const changes = parentChangesOf(b, itemId);
+    return { backend, changes, ids: itemParentIds(backend, changes) };
+  }
+
+  /** What a row list shows for one item: its parents, then its pending unlinks. */
+  function shownIds(l: ItemLinks): string[] {
+    return [...l.ids, ...l.changes.remove.filter((id) => l.backend.includes(id))];
+  }
+
+  const targetLinks = computed<ItemLinks[]>(() => {
     const b = batch();
-    if (!b) return [];
-    return resolveLinkedParents(b.parents, parentRecords.value, dataPassingTypes.value);
+    return b ? targets().map((t) => linksOf(b, t.id)) : [];
   });
 
-  // Fetch any linked record we don't hold yet (deep-link / reopen).
+  // Fetch the record of every parent the rows show (on open / after an edit).
   watch(
-    () => batch()?.parents.map((p) => p.id).join("|") ?? "",
-    () => {
-      const b = batch();
-      if (b && b.parents.length) void metadata.ensureParents(b.parents.map((p) => p.id));
+    () => [...new Set(targetLinks.value.flatMap(shownIds))].sort().join("|"),
+    (key) => {
+      if (key) void metadata.ensureParents(key.split("|"));
     },
     { immediate: true },
   );
 
   /** Why a parent is not usable comes first: a parent the upload was refused
    * for keeps its cached record, which would otherwise read as fine. */
-  function typeLabelFor(link: LinkedParent): string {
-    const id = link.parentId;
+  function typeLabelFor(id: string): string {
     if (parentGone.value.has(id)) return "No longer exists";
     if (parentMissing.value.has(id)) return "Not found on backend";
     if (parentFailed.value.has(id)) return "Couldn't load";
-    if (link.record) return link.eligible ? "Serial" : "Record";
+    if (parentRecords.value.has(id)) return isEligible(id) ? "Serial" : "Record";
     return parentLoading.value.has(id) ? "Loading…" : "Not found on backend";
   }
 
-  const parents = computed<ParentRowView[]>(() =>
-    linkedParents.value.map((l) => ({
-      id: l.parentId,
-      name: l.record?.title ?? l.parentId,
-      typeLabel: typeLabelFor(l),
-      canPassData: l.eligible,
-      passesData: l.passesData,
-    })),
-  );
+  const parents = computed<ParentRowView[]>(() => {
+    const all = targetLinks.value;
+    const order: string[] = [];
+    for (const l of all) for (const id of shownIds(l)) if (!order.includes(id)) order.push(id);
+    return order.map((id) => {
+      const having = all.filter((l) => l.ids.includes(id));
+      const status: ParentRowStatus =
+        having.length === 0 ? "unlinking" : having.some((l) => l.backend.includes(id)) ? "linked" : "new";
+      return {
+        id,
+        name: parentRecords.value.get(id)?.title ?? id,
+        typeLabel: typeLabelFor(id),
+        canPassData: isEligible(id),
+        passesData: having.length > 0 && having.every((l) => l.changes.passing === id),
+        status,
+        count: all.length > 1 ? { on: having.length, of: all.length } : null,
+      };
+    });
+  });
 
-  /** The linked parent currently passing data (with its record), or null. */
-  const passingParent = computed<ParentRecord | null>(
-    () => dataPassingParent(linkedParents.value)?.record ?? null,
-  );
+  /** The parent passing data to `itemId`, with its record, or null. */
+  function passingParentOf(itemId: string): ParentRecord | null {
+    const b = batch();
+    if (!b) return null;
+    const l = linksOf(b, itemId);
+    const id = l.changes.passing;
+    if (id === null || !l.ids.includes(id) || !isEligible(id)) return null;
+    return parentRecords.value.get(id) ?? null;
+  }
 
-  /** Every linked parent whose record we hold (for the per-field source picker). */
+  /** The first target's passing parent (the Metadata tab's current item). */
+  const passingParent = computed<ParentRecord | null>(() => {
+    const first = targets()[0];
+    return first ? passingParentOf(first.id) : null;
+  });
+
+  /** The first target's parents whose records we hold (the per-field source picker). */
   const linkedRecords = computed<ParentRecord[]>(() =>
-    linkedParents.value
-      .map((l) => l.record)
+    (targetLinks.value[0]?.ids ?? [])
+      .map((id) => parentRecords.value.get(id))
       .filter((r): r is ParentRecord => r != null),
   );
 
   // ── persistence ──────────────────────────────────────────────────────────
 
-  async function persist(links: LinkedParent[]): Promise<boolean> {
+  /** Apply `change` to each of `items`' pending changes and save the batch once. */
+  async function apply(items: Item[], change: (l: ItemLinks) => ParentChanges): Promise<Saved | null> {
     const b = batch();
-    if (!b) return false;
+    if (!b || items.length === 0) return null;
+    let next = b;
+    const saved: Saved = new Map();
+    for (const item of items) {
+      const l = linksOf(b, item.id);
+      const after = change(l);
+      saved.set(item.id, { before: l.changes, after });
+      next = withParentChanges(next, item.id, after);
+    }
     try {
-      await batches.update({ ...b, parents: toParentRefs(links) });
-      return true;
+      await batches.update(next);
+      return saved;
     } catch (err) {
       logger.error("parents", "Couldn't save the parent links.", err);
       toasts.push("Couldn't save the parent links.", "error");
-      return false;
+      return null;
     }
+  }
+
+  /** Tell the caller which items' passing parent the action changed. */
+  function reportPassing(saved: Saved): void {
+    const changes: PassingChange[] = [];
+    for (const [itemId, { before, after }] of saved) {
+      if (before.passing === after.passing) continue;
+      changes.push({ itemId, parent: after.passing ? (parentRecords.value.get(after.passing) ?? null) : null });
+    }
+    if (changes.length > 0) options.onPassingChanged?.(changes);
   }
 
   // ── search ───────────────────────────────────────────────────────────────
@@ -147,15 +228,17 @@ export function useParentLinks(
   let debounce: ReturnType<typeof setTimeout> | null = null;
 
   const results = computed<ParentSearchRow[]>(() => {
-    const linkedIds = new Set(linkedParents.value.map((l) => l.parentId));
+    const b = batch();
+    const onAll = (items: Item[], id: string) =>
+      b != null && items.length > 0 && items.every((t) => linksOf(b, t.id).ids.includes(id));
     return searchResults.value.map((r) => {
-      const eligible =
-        r.collectionType != null && dataPassingTypes.value.includes(r.collectionType);
+      const eligible = r.collectionType != null && dataPassingTypes.value.includes(r.collectionType);
       return {
         id: r.id,
         title: r.title,
         meta: eligible ? "Serial · can pass data" : "Record",
-        linked: linkedIds.has(r.id),
+        linked: onAll(targets(), r.id),
+        linkedAll: onAll(members(), r.id),
       };
     });
   });
@@ -201,40 +284,53 @@ export function useParentLinks(
     searchError.value = null;
   }
 
-  // ── link / unlink / toggle ───────────────────────────────────────────────
+  // ── link / unlink / undo / toggle ────────────────────────────────────────
 
-  async function linkParent(id: string): Promise<void> {
-    const b = batch();
-    if (!b || b.parents.some((p) => p.id === id)) return;
+  async function linkTo(items: Item[], id: string): Promise<void> {
     await metadata.ensureParent(id);
-    const before = dataPassingParent(linkedParents.value)?.parentId ?? null;
-    let links = resolveLinkedParents(
-      [...b.parents, { id, passesData: false }],
-      parentRecords.value,
-      dataPassingTypes.value,
-    );
-    links = withDefaultPassing(links);
-    if (await persist(links)) {
-      clearSearch();
-      const after = dataPassingParent(links);
-      if ((after?.parentId ?? null) !== before) {
-        options.onPassingChanged?.(after?.record ?? null);
-      }
-    }
+    const saved = await apply(items, (l) => {
+      const linked = withParentLinked(l.changes, l.backend, id);
+      const ids = itemParentIds(l.backend, linked);
+      return { ...linked, passing: passingAfterLink(linked.passing, ids, id, isEligible) };
+    });
+    if (!saved) return;
+    clearSearch();
+    reportPassing(saved);
   }
 
+  /** Link a parent to the targets. */
+  function linkParent(id: string): Promise<void> {
+    return linkTo(targets(), id);
+  }
+
+  /** Link a parent to every item in the batch (the Metadata tab's Link to all). */
+  function linkParentToAll(id: string): Promise<void> {
+    return linkTo(members(), id);
+  }
+
+  /** Unlink a parent from the targets: a pending link is dropped, a backend
+   * link unlinks at the next upload. */
   async function removeParent(id: string): Promise<void> {
-    const was = dataPassingParent(linkedParents.value)?.parentId === id;
-    const links = linkedParents.value.filter((l) => l.parentId !== id);
-    if ((await persist(links)) && was) options.onPassingChanged?.(null);
+    const saved = await apply(targets(), (l) => withParentUnlinked(l.changes, l.backend, id));
+    if (saved) reportPassing(saved);
   }
 
-  /** Toggle which parent passes data — at most one at a time. */
+  /** Take back a pending unlink (the struck-through row's Undo). */
+  async function restoreParent(id: string): Promise<void> {
+    await apply(targets(), (l) =>
+      l.changes.remove.includes(id) ? withParentLinked(l.changes, l.backend, id) : l.changes,
+    );
+  }
+
+  /** Toggle whether a parent passes data, for the targets that have it. */
   async function togglePassesData(id: string): Promise<void> {
-    const links = toggleDataPassing(linkedParents.value, id);
-    if (await persist(links)) {
-      options.onPassingChanged?.(dataPassingParent(links)?.record ?? null);
-    }
+    const b = batch();
+    if (!b) return;
+    const having = targets().filter((t) => linksOf(b, t.id).ids.includes(id));
+    const on = having.length > 0 && having.every((t) => linksOf(b, t.id).changes.passing === id);
+    if (!on && !isEligible(id)) return;
+    const saved = await apply(having, (l) => ({ ...l.changes, passing: on ? null : id }));
+    if (saved) reportPassing(saved);
   }
 
   onUnmounted(() => {
@@ -244,9 +340,9 @@ export function useParentLinks(
 
   return {
     parents,
-    linkedParents,
     linkedRecords,
     passingParent,
+    passingParentOf,
     // search
     parentQuery,
     setQuery,
@@ -257,7 +353,9 @@ export function useParentLinks(
     clearSearch,
     // actions
     linkParent,
+    linkParentToAll,
     removeParent,
+    restoreParent,
     togglePassesData,
   };
 }

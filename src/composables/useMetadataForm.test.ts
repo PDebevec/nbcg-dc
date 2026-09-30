@@ -4,7 +4,7 @@ import { reactive, ref } from "vue";
 import { vi } from "vitest";
 import { BatchStage, ItemRunStatus, type Batch } from "@domain/batch";
 import { PublishTarget, VisibilityStatus } from "@domain/enums";
-import { ItemState } from "@domain/item";
+import { ItemState, type Item } from "@domain/item";
 
 // This composable never touches the DOM: getCurrentInstance() is null outside
 // a mounted component, so its onMounted(init) is simply skipped (see
@@ -46,9 +46,8 @@ vi.mock("@services/batches", () => ({
   archiveBatch: async (b: unknown) => b as Batch,
 }));
 
-vi.mock("@stores/useItems", () => ({
-  useItemsStore: () => ({ items: [], loaded: true, load: async () => {} }),
-}));
+const itemsFake = { items: [] as Item[], loaded: true, load: async () => {} };
+vi.mock("@stores/useItems", () => ({ useItemsStore: () => itemsFake }));
 
 const metadataFake = {
   values: ref(new Map()),
@@ -61,11 +60,13 @@ const metadataFake = {
   parentGone: ref(new Set<string>()),
   parentMissing: ref(new Set<string>()),
   parentFailed: ref(new Set<string>()),
+  backendLinks: ref(new Map<string, string[] | null>()),
   fields: [],
   ensureItemLoaded: async () => {},
   checkOf: () => null,
   readinessOf: () => "untouched" as const,
   parentsOf: () => ({ records: [], gone: [], missing: [], failed: [], pending: false, linksUnknown: false }),
+  missingParentNamesOf: () => ({ gone: [], notFound: [] }),
   plainValues: () => ({}),
   ensureParents: async () => {},
   ensureParent: async () => {},
@@ -96,6 +97,8 @@ beforeEach(() => {
   metadataFake.parentGone.value = new Set();
   metadataFake.parentMissing.value = new Set();
   metadataFake.parentFailed.value = new Set();
+  itemsFake.items = [];
+  metadataFake.backendLinks.value = new Map();
 });
 
 describe("editable", () => {
@@ -144,10 +147,12 @@ describe("parent rows", () => {
   it("say why a parent is missing before its cached record's own type", () => {
     const batches = useBatchesStore();
     batches.batches = [
-      makeBatch([], {
-        parents: ["gone", "notFound", "failed", "ok"].map((id) => ({ id, passesData: false })),
+      makeBatch(["i1"], {
+        overrides: { i1: { parents: { add: ["gone", "notFound", "failed", "ok"], remove: [], passing: null } } },
       }),
     ];
+    itemsFake.items = [{ id: "i1", batchId: "b1", folderName: "i1", folderPath: "/p/i1", title: null } as unknown as Item];
+    metadataFake.backendLinks.value = new Map([["i1", []]]);
     // The gone parent had loaded before the upload refused it: its record stays cached.
     metadataFake.parentRecords.value = new Map([
       ["gone", record("gone")],
