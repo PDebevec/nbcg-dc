@@ -36,6 +36,7 @@
 import type { ItemType, VisibilityStatus } from "./enums";
 import type { Item } from "./item";
 import type { LocalMetadataFile, RecordMetadata } from "./metadata";
+import { sameParentIds } from "./parent";
 
 // ─── cadence ────────────────────────────────────────────────────────────────
 
@@ -171,6 +172,8 @@ export interface RemoteRecord {
   visibilityStatus: VisibilityStatus | null;
   version: number | null;
   metadata: RecordMetadata;
+  /** The item's parent ids; `undefined`/`null` when the read didn't carry them. */
+  parentIds?: string[] | null;
 }
 
 /**
@@ -193,6 +196,7 @@ export function projectMirror(
     version: resolveVersion(previous?.version ?? null, remote.version),
     targetState: remote.targetState ?? previous?.targetState ?? null,
     visibilityStatus: remote.visibilityStatus ?? previous?.visibilityStatus ?? null,
+    parentIds: remote.parentIds ?? previous?.parentIds ?? null,
     metadata: remote.metadata,
     syncedAt,
   };
@@ -214,6 +218,7 @@ export function mirrorDiffers(
     previous.version !== next.version ||
     (previous.targetState ?? null) !== (next.targetState ?? null) ||
     (previous.visibilityStatus ?? null) !== (next.visibilityStatus ?? null) ||
+    !sameParentIds(previous.parentIds, next.parentIds) ||
     !sameMetadata(previous.metadata, next.metadata)
   );
 }

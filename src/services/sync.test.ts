@@ -150,6 +150,16 @@ describe("hitToRemote", () => {
     expect(() => hitToRemote(hit)).not.toThrow();
     expect(hitToRemote(hit).version).toBe(1);
   });
+
+  it("reads the item's parent ids, with pgsync's null meaning none", () => {
+    const linked = makeHit({ source: { parent_relations: [{ parentId: "p1", parentType: "RECORD" }] } });
+    expect(hitToRemote(linked).parentIds).toEqual(["p1"]);
+    expect(hitToRemote(makeHit({ source: { parent_relations: null } })).parentIds).toEqual([]);
+  });
+
+  it("leaves the parent ids unknown when a trimmed doc lacks them", () => {
+    expect(hitToRemote(makeHit({ source: {} })).parentIds).toBeUndefined();
+  });
 });
 
 describe("syncTracked — scope", () => {
@@ -240,6 +250,26 @@ describe("syncTracked — found records", () => {
     });
     await syncTracked({ deps: h.deps });
     expect(h.records[0].sync.targetState).toBe("RECORD");
+  });
+
+  it("records the item's parent ids from the read", async () => {
+    const h = harness({
+      items: [makeItem()],
+      mirrors: { i1: makeMirror(ORPHAN_MIN_AGE_MS * 2) },
+      fetch: () =>
+        makeHit({
+          source: {
+            visibilityStatus: "PUBLIC",
+            version: 3,
+            metadata: { title: "Gorski vijenac" },
+            parent_relations: [{ parentId: "p1", parentType: "RECORD" }],
+          },
+        }),
+    });
+
+    await syncTracked({ deps: h.deps });
+
+    expect(h.writes[0].mirror.parentIds).toEqual(["p1"]);
   });
 
   it("creates a mirror for an item that has none", async () => {

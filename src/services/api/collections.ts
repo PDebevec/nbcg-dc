@@ -24,7 +24,7 @@ import type { ApiClient } from "./client";
 import type { SearchHit, SearchQuery, SearchType } from "./dto";
 import type { RecordMetadata } from "@domain/metadata";
 import type { ParentRecord } from "@domain/parent";
-import { findById, searchItems } from "./search";
+import { findById, hitToRemote, searchItems } from "./search";
 
 export interface SearchParentsOptions {
   /** Client to use (defaults to the configured backend singleton). Injectable
@@ -107,4 +107,18 @@ export async function getParentById(
     signal: options.signal,
   });
   return hit ? hitToParent(hit) : null;
+}
+
+/**
+ * An item's own parent ids on the backend (`GET /api/search/:id` →
+ * `parent_relations`), or `null` on a `404`. Used once per item whose mirror
+ * predates recording them. pgsync writes `null` for an item with no parents,
+ * which reads as `[]`.
+ */
+export async function getItemParentIds(
+  backendId: string,
+  options: SearchParentsOptions = {},
+): Promise<string[] | null> {
+  const hit = await findById(backendId, { client: options.client, signal: options.signal });
+  return hit ? (hitToRemote(hit).parentIds ?? []) : null;
 }

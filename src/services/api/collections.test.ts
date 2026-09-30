@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { ApiClient, type FetchLike } from "./client";
 import type { SearchHit, SearchResult } from "./dto";
-import { hitToParent, searchParents, getParentById } from "./collections";
+import { hitToParent, searchParents, getParentById, getItemParentIds } from "./collections";
 
 interface Call {
   url: string;
@@ -115,5 +115,25 @@ describe("getParentById", () => {
   it("rethrows non-404 errors", async () => {
     const { client } = harness(() => json({ statusCode: 500 }, 500));
     await expect(getParentById("x", { client })).rejects.toThrow();
+  });
+});
+
+describe("getItemParentIds", () => {
+  it("reads the item's parent ids from its indexed doc", async () => {
+    const { client, calls } = harness(() =>
+      json(hit({ id: "c2", index: "drafts", source: { parent_relations: [{ parentId: "p1", parentType: "RECORD" }] } })),
+    );
+    expect(await getItemParentIds("c2", { client })).toEqual(["p1"]);
+    expect(calls[0].url).toBe("https://api.test/api/search/c2");
+  });
+
+  it("reads pgsync's null as no parents", async () => {
+    const { client } = harness(() => json(hit({ id: "c2", source: { parent_relations: null } })));
+    expect(await getItemParentIds("c2", { client })).toEqual([]);
+  });
+
+  it("is null when the backend says 404", async () => {
+    const { client } = harness(() => json({ statusCode: 404, message: "Item with id \"c2\" not found" }, 404));
+    expect(await getItemParentIds("c2", { client })).toBeNull();
   });
 });

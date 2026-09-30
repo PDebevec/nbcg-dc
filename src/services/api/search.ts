@@ -31,6 +31,7 @@ import { ApiError } from "./client";
 import {
   SEARCH_DEEP_PAGINATION_LIMIT,
   SEARCH_MAX_LIMIT,
+  type IndexedItemSource,
   type SearchHit,
   type SearchIndex,
   type SearchQuery,
@@ -85,7 +86,15 @@ export function hitToRemote(hit: SearchHit): RemoteRecord {
     visibilityStatus: source.visibilityStatus ?? null,
     version: typeof source.version === "number" ? source.version : null,
     metadata: (source.metadata ?? {}) as RecordMetadata,
+    parentIds: parentIdsOf(source),
   };
+}
+
+/** The item's parent ids from its indexed doc. pgsync writes `null` when it has
+ * none; a doc trimmed by `?fields=` lacks the key — not known, so `undefined`. */
+function parentIdsOf(source: IndexedItemSource): string[] | undefined {
+  if (!("parent_relations" in source)) return undefined;
+  return (source.parent_relations ?? []).map((r) => r.parentId);
 }
 
 /**

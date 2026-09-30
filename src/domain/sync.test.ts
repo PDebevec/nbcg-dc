@@ -222,9 +222,19 @@ describe("projectMirror", () => {
       version: 3,
       targetState: "RECORD",
       visibilityStatus: "PUBLIC",
+      parentIds: null,
       metadata: { title: "Gorski vijenac" },
       syncedAt: "T",
     });
+  });
+
+  it("takes the item's parent ids from the read", () => {
+    const next = projectMirror(mirror({ parentIds: ["old"] }), remote({ parentIds: ["p1"] }), "T");
+    expect(next.parentIds).toEqual(["p1"]);
+  });
+
+  it("keeps the previous parent ids when the read didn't carry them", () => {
+    expect(projectMirror(mirror({ parentIds: ["p1"] }), remote(), "T").parentIds).toEqual(["p1"]);
   });
 });
 
@@ -284,6 +294,16 @@ describe("mirrorDiffers", () => {
     expect(
       mirrorDiffers(mirror({ metadata: { a: 1 } }), mirror({ metadata: { a: undefined } })),
     ).toBe(true);
+  });
+
+  it("detects a parent change, but not a reordering", () => {
+    expect(mirrorDiffers(mirror({ parentIds: ["p1"] }), mirror({ parentIds: ["p2"] }))).toBe(true);
+    expect(mirrorDiffers(mirror({ parentIds: ["p1", "p2"] }), mirror({ parentIds: ["p2", "p1"] }))).toBe(false);
+  });
+
+  it("does not count a missing list against an unknown one — or every old mirror is rewritten", () => {
+    expect(mirrorDiffers(mirror(), mirror({ parentIds: null }))).toBe(false);
+    expect(mirrorDiffers(mirror(), mirror({ parentIds: [] }))).toBe(true);
   });
 });
 
