@@ -633,7 +633,11 @@ async function finishUpload(
   // A per-parent failure doesn't undo the upload: it is reported, and keeps the
   // batch open so the next upload retries it (`uploadBatch`).
   const connected = await connectParents(backendId, plan.connect, deps);
-  const disconnected = links.mayUnlink
+  // Only unlink once every link succeeded: a failed link (403, an exhausted
+  // retry, network) must leave the item's old parents in place — otherwise it
+  // passes through a state with no serial at all — so the next upload retries
+  // both the link and the unlink together.
+  const disconnected = links.mayUnlink && connected.errors.length === 0
     ? await disconnectParents(backendId, plan.disconnect, deps)
     : { errors: [] as RelationError[], states: [] as RelationWriteResult[], unlinked: [] as string[] };
   const states = [...connected.states, ...disconnected.states];

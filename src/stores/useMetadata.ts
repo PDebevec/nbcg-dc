@@ -133,9 +133,8 @@ export const useMetadataStore = defineStore("metadata", () => {
   /** Each loaded item's backend links, from its mirror: `[]` before its first
    * upload, `null` while not known (a mirror from before they were kept). */
   const backendLinks = ref<Map<string, string[] | null>>(new Map());
-  /** Items whose backend links are being read / couldn't be read. */
+  /** Items whose backend links are being read. */
   const linksLoading = ref<Set<string>>(new Set());
-  const linksFailed = ref<Set<string>>(new Set());
   const linkPromises = new Map<string, Promise<void>>();
 
   /** The last-read `metadata.json` per item (null = none on disk). Not reactive:
@@ -405,7 +404,6 @@ export const useMetadataStore = defineStore("metadata", () => {
     saving.value = keepSet(saving.value);
     backendLinks.value = keep(backendLinks.value);
     linksLoading.value = keepSet(linksLoading.value);
-    linksFailed.value = keepSet(linksFailed.value);
   }
 
   // ── the save check + readiness ───────────────────────────────────────────
@@ -462,10 +460,7 @@ export const useMetadataStore = defineStore("metadata", () => {
       linksLoading.value = new Set(linksLoading.value).add(item.id);
       try {
         const ids = await getItemParentIds(backendId);
-        if (ids === null) {
-          linksFailed.value = new Set(linksFailed.value).add(item.id);
-          return;
-        }
+        if (ids === null) return;
         const fresh = (await readItemMetadata(item)) ?? mirror;
         if (fresh.backendId !== backendId) {
           rememberMirror(item.id, fresh);
@@ -473,7 +468,6 @@ export const useMetadataStore = defineStore("metadata", () => {
         }
         const next: LocalMetadataFile = { ...fresh, parentIds: ids };
         rememberMirror(item.id, next);
-        linksFailed.value = without(linksFailed.value, item.id);
         try {
           await writeItemMetadata(item, next);
         } catch (err) {
@@ -481,7 +475,6 @@ export const useMetadataStore = defineStore("metadata", () => {
         }
       } catch (err) {
         logger.warn("metadata", `Couldn't read the parent links of ${item.id}.`, err);
-        linksFailed.value = new Set(linksFailed.value).add(item.id);
       } finally {
         linksLoading.value = without(linksLoading.value, item.id);
         linkPromises.delete(item.id);
@@ -500,7 +493,6 @@ export const useMetadataStore = defineStore("metadata", () => {
 
   /** Try again after the item's links or one of its parents failed to load. */
   function retryItemParents(item: Item): Promise<void> {
-    linksFailed.value = without(linksFailed.value, item.id);
     return ensureItemParents(item);
   }
 

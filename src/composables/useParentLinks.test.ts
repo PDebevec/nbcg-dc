@@ -113,6 +113,15 @@ describe("rows for one item (Metadata)", () => {
     });
     expect(links.parents.value.map((p) => [p.id, p.status])).toEqual([["p1", "unlinking"]]);
   });
+
+  it("shows only the pending links while the item's backend links are unknown", () => {
+    const { links } = setup({
+      targets: ["i1"],
+      changes: { i1: { parents: { add: ["p9"], remove: [], passing: null } } },
+    });
+    metadataFake.backendLinks.value = new Map([["i1", null]]);
+    expect(links.parents.value.map((p) => [p.id, p.status])).toEqual([["p9", "new"]]);
+  });
 });
 
 describe("editing one item", () => {

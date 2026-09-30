@@ -108,7 +108,7 @@ export type ItemRunStatus = (typeof ItemRunStatus)[keyof typeof ItemRunStatus];
 export interface BatchParentRef {
   /** Backend `Draft`/`Record` id of the parent. */
   id: string;
-  /** Whether this parent's shared fields copy down to the batch's items. */
+  /** Whether this parent passed its shared fields down (legacy; per item since schema v5). */
   passesData: boolean;
 }
 

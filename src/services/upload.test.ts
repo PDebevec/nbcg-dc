@@ -1333,6 +1333,19 @@ describe("uploadItem — parent links on a re-upload", () => {
     expect(recorded.every((ids: string[] | null) => ids?.includes("p1"))).toBe(true);
   });
 
+  it("keeps the old parent when the new one fails to link — nothing is unlinked", async () => {
+    const deps = fakeDeps({
+      readMirror: vi.fn(async () => MIRROR),
+      connectParent: vi.fn(async () => {
+        throw apiError("forbidden", 403);
+      }),
+    });
+    const res = await uploadItem(reupload(), ctx(["p9"], ["p1"]), deps);
+    expect(res.status).toBe("uploaded");
+    expect(res.relationErrors).toEqual([{ parentId: "p9", message: expect.any(String), action: "link" }]);
+    expect(deps.disconnectParent).not.toHaveBeenCalled();
+  });
+
   it("adopts an unlinked parent's new version", async () => {
     const parentItem = makeItem({ id: "parent-item", folderPath: "/parent", backendId: "p1" });
     const parentMirror: LocalMetadataFile = { ...MIRROR, backendId: "p1", version: 3, parentIds: [] };
