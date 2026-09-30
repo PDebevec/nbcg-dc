@@ -200,7 +200,7 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
     current.value ? (allValues.value.get(current.value.id) ?? {}) : {},
   );
   /** Whose rules apply to the current item and what they still need; null
-   * while the schema or the batch's parents are still loading. */
+   * while the schema or the item's parents are still loading. */
   const check = computed<ItemCheck | null>(() =>
     current.value ? metadata.checkOf(current.value) : null,
   );
@@ -355,8 +355,9 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
     return c ? metadata.retryItemParents(c) : Promise.resolve();
   }
 
-  /** One banner when a batch parent is not on the backend (it blocks every
-   * item): "no longer exists" once an upload was refused, else "can't be found". */
+  /** One banner when one of the item's parents is not on the backend (it
+   * blocks the upload): "no longer exists" once an upload was refused, else
+   * "can't be found". */
   const parentBanner = computed(() => {
     const c = current.value;
     return c ? missingParentNote(metadata.missingParentNamesOf(c)) : "";

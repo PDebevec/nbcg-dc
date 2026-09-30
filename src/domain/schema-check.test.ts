@@ -82,7 +82,7 @@ describe("firstIncompleteIndex", () => {
 });
 
 describe("itemRole", () => {
-  it("reads what the batch's parents make the item", () => {
+  it("reads what the item's parents make it", () => {
     const base = { title: "T", materialType: BOOK };
     expect(itemRole(check(base))).toEqual({ role: "standalone", label: "Standalone record" });
     expect(itemRole(check(base, { parents: [{ collectionType: 3 }] }))).toEqual({ role: "child", label: "In a collection" });

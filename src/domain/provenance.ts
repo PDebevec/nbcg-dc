@@ -327,14 +327,14 @@ export function stillToFill(
 export type IngestionCase = 1 | 2 | 3 | 4;
 
 export interface CaseRouteInput {
-  /** `collectionType` of each of the batch's parents ([] when it has none). */
+  /** `collectionType` of each of the item's parents ([] when it has none). */
   parentCollectionTypes: readonly number[];
   /** Whether a COBISS ID is set (per item, or the batch prefill). */
   hasCobissId: boolean;
 }
 
 /**
- * Route to the ingestion case from the batch's parents + COBISS presence:
+ * Route to the ingestion case from the item's parents + COBISS presence:
  *  1. No COBISS, no serial parent → fill manually;
  *  2. No parent · COBISS          → COBISS prefill;
  *  3. A parent · COBISS           → COBISS prefill (same as 2);

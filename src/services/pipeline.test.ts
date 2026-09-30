@@ -64,7 +64,6 @@ function makeBatch(itemIds: string[]): Batch {
     running: false,
     proc,
     cobissId: null,
-    parents: [],
     publish: PublishTarget.DRAFT,
     visibility: VisibilityStatus.PRIVATE,
     overrides: {},

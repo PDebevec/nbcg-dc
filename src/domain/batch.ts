@@ -101,10 +101,9 @@ export const ItemRunStatus = {
 export type ItemRunStatus = (typeof ItemRunStatus)[keyof typeof ItemRunStatus];
 
 /**
- * A parent record linked to the batch at Setup. Minimal here — Epic 05 owns the
- * rich parent model (name, `collectionType`, data-passing eligibility). Among
- * eligible parents exactly one `passesData` at a time (invariant enforced in
- * Epic 05); the flag is persisted per parent.
+ * Legacy: the batch-wide parent list before per-item links. Schema v5 moved it
+ * onto each item (`BatchItemOverride.parents`); kept only for the IPC shape of
+ * the old column.
  */
 export interface BatchParentRef {
   /** Backend `Draft`/`Record` id of the parent. */
@@ -180,8 +179,6 @@ export interface Batch {
   proc: Record<string, ItemRunStatus>;
   /** Batch-wide COBISS prefill id, or null. */
   cobissId: string | null;
-  /** Parents linked at Setup (Epic 05 fleshes out). */
-  parents: BatchParentRef[];
   /** Batch default publish target (each item may override). */
   publish: PublishTarget;
   /** Batch default visibility (each item may override). */
@@ -599,7 +596,7 @@ export function settleStageAfterRun(batch: Batch): BatchStage {
 
 /**
  * Build the create payload from {@link CreateBatchInput}, applying defaults:
- * initial stage from type+count, all items `idle`, no parents/overrides, and
+ * initial stage from type+count, all items `idle`, no overrides, and
  * the conservative publish/visibility defaults unless overridden.
  */
 export function newBatchFields(input: CreateBatchInput): NewBatchFields {
@@ -612,7 +609,6 @@ export function newBatchFields(input: CreateBatchInput): NewBatchFields {
     running: false,
     proc,
     cobissId: input.cobissId ?? null,
-    parents: [],
     publish: input.publish ?? DEFAULT_BATCH_PUBLISH,
     visibility: input.visibility ?? DEFAULT_BATCH_VISIBILITY,
     overrides: {},

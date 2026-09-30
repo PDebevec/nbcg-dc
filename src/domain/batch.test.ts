@@ -57,7 +57,6 @@ function makeBatch(overrides: Partial<Batch> = {}): Batch {
     running: false,
     proc,
     cobissId: null,
-    parents: [],
     publish: PublishTarget.DRAFT,
     visibility: VisibilityStatus.PRIVATE,
     overrides: {},
@@ -424,7 +423,7 @@ describe("newBatchFields — create defaults", () => {
     expect(f.running).toBe(false);
     expect(f.proc).toEqual({ a: ItemRunStatus.Idle, b: ItemRunStatus.Idle });
     expect(f.cobissId).toBeNull();
-    expect(f.parents).toEqual([]);
+    expect(f).not.toHaveProperty("parents"); // parents are per item now (overrides[item].parents)
     expect(f.overrides).toEqual({});
     expect(f.publish).toBe(PublishTarget.DRAFT);
     expect(f.visibility).toBe(VisibilityStatus.PRIVATE);

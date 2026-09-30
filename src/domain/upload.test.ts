@@ -545,7 +545,7 @@ describe("upload request chunking (backend caps files per request)", () => {
 });
 
 describe("missing parents", () => {
-  it("blocks every item while a batch parent can't be found", () => {
+  it("blocks an item while one of its parents can't be found", () => {
     const blockers = uploadBlockers(makeItem(), {
       metadataReady: true,
       primaryThumbnail: null,

@@ -20,7 +20,6 @@ function makeBatch(itemIds: string[], over: Partial<Batch> = {}): Batch {
     running: false,
     proc,
     cobissId: null,
-    parents: [],
     publish: PublishTarget.DRAFT,
     visibility: VisibilityStatus.PRIVATE,
     overrides: {},

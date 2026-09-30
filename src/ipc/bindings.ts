@@ -304,7 +304,10 @@ export interface BatchDto {
   /** Per-item run outcome, keyed by item id. */
   proc: Record<string, ItemRunStatus>;
   cobissId: string | null;
-  parents: BatchParentRef[];
+  /** Legacy batch-wide parents — always `[]` since schema v5 (per-item links
+   * live in `overrides[item].parents`). Nothing reads it; the native side
+   * defaults it. */
+  parents?: BatchParentRef[];
   publish: PublishTarget;
   visibility: VisibilityStatus;
   overrides: Record<string, BatchItemOverride>;

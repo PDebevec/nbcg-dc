@@ -3,7 +3,7 @@
  *
  * It runs the backend's own check (`checkMetadata`) on exactly what an upload
  * would send, plus a format check the backend does separately (numbers, dates,
- * quantities). The rules see the item's batch's parents and whose rules apply:
+ * quantities). The rules see the item's parents and whose rules apply:
  * a new item is checked against its Draft/Record choice; an item already on the
  * backend against the state it has there — the backend checks every edit
  * against the current state, and the app never moves an item between the two.
@@ -28,7 +28,7 @@ export interface ItemCheckInput {
   schema: RecordSchemaV2;
   /** The editor's values (plain). */
   values: Record<string, unknown>;
-  /** The metadata of the batch's parents. */
+  /** The metadata of the item's parents. */
   parents: ReadonlyArray<Record<string, unknown>>;
   /** The item's state on the backend; null until its first upload. */
   backendState: TargetState | null;
@@ -117,7 +117,7 @@ export function firstIncompleteIndex(readinesses: readonly ItemReadiness[]): num
   return readinesses.findIndex((r) => r !== "ready");
 }
 
-/** What the batch's parents make the item — shown in the navigator. */
+/** What the item's parents make it — shown in the navigator. */
 export function itemRole(check: ItemCheck | null): { role: "standalone" | "child" | "issue"; label: string } {
   const raw = check?.context.parentCollectionType;
   const types = Array.isArray(raw) ? raw : [];

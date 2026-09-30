@@ -505,8 +505,9 @@ export const useMetadataStore = defineStore("metadata", () => {
   }
 
   /** Whose rules apply to the item and what they still need — null while the
-   * schema or a batch parent is still loading. A parent that failed to load
-   * does not hold the form back: the rules run with the parents that did. */
+   * schema or one of the item's parents is still loading. A parent that failed
+   * to load does not hold the form back: the rules run with the parents that
+   * did. */
   function checkOf(item: Item): ItemCheck | null {
     const s = schema.value;
     if (!s) return null;
@@ -522,7 +523,8 @@ export const useMetadataStore = defineStore("metadata", () => {
     });
   }
 
-  /** Ready to upload: the check passes and every batch parent loaded. */
+  /** Ready to upload: the check passes and every one of the item's parents
+   * loaded — its own links too. */
   function isReady(item: Item): boolean {
     const check = checkOf(item);
     if (check == null || !check.ok) return false;
@@ -530,7 +532,7 @@ export const useMetadataStore = defineStore("metadata", () => {
     return !parents.linksUnknown && parents.gone.length === 0 && parents.missing.length === 0 && parents.failed.length === 0;
   }
 
-  /** Names of the item's batch parents that are not on the backend: gone
+  /** Names of the item's parents that are not on the backend: gone
    * (refused on an upload) and not found (search 404). Either blocks. */
   function missingParentNamesOf(item: Item): MissingParentNames {
     const parents = parentsOf(item);

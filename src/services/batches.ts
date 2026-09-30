@@ -43,7 +43,6 @@ function toBatch(dto: BatchDto): Batch {
     running: dto.running,
     proc,
     cobissId: dto.cobissId ?? null,
-    parents: dto.parents ?? [],
     publish: dto.publish,
     visibility: dto.visibility,
     overrides: dto.overrides ?? {},

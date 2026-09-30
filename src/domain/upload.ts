@@ -68,7 +68,7 @@ export type UploadBlockerCode =
    * with no files** on the live website. Verified 2026-08-07.
    */
   | "no-assets"
-  /** A batch parent is not on the backend (search 404, or refused on upload). */
+  /** One of the item's parents is not on the backend (search 404, or refused on upload). */
   | "parent-missing";
 
 /** A soft reason to warn before uploading (does not block — the operator may
