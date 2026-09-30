@@ -485,6 +485,20 @@ pub struct BatchParentRef {
     pub passes_data: bool,
 }
 
+/// One item's unsent parent-link changes in a batch — links are per item
+/// (docs/superpowers/specs/2026-09-29-per-item-parents-design.md). Passed
+/// through opaquely: the TS side owns the rules.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParentChanges {
+    #[serde(default)]
+    pub add: Vec<String>,
+    #[serde(default)]
+    pub remove: Vec<String>,
+    #[serde(default)]
+    pub passing: Option<String>,
+}
+
 /// A per-item override of the batch's publish/visibility defaults.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -497,6 +511,9 @@ pub struct BatchItemOverride {
     pub content_kind: Option<ContentKind>,
     #[serde(default)]
     pub split_spreads: Option<bool>,
+    /// This item's unsent parent-link changes; `None` = none.
+    #[serde(default)]
+    pub parents: Option<ParentChanges>,
 }
 
 /// One batch row. Local-only working state — never sent to the backend.
@@ -515,6 +532,9 @@ pub struct BatchDto {
     pub running: bool,
     pub proc: HashMap<String, ItemRunStatus>,
     pub cobiss_id: Option<String>,
+    /// Legacy batch-wide parents: always empty since schema v5, which moved
+    /// them onto each member's `overrides[item].parents`. Kept for the column.
+    #[serde(default)]
     pub parents: Vec<BatchParentRef>,
     pub publish: ItemType,
     pub visibility: VisibilityStatus,
@@ -540,6 +560,9 @@ pub struct BatchCreateDto {
     pub running: bool,
     pub proc: HashMap<String, ItemRunStatus>,
     pub cobiss_id: Option<String>,
+    /// Legacy batch-wide parents: always empty since schema v5, which moved
+    /// them onto each member's `overrides[item].parents`. Kept for the column.
+    #[serde(default)]
     pub parents: Vec<BatchParentRef>,
     pub publish: ItemType,
     pub visibility: VisibilityStatus,
@@ -741,6 +764,10 @@ pub struct LocalMetadataFile {
     pub target_state: Option<ItemType>,
     #[serde(default)]
     pub visibility_status: Option<VisibilityStatus>,
+    /// The parent ids the backend is known to have for this item; `None` =
+    /// not recorded yet (a mirror written before this field existed).
+    #[serde(default)]
+    pub parent_ids: Option<Vec<String>>,
     pub metadata: serde_json::Value,
     pub synced_at: String,
 }

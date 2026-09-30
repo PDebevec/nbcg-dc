@@ -104,6 +104,7 @@ fn create_round_trips_parents_overrides_and_proc() {
             visibility: Some(VisibilityStatus::Hidden),
             content_kind: Some(ContentKind::Book),
             split_spreads: Some(true),
+            parents: None,
         },
     )]);
 
@@ -378,4 +379,48 @@ fn update_never_clears_the_backend_mark() {
         saved.backend_touched_at.is_some(),
         "a stale update re-enabled Delete"
     );
+}
+
+#[test]
+fn an_items_parent_changes_round_trip_through_the_overrides() {
+    let db = db_with_items(&["A"]);
+    let a = item_id_for("A");
+    let changes = ParentChanges {
+        add: vec!["p9".into()],
+        remove: vec!["p1".into()],
+        passing: Some("p9".into()),
+    };
+    let mut fields = batch_over(&[&a]);
+    fields.overrides = HashMap::from([(
+        a.clone(),
+        BatchItemOverride {
+            parents: Some(changes.clone()),
+            ..Default::default()
+        },
+    )]);
+
+    let created = db.transaction(|t| batches::create(t, &fields)).unwrap();
+    let reread = db.with(|c| batches::get(c, &created.id)).unwrap();
+
+    assert_eq!(reread.overrides[&a].parents, Some(changes));
+}
+
+#[test]
+fn a_batch_payload_without_the_batch_wide_parents_still_parses() {
+    let json = serde_json::json!({
+        "type": "to-process",
+        "itemIds": ["a"],
+        "stage": "setup",
+        "running": false,
+        "proc": {},
+        "cobissId": null,
+        "publish": "DRAFT",
+        "visibility": "PRIVATE",
+        "overrides": { "a": { "parents": { "add": ["p1"], "remove": [], "passing": null } } }
+    });
+
+    let fields: BatchCreateDto = serde_json::from_value(json).expect("parse");
+
+    assert!(fields.parents.is_empty());
+    assert_eq!(fields.overrides["a"].parents.as_ref().map(|p| p.add.clone()), Some(vec!["p1".to_string()]));
 }

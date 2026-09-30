@@ -131,6 +131,7 @@ fn an_item_survives_the_whole_lifecycle() {
             version: Some(1),
             target_state: Some(ItemType::Record),
             visibility_status: Some(VisibilityStatus::Public),
+            parent_ids: None,
             metadata: serde_json::json!({ "title": "Gorski vijenac" }),
             synced_at: "2026-08-12T12:00:00.000Z".into(),
         },

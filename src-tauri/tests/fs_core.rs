@@ -467,6 +467,36 @@ fn reading_an_absent_mirror_is_none() {
     assert!(fs::read_metadata(&dir).unwrap().is_none());
 }
 
+#[test]
+fn the_mirror_round_trips_its_parent_ids() {
+    let root = TempDir::new().unwrap();
+    let dir = make_item_dir(root.path(), "BOOK", &[]);
+    let mirror = LocalMetadataFile {
+        parent_ids: Some(vec!["c5u91tqfdyu5lzc8ltn17zpfp".into()]),
+        ..metadata_mirror(Some("rec-1"), "A title")
+    };
+
+    fs::write_metadata(&dir, &mirror).unwrap();
+
+    assert_eq!(fs::read_metadata(&dir).unwrap().expect("mirror"), mirror);
+}
+
+#[test]
+fn a_mirror_written_before_parent_ids_still_reads() {
+    let root = TempDir::new().unwrap();
+    let dir = make_item_dir(root.path(), "BOOK", &[]);
+    std::fs::write(
+        dir.join("metadata.json"),
+        r#"{"backendId":"rec-1","version":2,"metadata":{"title":"t"},"syncedAt":"2026-08-12T10:00:00.000Z"}"#,
+    )
+    .unwrap();
+
+    let read = fs::read_metadata(&dir).unwrap().expect("mirror");
+
+    assert_eq!(read.parent_ids, None);
+    assert_eq!(read.backend_id.as_deref(), Some("rec-1"));
+}
+
 // ─── finalizing job-runner outputs (Epic 06) ────────────────────────────────
 
 #[test]

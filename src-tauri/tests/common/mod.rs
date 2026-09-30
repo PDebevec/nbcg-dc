@@ -133,6 +133,7 @@ pub fn metadata_mirror(backend_id: Option<&str>, title: &str) -> LocalMetadataFi
         version: Some(2),
         target_state: Some(ItemType::Draft),
         visibility_status: Some(VisibilityStatus::Private),
+        parent_ids: None,
         metadata: serde_json::json!({ "title": title, "collectionType": 0 }),
         synced_at: "2026-08-12T10:00:00.000Z".to_string(),
     }
