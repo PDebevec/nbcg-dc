@@ -210,6 +210,26 @@ describe("useMetadataStore on schema v2", () => {
     expect(store.wireMetadata("i1")).toEqual({ collectionType: 0, title: "T" });
   });
 
+  it("lists what a parent would replace, comparing its values normalised", async () => {
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    store.setFieldValue("i1", "language", [{ code: "cnr", en: "cnr", cnr: "cnr" }]);
+    store.setFieldValue("i1", "subtitle", "Mine");
+    const pobjeda = { id: "p1", title: "Pobjeda", collectionType: 4, metadata: { language: ["cnr"], subtitle: "Dnevni list" } };
+    expect(store.parentOverwritesFor("i1", pobjeda).map((c) => c.key)).toEqual(["subtitle"]);
+  });
+
+  it("replaces filled-in fields with a parent's when asked to overwrite", async () => {
+    const store = useMetadataStore();
+    await store.ensureItemLoaded(item());
+    store.setFieldValue("i1", "subtitle", "Mine");
+    const pobjeda = { id: "p1", title: "Pobjeda", collectionType: 4, metadata: { subtitle: "Dnevni list" } };
+    store.applyParentTo("i1", pobjeda);
+    expect(store.plainValues("i1").subtitle).toBe("Mine");
+    store.applyParentTo("i1", pobjeda, "overwrite-all");
+    expect(store.plainValues("i1").subtitle).toBe("Dnevni list");
+  });
+
   it("normalises a COBISS record's bare codes on the way in", async () => {
     const store = useMetadataStore();
     await store.ensureItemLoaded(item());

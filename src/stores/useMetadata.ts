@@ -40,9 +40,12 @@ import {
   applyParentFields,
   chooseFieldSource,
   flattenValues,
+  parentOverwrites,
   toMetadataValues,
+  type ApplyMode,
   type ApplyParentResult,
   type CobissApplyMode,
+  type OverwriteConflict,
   type FieldSourceOption,
   type FillOutcome,
 } from "@domain/provenance";
@@ -554,15 +557,23 @@ export const useMetadataStore = defineStore("metadata", () => {
     return outcome;
   }
 
-  /** Copy a data-passing parent's inheritable fields into an item's empties. */
-  function applyParentTo(itemId: string, parent: ParentRecord): ApplyParentResult {
+  /** A parent with its metadata in the stored shape the item's values have. */
+  function normalisedParent(s: RecordSchemaV2, parent: ParentRecord): ParentRecord {
+    return { ...parent, metadata: normalizeRecord(s, parent.metadata) as ParentRecord["metadata"] };
+  }
+
+  /** The item's filled-in fields a data-passing parent would change. */
+  function parentOverwritesFor(itemId: string, parent: ParentRecord): OverwriteConflict[] {
+    const s = schema.value;
+    return s ? parentOverwrites(getValues(itemId), normalisedParent(s, parent), fields.value) : [];
+  }
+
+  /** Copy a data-passing parent's inheritable fields into an item: its empty
+   * fields, or with `overwrite-all` the filled-in ones too. */
+  function applyParentTo(itemId: string, parent: ParentRecord, mode: ApplyMode = "fill-empty"): ApplyParentResult {
     const s = schema.value;
     if (!s) return { values: getValues(itemId), conflicts: [], applied: [], skipped: [], stillToFill: [] };
-    const normalised: ParentRecord = {
-      ...parent,
-      metadata: normalizeRecord(s, parent.metadata) as ParentRecord["metadata"],
-    };
-    const outcome = applyParentFields(getValues(itemId), normalised, fields.value);
+    const outcome = applyParentFields(getValues(itemId), normalisedParent(s, parent), fields.value, mode);
     if (outcome.applied.length > 0) setValues(itemId, outcome.values);
     return outcome;
   }
@@ -710,6 +721,7 @@ export const useMetadataStore = defineStore("metadata", () => {
     // prefill
     applyCobissTo,
     applyParentTo,
+    parentOverwritesFor,
     chooseSource,
     // parents
     backendLinks,

@@ -14,8 +14,10 @@
  *    the "Overwrite all" vs "Keep mine, fill empties" prompt), applied only in
  *    `overwrite-all`;
  *  - a **machine** field (`cobiss`/`parent`) is overwritten only when the incoming
- *    source outranks it: **COBISS wins over a parent copy**, a parent copy never
- *    clobbers an existing value.
+ *    source outranks it: **COBISS wins over a parent copy**.
+ *  - a parent copy fills empty fields; it replaces filled-in ones (any
+ *    provenance) only when the operator chooses Overwrite in the prompt that
+ *    lists them ({@link parentOverwrites}).
  *
  * That single rule expresses both flows the docs describe: at Setup a parent
  * fills empties then COBISS overrides the parent copies (no user values exist
@@ -66,6 +68,34 @@ function passedValue(parent: ParentRecord, field: ProvenanceField): unknown {
   const out: Plain = {};
   for (const key of keys) if (!isEmpty(value[key])) out[key] = value[key];
   return out;
+}
+
+/** The same value: key order and empty sub-values don't matter. */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((x, i) => sameValue(x, b[i]));
+  }
+  if (isPlainObject(a) && isPlainObject(b)) {
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+    return [...keys].every((k) => (isEmpty(a[k]) && isEmpty(b[k])) || sameValue(a[k], b[k]));
+  }
+  return false;
+}
+
+/** The part of `current` a parent's `incoming` would replace: for an object,
+ * the passed sub-fields it already holds differently (null when none); else
+ * `current` itself when it is filled in and differs. */
+function replacedPart(field: ProvenanceField, current: unknown, incoming: unknown): unknown {
+  if (isEmpty(current)) return null;
+  if (passedSubKeys(field) && isPlainObject(incoming) && isPlainObject(current)) {
+    const held: Plain = {};
+    for (const [key, value] of Object.entries(incoming)) {
+      if (!isEmpty(current[key]) && !sameValue(current[key], value)) held[key] = current[key];
+    }
+    return Object.keys(held).length > 0 ? held : null;
+  }
+  return sameValue(current, incoming) ? null : current;
 }
 
 /** A parent's value written into the field: an object's passed sub-fields go
@@ -235,16 +265,41 @@ export interface ApplyParentResult extends FillOutcome {
 }
 
 /**
+ * The item's filled-in fields `parent` would change — a different value, or
+ * for an object a passed sub-field held differently — whoever filled them in.
+ * What the parent copy prompt lists; `currentValue` is the part replaced.
+ */
+export function parentOverwrites(
+  current: MetadataValues,
+  parent: ParentRecord,
+  fields: readonly ProvenanceField[],
+): OverwriteConflict[] {
+  const incoming = parentInheritableValues(parent, fields);
+  const out: OverwriteConflict[] = [];
+  for (const field of fields) {
+    const next = incoming[field.key];
+    if (!next) continue;
+    const replaced = replacedPart(field, current[field.key]?.value, next.value);
+    if (replaced === null) continue;
+    out.push({ key: field.key, currentValue: replaced, incomingValue: next.value, incomingProvenance: "parent" });
+  }
+  return out;
+}
+
+/**
  * Copy a data-passing parent's shared (inheritable, non-issue) fields into the
- * item's **empty** matching fields (provenance `parent`); an object field gets
- * its empty sub-fields filled and keeps the rest. A parent copy never
- * overwrites an existing value — so there are no conflicts — and per-issue
- * fields are intentionally left for the operator ({@link stillToFill}).
+ * item (provenance `parent`). `fill-empty` fills only **empty** fields — an
+ * object field gets its empty sub-fields filled and keeps the rest — so it
+ * raises no conflicts; `overwrite-all` also replaces what
+ * {@link parentOverwrites} lists, keeping an object's other sub-fields. The
+ * operator picks the mode in the prompt. Per-issue fields are left for the
+ * operator ({@link stillToFill}).
  */
 export function applyParentFields(
   current: MetadataValues,
   parent: ParentRecord,
   fields: readonly ProvenanceField[],
+  mode: ApplyMode = "fill-empty",
 ): ApplyParentResult {
   const incoming = parentInheritableValues(parent, fields);
   const values: MetadataValues = { ...current };
@@ -256,6 +311,19 @@ export function applyParentFields(
     const existing = values[field.key];
     if (!existing || isEmpty(existing.value)) {
       values[field.key] = { ...next };
+      applied.push(field.key);
+      continue;
+    }
+    if (mode === "overwrite-all" && replacedPart(field, existing.value, next.value) !== null) {
+      // An object keeps its other sub-fields, and with them who filled it in;
+      // a parent's own copy now comes from this parent.
+      values[field.key] = passedSubKeys(field)
+        ? {
+            ...existing,
+            value: overPassedPart(field, existing.value, next.value),
+            ...(existing.provenance === "parent" ? { sourceParentId: parent.id } : {}),
+          }
+        : { ...next };
       applied.push(field.key);
       continue;
     }
@@ -284,8 +352,12 @@ export function applySerialParent(
   return applyParentFields(current, parent, fields);
 }
 
+/** How an incoming source treats filled-in fields, as the operator chose in a
+ * prompt: keep them and fill only the empty ones, or overwrite them too. */
+export type ApplyMode = "fill-empty" | "overwrite-all";
+
 /** The prompt options the UI offers when COBISS would overwrite user edits. */
-export type CobissApplyMode = "fill-empty" | "overwrite-all";
+export type CobissApplyMode = ApplyMode;
 
 /**
  * Apply a COBISS preview record onto the item's values (provenance `cobiss`).

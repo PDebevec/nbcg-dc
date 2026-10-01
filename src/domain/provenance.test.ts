@@ -7,6 +7,7 @@ import {
   parentInheritableValues,
   cobissValues,
   applyParentFields,
+  parentOverwrites,
   applySerialParent,
   applyCobiss,
   fieldSourceOptions,
@@ -89,6 +90,42 @@ describe("applyParentFields", () => {
   });
 });
 
+describe("a parent replacing values the item already has", () => {
+  const p = parent({ id: "p1", metadata: { serialTitle: "Pobjeda", publisher: "NBCG", place: "Cetinje" } });
+
+  it("lists the filled-in fields whose value it would change, whoever filled them in", () => {
+    const current: MetadataValues = {
+      serialTitle: { value: "Dan", provenance: "user" },
+      publisher: { value: "Other", provenance: "parent", sourceParentId: "p0" },
+      place: { value: "Cetinje", provenance: "cobiss" }, // the same value: nothing to replace
+    };
+    expect(parentOverwrites(current, p, FIELDS)).toEqual([
+      { key: "serialTitle", currentValue: "Dan", incomingValue: "Pobjeda", incomingProvenance: "parent" },
+      { key: "publisher", currentValue: "Other", incomingValue: "NBCG", incomingProvenance: "parent" },
+    ]);
+  });
+
+  it("treats a code list in another key order as the same value", () => {
+    const lang = fieldV2({ key: "language", parentInheritable: true });
+    const withLanguage = parent({ id: "p1", metadata: { language: [{ code: "cnr", en: "Montenegrin", cnr: "Crnogorski" }] } });
+    const current: MetadataValues = {
+      language: { value: [{ cnr: "Crnogorski", code: "cnr", en: "Montenegrin" }], provenance: "user" },
+    };
+    expect(parentOverwrites(current, withLanguage, [lang])).toEqual([]);
+  });
+
+  it("replaces them in overwrite-all mode, and fills the empty ones too", () => {
+    const current: MetadataValues = {
+      serialTitle: { value: "Dan", provenance: "user" },
+      publisher: { value: "Other", provenance: "parent", sourceParentId: "p0" },
+    };
+    const result = applyParentFields(current, p, FIELDS, "overwrite-all");
+    expect(result.values.serialTitle).toEqual({ value: "Pobjeda", provenance: "parent", sourceParentId: "p1" });
+    expect(result.values.publisher).toEqual({ value: "NBCG", provenance: "parent", sourceParentId: "p1" });
+    expect(result.values.place?.value).toBe("Cetinje");
+  });
+});
+
 describe("an object field a parent passes in part (publication)", () => {
   const publication = fieldV2({
     key: "publication",
@@ -121,6 +158,25 @@ describe("an object field a parent passes in part (publication)", () => {
     const result = applyParentFields(current, obod, [publication]);
     expect(result.values.publication?.value).toEqual({ year: "1950", place: "Cetinje", publisher: "Obod" });
     expect(result.applied).toEqual(["publication"]);
+  });
+
+  it("counts only a passed sub-field held differently as replaced, and overwriting keeps the year", () => {
+    const yearOnly: MetadataValues = { publication: { value: { year: "1950" }, provenance: "user" } };
+    expect(parentOverwrites(yearOnly, obod, [publication])).toEqual([]);
+
+    const current: MetadataValues = {
+      publication: { value: { year: "1950", place: "Nikšić" }, provenance: "user" },
+    };
+    expect(parentOverwrites(current, obod, [publication])).toEqual([
+      {
+        key: "publication",
+        currentValue: { place: "Nikšić" },
+        incomingValue: { place: "Cetinje", publisher: "Obod" },
+        incomingProvenance: "parent",
+      },
+    ]);
+    const result = applyParentFields(current, obod, [publication], "overwrite-all");
+    expect(result.values.publication?.value).toEqual({ year: "1950", place: "Cetinje", publisher: "Obod" });
   });
 
   it("offers only the passed part as a field source, and picking it keeps the item's year", () => {
