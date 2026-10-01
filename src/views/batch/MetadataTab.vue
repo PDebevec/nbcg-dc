@@ -52,7 +52,9 @@ const {
   parents,
   parentQuery,
   setParentQuery,
+  parentPickerOpen,
   openParentPicker,
+  closeParentPicker,
   parentResults,
   parentSearching,
   parentSearchError,
@@ -250,10 +252,12 @@ const enumLabel: Record<string, string> = {
         :results="parentResults"
         :searching="parentSearching"
         :search-error="parentSearchError"
+        :open="parentPickerOpen"
         :link-all-count="memberCount"
         description="This item's parents. Changes are sent to the backend when the batch uploads."
         @update-query="setParentQuery($event)"
         @open="openParentPicker()"
+        @close="closeParentPicker()"
         @link="linkParent($event)"
         @link-all="linkParentToAll($event)"
         @remove="removeParent($event)"

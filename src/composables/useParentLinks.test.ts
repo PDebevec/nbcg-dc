@@ -286,5 +286,28 @@ describe("the picker's list", () => {
     await links.openPicker();
     links.setQuery("");
     expect(links.results.value).toEqual([]);
+    expect(links.pickerOpen.value).toBe(false);
+  });
+
+  it("opens on focus or typing; closing keeps the typed text and the hits", async () => {
+    metadataFake.findParents = async () => [record("c1", 3)];
+    const { links } = setup({ targets: ["i1"] });
+    expect(links.pickerOpen.value).toBe(false);
+    await links.openPicker();
+    expect(links.pickerOpen.value).toBe(true);
+    links.closePicker();
+    expect(links.pickerOpen.value).toBe(false);
+    expect(links.results.value.map((r) => r.id)).toEqual(["c1"]);
+    links.setQuery("zb");
+    expect(links.pickerOpen.value).toBe(true);
+    expect(links.parentQuery.value).toBe("zb");
+  });
+
+  it("closes once a hit is linked", async () => {
+    metadataFake.findParents = async () => [record("c1", 3)];
+    const { links } = setup({ targets: ["i1"] });
+    await links.openPicker();
+    await links.linkParent("c1");
+    expect(links.pickerOpen.value).toBe(false);
   });
 });

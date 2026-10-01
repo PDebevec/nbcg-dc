@@ -235,6 +235,9 @@ export function useParentLinks(
   const searchResults = ref<ParentRecord[]>([]);
   const searching = ref(false);
   const searchError = ref<string | null>(null);
+  /** Whether the picker's list shows: focus or typing opens it; leaving the
+   * box, Esc, clearing the text or a link closes it. */
+  const pickerOpen = ref(false);
   let abort: AbortController | null = null;
   let debounce: ReturnType<typeof setTimeout> | null = null;
 
@@ -287,22 +290,31 @@ export function useParentLinks(
     debounce = null;
     // Clearing the text closes the list at once (× sends an empty query too).
     if (value.trim() === "") {
+      pickerOpen.value = false;
       void search();
       return;
     }
+    pickerOpen.value = true;
     debounce = setTimeout(() => {
       debounce = null;
       void search();
     }, SEARCH_DEBOUNCE_MS);
   }
 
-  /** The search box got focus: with nothing typed, list the newest collections.
-   * Nothing to do while text is typed, a list shows or a search runs. */
+  /** The search box got focus: open the list, and with nothing typed, list the
+   * newest collections. No new search while text is typed, a list shows or a
+   * search runs. */
   function openPicker(): Promise<void> {
+    pickerOpen.value = true;
     if (parentQuery.value.trim() !== "" || searchResults.value.length > 0 || searching.value) {
       return Promise.resolve();
     }
     return search(true);
+  }
+
+  /** Close the list; the typed text and its hits stay for the next focus. */
+  function closePicker(): void {
+    pickerOpen.value = false;
   }
 
   function clearSearch(): void {
@@ -310,6 +322,7 @@ export function useParentLinks(
     parentQuery.value = "";
     searchResults.value = [];
     searchError.value = null;
+    pickerOpen.value = false;
   }
 
   // ── link / unlink / undo / toggle ────────────────────────────────────────
@@ -383,7 +396,9 @@ export function useParentLinks(
     searching,
     searchError,
     search,
+    pickerOpen,
     openPicker,
+    closePicker,
     clearSearch,
     // actions
     linkParent,

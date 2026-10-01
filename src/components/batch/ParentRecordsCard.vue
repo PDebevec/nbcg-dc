@@ -13,6 +13,8 @@ const props = defineProps<{
   results: ParentSearchRow[];
   searching: boolean;
   searchError: string | null;
+  /** Whether the search's dropdown list shows. */
+  open: boolean;
   /** Items "Link to all" reaches; below 2 it isn't offered. */
   linkAllCount?: number;
 }>();
@@ -21,6 +23,8 @@ const emit = defineEmits<{
   updateQuery: [value: string];
   /** The search box got focus: list the newest collections if nothing is typed. */
   open: [];
+  /** Focus left the search box, or Esc: close the list. */
+  close: [];
   link: [id: string];
   linkAll: [id: string];
   remove: [id: string];
@@ -29,9 +33,12 @@ const emit = defineEmits<{
 }>();
 
 const trimmedQuery = computed(() => props.query.trim());
-/** Typed text searches; with nothing typed, the newest collections show once listed. */
+/** While open: typed text searches; with nothing typed, the newest collections
+ * show once listed. */
 const showResults = computed(
-  () => trimmedQuery.value.length > 0 || props.results.length > 0 || props.searchError != null,
+  () =>
+    props.open &&
+    (trimmedQuery.value.length > 0 || props.results.length > 0 || props.searchError != null),
 );
 const noMatches = computed(
   () =>
@@ -119,6 +126,8 @@ function countLabel(p: ParentRowView): string {
             placeholder="Search serials & collections to link… (title or id)"
             @input="onInput"
             @focus="emit('open')"
+            @blur="emit('close')"
+            @keydown.esc="emit('close')"
           />
           <Spinner v-if="searching" tone="primary" />
           <button
@@ -132,7 +141,9 @@ function countLabel(p: ParentRowView): string {
         </div>
       </div>
 
-      <div v-if="showResults" class="results">
+      <!-- A click inside the list keeps focus in the box, or its blur would
+           close the list before the click lands. -->
+      <div v-if="showResults" class="results" @mousedown.prevent>
         <div v-if="searchError" class="results-note error">✗ {{ searchError }}</div>
         <div v-for="r in results" :key="r.id" class="result-line">
           <button class="result-row" :disabled="r.linked" @click="emit('link', r.id)">
@@ -359,15 +370,22 @@ function countLabel(p: ParentRowView): string {
   padding: 0 2px;
 }
 
+/* A dropdown under the search box, over whatever follows the card. */
 .results {
-  margin-top: 8px;
-  border: 1px solid var(--c-border);
-  border-radius: var(--r-md);
-  background: var(--c-surface);
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  width: 100%;
   max-width: 440px;
-  max-height: 260px;
+  max-height: 300px;
   overflow: auto;
   padding: 4px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-menu);
+  animation: fadein 0.12s;
 }
 
 .result-row {

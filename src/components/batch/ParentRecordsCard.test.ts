@@ -21,10 +21,12 @@ function row(over: Partial<ParentRowView> & { id: string }): ParentRowView {
   };
 }
 
+/** Renders with the picker's list open unless a test closes it. */
 function render(props: {
   parents?: ParentRowView[];
   results?: ParentSearchRow[];
   query?: string;
+  open?: boolean;
   linkAllCount?: number;
 }): Promise<string> {
   return renderToString(
@@ -35,6 +37,7 @@ function render(props: {
       results: [],
       searching: false,
       searchError: null,
+      open: true,
       ...props,
     }),
   );
@@ -76,5 +79,15 @@ describe("ParentRecordsCard", () => {
     const html = await render({ query: "", results });
     expect(html).toContain("Zbirka A");
     expect(html).not.toContain("No matches");
+  });
+
+  it("hides the list while the picker is closed, keeping what was typed", async () => {
+    const results: ParentSearchRow[] = [
+      { id: "c1", title: "Zbirka A", meta: "Zbirka", linked: false, linkedAll: false },
+    ];
+    const html = await render({ query: "zb", results, open: false });
+    expect(html).not.toContain("Zbirka A");
+    expect(html).not.toContain("No matches");
+    expect(html).toContain('value="zb"');
   });
 });
