@@ -200,7 +200,8 @@ extractedText?, filename, mimeType, sizeBytes, textExtractionStatus, createdAt }
   `collectionType=>0` (every collection, including types added later); with
   nothing typed it sends no `q` and `sort=newest`. `collectionType` comes from a
   hit's `source.metadata.collectionType`, and the app drops hits whose type isn't
-  above 0, for a backend without the filter.
+  above 0, for a backend without the filter. The app names a type by the
+  schema's `collectionType` vocabulary (Zbirka, Serijska zbirka, …).
 
 **The indexed document** (`SearchHit.source`) — verified against
 `nbcg/infrastructure/docker/pgsync/schema.json`: `{ id, visibilityStatus,

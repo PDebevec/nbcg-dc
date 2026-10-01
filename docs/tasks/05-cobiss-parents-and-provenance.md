@@ -28,8 +28,10 @@ the four ingestion cases from [concept & UX](../01-concept-and-ux.md).
 
 Every field value is `{ value, provenance ∈ {cobiss, parent, user}, sourceParentId }`.
 Empty fields fill silently; a field the **user** already edited raises the
-overwrite prompt. Provenance drives the coloured tags, the per-field source
-picker, and conflict resolution.
+overwrite prompt. A parent that would change filled-in fields — whoever filled
+them — asks first, listing them: Overwrite them, Fill only empty fields, or
+cancel (✕). Provenance drives the coloured tags, the per-field source picker,
+and conflict resolution.
 
 ## Tasks
 
@@ -44,7 +46,7 @@ picker, and conflict resolution.
       **`.vue` ◻** the field + Next action.
 - [x] **Parent records (batch)**: search + link one or more parents (by id); a
       parent is **eligible to pass data** only if its `collectionType` is in the
-      data-passing set (exact value(s) TBD, configurable). Among eligible parents,
+      data-passing set (3 Zbirka and 4 Serijska zbirka by default, configurable). Among eligible parents,
       **exactly one passes data** at a time (toggle "can pass data" ↔ "passes
       data"); ineligible types link but never pass data.
       — **`.ts` ✅** `domain/parent`: `isDataPassingType` / `isEligibleParent` /
@@ -87,7 +89,8 @@ picker, and conflict resolution.
       via `POST /api/relations/connect`; the graph may contain **cycles** (allowed
       by design) — don't assume a tree; guard local traversals against cycles.
       Linking a data-passing parent fills empty matching fields (provenance
-      `parent`).
+      `parent`); fields it would change are listed first (`parentOverwrites`,
+      the copy prompt).
       — **`.ts` ✅** `domain/parent.collectAncestors` / `wouldCreateCycle` guard
       local traversal; `services/upload.connectParents` does the connect (one call
       per parent). **`.vue` ◻** the picker.
@@ -95,8 +98,8 @@ picker, and conflict resolution.
       source is one click; at most one parent passes data at a time.
       — **`.ts` ✅** `setDataPassingParent` / `toggleDataPassing` enforce the
       at-most-one invariant. **`.vue` ◻** the toggle.
-- [x] **Per-field source picker**: when two or more linked parents could supply
-      the same field, a picker lets the cataloguer choose **which parent**, or
+- [x] **Per-field source picker**: when two or more linked parents that can pass
+      data could supply the same field, a picker lets the cataloguer choose **which parent**, or
       **Manual entry** (flips provenance to `user`).
       — **`.ts` ✅** `fieldSourceOptions` / `chooseFieldSource` in
       `domain/provenance`. **`.vue` ◻** the picker affordance.
@@ -105,8 +108,10 @@ picker, and conflict resolution.
       number, date) as **"Still to fill"**. Everything copied stays fully
       editable.
       — **`.ts` ✅** `applySerialParent` + `issueFields` + `stillToFill`, keyed off
-      the schema's `issueIdentifying` flag (exactly two fields —
-      `numberingAndDates`, `seriesVolume`; see [Epic 09](09-backend-api-contract.md)).
+      the schema's `issueIdentifying` flag (`issue`, `seriesVolume`, and the
+      sub-field `publication.year`; see [Epic 09](09-backend-api-contract.md)).
+      An object field passes only its sub-fields marked `parentInheritable`
+      (publication: place and publisher, never the year).
       **`.vue` ◻** the "Still to fill" markers.
 - [x] **Case routing**: from level (main/child) + presence of COBISS ID + parents,
       drive the editor to the right behaviour per the four-cases table. COBISS and

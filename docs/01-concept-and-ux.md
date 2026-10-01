@@ -63,9 +63,9 @@ Four object types drive the app (full field lists in
   `collectionType` is a **number inside the record's `metadata`**, not a column
   (verified; see [PROJECT-KNOWLEDGE §4](PROJECT-KNOWLEDGE.md)). A parent is
   **eligible to pass data** (its shared fields copy down) only when its
-  `collectionType` is in the data-passing set (a serial-type; exact value(s) TBD
-  and configurable — more types may pass data later); other types can be linked
-  but never pass data.
+  `collectionType` is in the data-passing set (3 Zbirka and 4 Serijska zbirka by
+  default, configurable in Settings); other types can be linked but never pass
+  data.
 - **Metadata field value** — every field stores `{ value, provenance, sourceParentId }`
   so the UI can label it and resolve conflicts (see
   [COBISS/parents/provenance](tasks/05-cobiss-parents-and-provenance.md)).
@@ -130,7 +130,7 @@ revisitable** — you can re-edit a field or re-run a stage on any item at any t
      in its `metadata.json` and shows them in any later batch; removing one from
      an uploaded item unlinks it at the next upload. A parent is **eligible to
      pass data** only if its `collectionType` is in the data-passing set
-     (serial-type; exact value TBD). Among an item's eligible parents, at most
+     (3 Zbirka and 4 Serijska zbirka by default). Among an item's eligible parents, at most
      **one passes data** (its shared fields copy down); ineligible types can be
      linked but never pass data.
    - **Publish as** — Draft / Record. **Visibility** — Public / Private / Hidden.
@@ -215,13 +215,16 @@ Metadata:
 
 - **COBISS and parents are both just prefillers** and are not mutually
   exclusive. Empty fields fill silently; a field the user already edited raises
-  an **overwrite prompt** ("Overwrite all" vs "Keep mine, fill empties").
+  an **overwrite prompt** ("Overwrite all" vs "Keep mine, fill empties"). A
+  parent that would change filled-in fields (whoever filled them) first lists
+  them: **Overwrite them**, **Fill only empty fields**, or cancel (✕ — the
+  parent then doesn't pass data).
 - **Provenance:** every field remembers whether its value came from `COBISS`, a
   `parent`, or the `user` — driving coloured tags, the per-field source picker,
   and the overwrite prompt.
-- **Per-field source picker:** when two or more linked parents could supply the
-  same field, a picker lets the cataloguer choose which parent, or **Manual
-  entry**.
+- **Per-field source picker:** when two or more linked parents that can pass
+  data could supply the same field, a picker lets the cataloguer choose which
+  parent, or **Manual entry**.
 - Everything copied stays **fully editable** — the copy guarantees correctness
   and saves re-typing shared metadata.
 
