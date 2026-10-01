@@ -133,6 +133,18 @@ function optionsFor(schema: RecordSchemaV2, field: FieldV2): FieldOption[] {
   }));
 }
 
+/** A stored value on one line, for previews: a code by its label, an object
+ * by its filled sub-values, a list entry by entry. */
+export function previewValue(value: unknown): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(previewValue).filter(Boolean).join(", ");
+  const label = asLabel(value);
+  if (label) return labelText(label) || codeOf(value);
+  if (isPlainObject(value)) return Object.values(value).map(previewValue).filter(Boolean).join(" · ");
+  return String(value);
+}
+
 /** The text for a stored enum value: its own labels, else the option's, else the code. */
 function displayOf(options: FieldOption[], value: unknown): string {
   const label = asLabel(value);

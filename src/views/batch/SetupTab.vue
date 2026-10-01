@@ -2,6 +2,7 @@
 import { useBatchSetup } from "@composables/useBatchSetup";
 import SegmentedControl from "@ui/common/SegmentedControl.vue";
 import Spinner from "@ui/common/Spinner.vue";
+import ParentCopyDialog from "@ui/batch/ParentCopyDialog.vue";
 import ParentRecordsCard from "@ui/batch/ParentRecordsCard.vue";
 
 const props = defineProps<{ batchId: string }>();
@@ -25,6 +26,8 @@ const {
   removeParent,
   togglePassesData,
   restoreParent,
+  copyPrompt,
+  answerCopyPrompt,
   publish,
   setPublish,
   visibility,
@@ -100,6 +103,7 @@ async function onContinue(): Promise<void> {
       @restore="restoreParent($event)"
       @toggle-pass="togglePassesData($event)"
     />
+    <ParentCopyDialog :prompt="copyPrompt" @answer="answerCopyPrompt($event)" />
 
     <!-- publish + visibility -->
     <div class="two-col">

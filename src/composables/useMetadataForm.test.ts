@@ -5,6 +5,8 @@ import { vi } from "vitest";
 import { BatchStage, ItemRunStatus, type Batch } from "@domain/batch";
 import { PublishTarget, VisibilityStatus } from "@domain/enums";
 import { ItemState, type Item } from "@domain/item";
+import type { ParentRecord } from "@domain/parent";
+import type { ApplyMode, ApplyParentResult, OverwriteConflict } from "@domain/provenance";
 
 // This composable never touches the DOM: getCurrentInstance() is null outside
 // a mounted component, so its onMounted(init) is simply skipped (see
@@ -71,6 +73,14 @@ const metadataFake = {
   ensureParent: async () => {},
   findParents: async () => [],
   flush: async () => {},
+  parentOverwritesFor: (_itemId: string, _parent: ParentRecord): OverwriteConflict[] => [],
+  applyParentTo: (_itemId: string, _parent: ParentRecord, _mode?: ApplyMode): ApplyParentResult => ({
+    values: {},
+    conflicts: [],
+    applied: [],
+    skipped: [],
+    stillToFill: [],
+  }),
 };
 vi.mock("@stores/useMetadata", () => ({ useMetadataStore: () => metadataFake }));
 
@@ -98,6 +108,7 @@ beforeEach(() => {
   metadataFake.parentFailed.value = new Set();
   itemsFake.items = [];
   metadataFake.backendLinks.value = new Map();
+  metadataFake.parentOverwritesFor = () => [];
 });
 
 describe("editable", () => {
@@ -169,5 +180,34 @@ describe("parent rows", () => {
       "Couldn't load",
       "Collection type 0",
     ]);
+  });
+});
+
+describe("a linked parent's data", () => {
+  it("asks before it replaces filled-in fields, and Overwrite copies over them", async () => {
+    const batches = useBatchesStore();
+    batches.batches = [makeBatch(["i1"])];
+    itemsFake.items = [{ id: "i1", batchId: "b1", folderName: "i1", folderPath: "/p/i1", title: null } as unknown as Item];
+    metadataFake.backendLinks.value = new Map([["i1", []]]);
+    const pobjeda: ParentRecord = { id: "s1", title: "Pobjeda", collectionType: 4, metadata: { subtitle: "Dnevni list" } };
+    metadataFake.parentRecords.value = new Map([["s1", pobjeda]]);
+    metadataFake.parentOverwritesFor = () => [
+      { key: "subtitle", currentValue: "Mine", incomingValue: "Dnevni list", incomingProvenance: "parent" },
+    ];
+    const copied: Array<[string, string, ApplyMode | undefined]> = [];
+    metadataFake.applyParentTo = (itemId, parent, mode) => {
+      copied.push([itemId, parent.id, mode]);
+      return { values: {}, conflicts: [], applied: ["subtitle"], skipped: [], stillToFill: [] };
+    };
+    const view = useMetadataForm(() => "b1");
+
+    const linking = view.linkParent("s1");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(view.copyPrompt.value?.fields.map((f) => f.key)).toEqual(["subtitle"]);
+    expect(copied).toEqual([]);
+
+    view.answerCopyPrompt("overwrite-all");
+    await linking;
+    expect(copied).toEqual([["i1", "s1", "overwrite-all"]]);
   });
 });

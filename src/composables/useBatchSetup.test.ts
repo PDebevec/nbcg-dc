@@ -6,6 +6,8 @@ import { DEFAULT_CONFIG } from "@domain/config";
 import { PublishTarget, VisibilityStatus } from "@domain/enums";
 import { ItemState, type Item } from "@domain/item";
 import type { ParentRecord } from "@domain/parent";
+import type { ApplyMode, OverwriteConflict } from "@domain/provenance";
+import type { FieldV2 } from "@domain/schema";
 
 function makeBatch(itemIds: string[], over: Partial<Batch> = {}): Batch {
   const proc: Record<string, ItemRunStatus> = {};
@@ -58,7 +60,9 @@ const metadataFake = {
   ensureParent: async () => {},
   findParents: async () => [] as ParentRecord[],
   ensureItemLoaded: async () => {},
-  applyParentTo: vi.fn((_itemId: string, _parent: ParentRecord) => ({
+  fields: [] as FieldV2[],
+  parentOverwritesFor: vi.fn((_itemId: string, _parent: ParentRecord): OverwriteConflict[] => []),
+  applyParentTo: vi.fn((_itemId: string, _parent: ParentRecord, _mode?: ApplyMode) => ({
     values: {},
     conflicts: [],
     applied: [],
@@ -77,7 +81,57 @@ const { useSettingsStore } = await import("@stores/useSettings");
 beforeEach(() => {
   setActivePinia(createPinia());
   metadataFake.applyParentTo.mockClear();
+  metadataFake.parentOverwritesFor.mockReset();
+  metadataFake.parentOverwritesFor.mockReturnValue([]);
   useSettingsStore().config = { ...DEFAULT_CONFIG, dataPassingCollectionTypes: [4] };
+});
+
+/** Item i1 passes data from serial s1. */
+function batchWithPassingSerial(): void {
+  metadataFake.parentRecords.value = new Map([["s1", serial("s1")]]);
+  metadataFake.backendLinks.value = new Map([["i1", []]]);
+  useBatchesStore().batches = [
+    makeBatch(["i1"], { overrides: { i1: { parents: { add: ["s1"], remove: [], passing: "s1" } } } }),
+  ];
+  itemsFake.items = [item("i1")];
+}
+
+const SUBTITLE_REPLACED: OverwriteConflict = {
+  key: "subtitle",
+  currentValue: "Mine",
+  incomingValue: "Dnevni list",
+  incomingProvenance: "parent",
+};
+
+describe("Apply & continue over filled-in fields", () => {
+  it("asks first; Cancel stays on Setup and copies nothing", async () => {
+    batchWithPassingSerial();
+    metadataFake.parentOverwritesFor.mockReturnValue([SUBTITLE_REPLACED]);
+    const setup = useBatchSetup(() => "b1");
+
+    const next = setup.applyAndContinue();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(setup.copyPrompt.value?.fields.map((f) => f.key)).toEqual(["subtitle"]);
+    setup.answerCopyPrompt("cancel");
+
+    expect(await next).toBe(false);
+    expect(metadataFake.applyParentTo).not.toHaveBeenCalled();
+  });
+
+  it("copies over them when the operator chooses Overwrite", async () => {
+    batchWithPassingSerial();
+    metadataFake.parentOverwritesFor.mockReturnValue([SUBTITLE_REPLACED]);
+    const setup = useBatchSetup(() => "b1");
+
+    const next = setup.applyAndContinue();
+    await new Promise((r) => setTimeout(r, 0));
+    setup.answerCopyPrompt("overwrite-all");
+
+    expect(await next).toBe(true);
+    expect(metadataFake.applyParentTo.mock.calls.map(([id, p, mode]) => [id, p.id, mode])).toEqual([
+      ["i1", "s1", "overwrite-all"],
+    ]);
+  });
 });
 
 describe("Apply & continue", () => {

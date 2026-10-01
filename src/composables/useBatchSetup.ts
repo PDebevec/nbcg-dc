@@ -21,6 +21,7 @@ import type { Item } from "@domain/item";
 import { fetchCobissPreview } from "@services/api/cobiss";
 import { logger } from "@lib/logger";
 import { useParentLinks } from "./useParentLinks";
+import { useParentCopyPrompt } from "./useParentCopyPrompt";
 
 export type { ParentRowView, ParentSearchRow } from "./useParentLinks";
 
@@ -46,6 +47,8 @@ export function useBatchSetup(batchId: MaybeRefOrGetter<string>) {
   });
 
   const links = useParentLinks(() => batch.value, () => memberItems.value);
+  /** Asks before Next's parent copy replaces filled-in fields. */
+  const copyPrompt = useParentCopyPrompt();
 
   const editable = computed(
     () => batch.value != null && batch.value.archivedAt == null && !readOnly.value,
@@ -110,7 +113,8 @@ export function useBatchSetup(batchId: MaybeRefOrGetter<string>) {
   /**
    * Copy the batch defaults onto every member item — the data-passing parent's
    * shared fields, then the COBISS record (which outranks the parent copy) — and
-   * persist. Returns true when the caller may switch to Metadata.
+   * persist. When the parent copy would replace filled-in fields it asks first;
+   * Cancel stays on Setup. Returns true when the caller may switch to Metadata.
    */
   async function applyAndContinue(): Promise<boolean> {
     const b = batch.value;
@@ -121,6 +125,13 @@ export function useBatchSetup(batchId: MaybeRefOrGetter<string>) {
       if (!items.loaded) await items.load();
       const members = memberItems.value;
       await Promise.all(members.map((m) => metadata.ensureItemLoaded(m)));
+
+      // Each item's own passing parent — items may have different ones.
+      const passing = new Map(members.map((m) => [m.id, links.passingParentOf(m.id)]));
+      const mode = await copyPrompt.confirm(
+        [...passing].filter(([, parent]) => parent).map(([itemId, parent]) => ({ itemId, parent })),
+      );
+      if (mode === "cancel") return false;
 
       let preview: Record<string, unknown> | null = null;
       const id = (batch.value?.cobissId ?? "").trim();
@@ -137,11 +148,10 @@ export function useBatchSetup(batchId: MaybeRefOrGetter<string>) {
       let cobissApplied = 0;
       let fromParent = false;
       for (const m of members) {
-        // Each item's own passing parent — items may have different ones.
-        const passing = links.passingParentOf(m.id);
-        if (passing) {
+        const parent = passing.get(m.id);
+        if (parent) {
           fromParent = true;
-          parentApplied += metadata.applyParentTo(m.id, passing).applied.length;
+          parentApplied += metadata.applyParentTo(m.id, parent, mode).applied.length;
         }
         if (preview) cobissApplied += metadata.applyCobissTo(m.id, preview).applied.length;
       }
@@ -192,6 +202,8 @@ export function useBatchSetup(batchId: MaybeRefOrGetter<string>) {
     removeParent: links.removeParent,
     restoreParent: links.restoreParent,
     togglePassesData: links.togglePassesData,
+    copyPrompt: copyPrompt.prompt,
+    answerCopyPrompt: copyPrompt.answer,
     // publish
     publish,
     setPublish,

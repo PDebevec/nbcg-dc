@@ -24,6 +24,7 @@ import {
   type ParentChanges,
   type ParentRecord,
 } from "@domain/parent";
+import type { ApplyMode } from "@domain/provenance";
 import { codeLabel } from "@domain/schema-form";
 import { useBatchesStore } from "@stores/useBatches";
 import { useMetadataStore } from "@stores/useMetadata";
@@ -67,14 +68,23 @@ export interface PassingChange {
   parent: ParentRecord | null;
 }
 
+/** The answer to the parent copy prompt: how the parent's fields go in, or
+ * "cancel" — the parent doesn't start passing data. */
+export type PassingAnswer = ApplyMode | "cancel";
+
 const SEARCH_DEBOUNCE_MS = 350;
 
 export interface UseParentLinksOptions {
   /** Every item in the batch, for {@link linkParentToAll}; defaults to the targets. */
   members?: () => Item[];
+  /** Before an action makes a parent start passing data to some items: how
+   * its fields go in, or "cancel" to keep which parent passes as it was (a link
+   * still links). Without it they fill only empty fields. */
+  confirmPassing?: (changes: PassingChange[]) => Promise<PassingAnswer>;
   /** After an action changed which parent passes data to some items — once per
-   * action, so the caller can fill their empty fields and say so once. */
-  onPassingChanged?: (changes: PassingChange[]) => void;
+   * action, with the prompt's answer, so the caller can fill their fields and
+   * say so once. */
+  onPassingChanged?: (changes: PassingChange[], mode: ApplyMode) => void;
 }
 
 /** One item's side: backend links ([] while unknown), pending changes, and the parents they make. */
@@ -85,6 +95,12 @@ interface ItemLinks {
 }
 
 type Saved = Map<string, { before: ParentChanges; after: ParentChanges }>;
+
+/** What an action saved, and how the parent it made pass data fills the items. */
+interface Applied {
+  saved: Saved;
+  mode: ApplyMode;
+}
 
 export function useParentLinks(
   batch: () => Batch | null,
@@ -197,21 +213,42 @@ export function useParentLinks(
 
   // ── persistence ──────────────────────────────────────────────────────────
 
-  /** Apply `change` to each of `items`' pending changes and save the batch once. */
-  async function apply(items: Item[], change: (l: ItemLinks) => ParentChanges): Promise<Saved | null> {
+  /** The items whose passing parent changed, with the parent now passing. */
+  function passingChanges(saved: Saved): PassingChange[] {
+    const changes: PassingChange[] = [];
+    for (const [itemId, { before, after }] of saved) {
+      if (before.passing === after.passing) continue;
+      changes.push({ itemId, parent: after.passing ? (parentRecords.value.get(after.passing) ?? null) : null });
+    }
+    return changes;
+  }
+
+  /** Apply `change` to each of `items`' pending changes and save the batch once.
+   * When that makes a parent start passing data, `confirmPassing` is asked
+   * first; "cancel" keeps which parent passes as it was. */
+  async function apply(items: Item[], change: (l: ItemLinks) => ParentChanges): Promise<Applied | null> {
     const b = batch();
     if (!b || items.length === 0) return null;
-    let next = b;
     const saved: Saved = new Map();
     for (const item of items) {
       const l = linksOf(b, item.id);
-      const after = change(l);
-      saved.set(item.id, { before: l.changes, after });
-      next = withParentChanges(next, item.id, after);
+      saved.set(item.id, { before: l.changes, after: change(l) });
     }
+    let mode: ApplyMode = "fill-empty";
+    const starts = passingChanges(saved).filter((c) => c.parent !== null);
+    if (starts.length > 0 && options.confirmPassing) {
+      const answer = await options.confirmPassing(starts);
+      if (answer === "cancel") {
+        for (const s of saved.values()) s.after = { ...s.after, passing: s.before.passing };
+      } else {
+        mode = answer;
+      }
+    }
+    let next = batch() ?? b;
+    for (const [itemId, { after }] of saved) next = withParentChanges(next, itemId, after);
     try {
       await batches.update(next);
-      return saved;
+      return { saved, mode };
     } catch (err) {
       logger.error("parents", "Couldn't save the parent links.", err);
       toasts.push("Couldn't save the parent links.", "error");
@@ -219,14 +256,11 @@ export function useParentLinks(
     }
   }
 
-  /** Tell the caller which items' passing parent the action changed. */
-  function reportPassing(saved: Saved): void {
-    const changes: PassingChange[] = [];
-    for (const [itemId, { before, after }] of saved) {
-      if (before.passing === after.passing) continue;
-      changes.push({ itemId, parent: after.passing ? (parentRecords.value.get(after.passing) ?? null) : null });
-    }
-    if (changes.length > 0) options.onPassingChanged?.(changes);
+  /** Tell the caller which items' passing parent the action changed, and how
+   * to fill them. */
+  function reportPassing({ saved, mode }: Applied): void {
+    const changes = passingChanges(saved);
+    if (changes.length > 0) options.onPassingChanged?.(changes, mode);
   }
 
   // ── search ───────────────────────────────────────────────────────────────
@@ -329,7 +363,7 @@ export function useParentLinks(
 
   async function linkTo(items: Item[], id: string): Promise<void> {
     await metadata.ensureParent(id);
-    const saved = await apply(items, (l) => {
+    const applied = await apply(items, (l) => {
       // Only a parent new to the item may start passing: an item that already
       // has it keeps its choice, and a backend link never starts passing on
       // its own (restoring a pending unlink leaves `passing` alone).
@@ -339,9 +373,9 @@ export function useParentLinks(
       const ids = itemParentIds(l.backend, linked);
       return { ...linked, passing: passingAfterLink(linked.passing, ids, id, isEligible) };
     });
-    if (!saved) return;
+    if (!applied) return;
     clearSearch();
-    reportPassing(saved);
+    reportPassing(applied);
   }
 
   /** Link a parent to the targets. */
@@ -357,8 +391,8 @@ export function useParentLinks(
   /** Unlink a parent from the targets: a pending link is dropped, a backend
    * link unlinks at the next upload. */
   async function removeParent(id: string): Promise<void> {
-    const saved = await apply(targets(), (l) => withParentUnlinked(l.changes, l.backend, id));
-    if (saved) reportPassing(saved);
+    const applied = await apply(targets(), (l) => withParentUnlinked(l.changes, l.backend, id));
+    if (applied) reportPassing(applied);
   }
 
   /** Take back a pending unlink (the struck-through row's Undo). */
@@ -375,8 +409,8 @@ export function useParentLinks(
     const having = targets().filter((t) => linksOf(b, t.id).ids.includes(id));
     const on = having.length > 0 && having.every((t) => linksOf(b, t.id).changes.passing === id);
     if (!on && !isEligible(id)) return;
-    const saved = await apply(having, (l) => ({ ...l.changes, passing: on ? null : id }));
-    if (saved) reportPassing(saved);
+    const applied = await apply(having, (l) => ({ ...l.changes, passing: on ? null : id }));
+    if (applied) reportPassing(applied);
   }
 
   onUnmounted(() => {

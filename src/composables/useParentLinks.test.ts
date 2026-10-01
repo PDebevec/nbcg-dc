@@ -8,6 +8,7 @@ import { ItemState, type Item } from "@domain/item";
 import type { ParentRecord } from "@domain/parent";
 import type { RecordSchemaV2 } from "@domain/schema";
 import { SNAPSHOT } from "@domain/schema.fixture";
+import type { PassingAnswer, PassingChange } from "./useParentLinks";
 
 function makeBatch(itemIds: string[], over: Partial<Batch> = {}): Batch {
   const proc: Record<string, ItemRunStatus> = {};
@@ -71,19 +72,29 @@ function setup(opts: {
   members?: string[];
   backend?: Record<string, string[]>;
   changes?: Batch["overrides"];
+  /** Answers the parent copy prompt. */
+  confirm?: (changes: PassingChange[]) => Promise<PassingAnswer>;
 }) {
   const batches = useBatchesStore();
   const members = opts.members ?? opts.targets;
   batches.batches = [makeBatch(members, { overrides: opts.changes ?? {} })];
   metadataFake.backendLinks.value = new Map(members.map((id) => [id, opts.backend?.[id] ?? []]));
-  const passing: Array<{ itemId: string; parent: ParentRecord | null }> = [];
+  const passing: PassingChange[] = [];
+  const modes: string[] = [];
   const links = useParentLinks(
     () => batches.get("b1"),
     () => opts.targets.map(item),
-    { members: () => members.map(item), onPassingChanged: (changes) => passing.push(...changes) },
+    {
+      members: () => members.map(item),
+      confirmPassing: opts.confirm,
+      onPassingChanged: (changes, mode) => {
+        passing.push(...changes);
+        modes.push(mode);
+      },
+    },
   );
   const changesOf = (id: string) => batches.get("b1")?.overrides[id]?.parents ?? null;
-  return { links, passing, changesOf };
+  return { links, passing, modes, changesOf };
 }
 
 beforeEach(() => {
@@ -250,6 +261,63 @@ describe("passing data", () => {
     await links.linkParent("s1");
     expect(changesOf("i1")).toBeNull();
     expect(passing).toEqual([]);
+  });
+});
+
+describe("asking before a parent's data goes in", () => {
+  it("asks once before a newly linked parent starts passing, and passes the answer on", async () => {
+    metadataFake.parentRecords.value = new Map([["s1", record("s1", SERIAL)]]);
+    const asked: PassingChange[][] = [];
+    const { links, changesOf, modes } = setup({
+      targets: ["i1"],
+      confirm: async (changes) => {
+        asked.push(changes);
+        return "overwrite-all";
+      },
+    });
+    await links.linkParent("s1");
+    expect(asked).toEqual([[{ itemId: "i1", parent: record("s1", SERIAL) }]]);
+    expect(changesOf("i1")?.passing).toBe("s1");
+    expect(modes).toEqual(["overwrite-all"]);
+  });
+
+  it("still links the parent on Cancel, but it doesn't start passing", async () => {
+    metadataFake.parentRecords.value = new Map([["s1", record("s1", SERIAL)]]);
+    const { links, changesOf, passing } = setup({ targets: ["i1"], confirm: async () => "cancel" });
+    await links.linkParent("s1");
+    expect(changesOf("i1")).toEqual({ add: ["s1"], remove: [], passing: null });
+    expect(passing).toEqual([]);
+  });
+
+  it("keeps the parent that passed when the switch is cancelled", async () => {
+    metadataFake.parentRecords.value = new Map([
+      ["s1", record("s1", SERIAL)],
+      ["s2", record("s2", SERIAL)],
+    ]);
+    const { links, changesOf, passing } = setup({
+      targets: ["i1"],
+      changes: { i1: { parents: { add: ["s1", "s2"], remove: [], passing: "s1" } } },
+      confirm: async () => "cancel",
+    });
+    await links.togglePassesData("s2");
+    expect(changesOf("i1")?.passing).toBe("s1");
+    expect(passing).toEqual([]);
+  });
+
+  it("doesn't ask when a parent stops passing", async () => {
+    metadataFake.parentRecords.value = new Map([["s1", record("s1", SERIAL)]]);
+    let asked = 0;
+    const { links, changesOf } = setup({
+      targets: ["i1"],
+      changes: { i1: { parents: { add: ["s1"], remove: [], passing: "s1" } } },
+      confirm: async () => {
+        asked += 1;
+        return "fill-empty";
+      },
+    });
+    await links.togglePassesData("s1");
+    expect(changesOf("i1")?.passing ?? null).toBeNull();
+    expect(asked).toBe(0);
   });
 });
 

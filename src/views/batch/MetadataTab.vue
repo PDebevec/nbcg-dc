@@ -2,6 +2,7 @@
 import { ref } from "vue";
 import { useMetadataForm } from "@composables/useMetadataForm";
 import ProgressBar from "@ui/batch/ProgressBar.vue";
+import ParentCopyDialog from "@ui/batch/ParentCopyDialog.vue";
 import ParentRecordsCard from "@ui/batch/ParentRecordsCard.vue";
 import SegmentedControl from "@ui/common/SegmentedControl.vue";
 import Spinner from "@ui/common/Spinner.vue";
@@ -65,6 +66,8 @@ const {
   linkParentToAll,
   memberCount,
   retryParents,
+  copyPrompt,
+  answerCopyPrompt,
   publish,
   publishLocked,
   publishHint,
@@ -264,6 +267,7 @@ const enumLabel: Record<string, string> = {
         @restore="restoreParent($event)"
         @toggle-pass="togglePassesData($event)"
       />
+      <ParentCopyDialog :prompt="copyPrompt" @answer="answerCopyPrompt($event)" />
 
       <!-- per-item publish + visibility -->
       <div class="two-col">

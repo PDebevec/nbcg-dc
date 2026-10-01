@@ -46,12 +46,20 @@ import {
 import { getAtPath, keptUnit, numberFromText, quantityFromText, setAtPath, topKey } from "@domain/schema-values";
 import { fieldSourceOptions } from "@domain/provenance";
 import { missingParentNote, type ParentRecord } from "@domain/parent";
-import { buildFieldViews, entryFromHint, toHintView, type FieldView, type HintView } from "./metadataFieldViews";
+import {
+  buildFieldViews,
+  entryFromHint,
+  previewValue,
+  toHintView,
+  type FieldView,
+  type HintView,
+} from "./metadataFieldViews";
 import { derivedOutputNames } from "@domain/naming";
 import { fetchCobissPreview, cobissCollisionMessage } from "@services/api/cobiss";
 import { fetchHints } from "@services/api/hints";
 import { logger } from "@lib/logger";
 import { useParentLinks } from "./useParentLinks";
+import { useParentCopyPrompt } from "./useParentCopyPrompt";
 
 export type { ParentRowView, ParentSearchRow } from "./useParentLinks";
 export type {
@@ -83,19 +91,6 @@ export interface FileChipView {
   tag: string;
   /** Muted (kept-local) styling. */
   local: boolean;
-}
-
-function previewOf(value: unknown): string {
-  if (value === undefined || value === null) return "";
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value.map(previewOf).filter(Boolean).join(", ");
-  if (typeof value === "object") {
-    return Object.values(value as Record<string, unknown>)
-      .map(previewOf)
-      .filter(Boolean)
-      .join(" · ");
-  }
-  return String(value);
 }
 
 export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
@@ -148,18 +143,22 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
 
   // ── parents (the current item's own links; Link to all reaches every item) ──
 
+  /** Asks before a parent's data replaces filled-in fields. */
+  const copyPrompt = useParentCopyPrompt();
+
   const links = useParentLinks(
     () => batch.value,
     () => (current.value ? [current.value] : []),
     {
       members: () => items.value,
-      onPassingChanged: (changes) => {
+      confirmPassing: copyPrompt.confirm,
+      onPassingChanged: (changes, mode) => {
         if (!editable.value) return;
         let fields = 0;
         let filled = 0;
         for (const { itemId, parent } of changes) {
           if (!parent) continue;
-          const applied = metadata.applyParentTo(itemId, parent).applied.length;
+          const applied = metadata.applyParentTo(itemId, parent, mode).applied.length;
           fields += applied;
           if (applied > 0) filled += 1;
         }
@@ -292,7 +291,7 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
             return {
               parentId: o.parentId as string,
               name: record?.title ?? (o.parentId as string),
-              preview: previewOf(o.value),
+              preview: previewValue(o.value),
               selected: view.provenance === "parent" && entry?.sourceParentId === o.parentId,
             };
           });
@@ -769,6 +768,8 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
     memberCount: computed(() => items.value.length),
     togglePassesData: links.togglePassesData,
     retryParents,
+    copyPrompt: copyPrompt.prompt,
+    answerCopyPrompt: copyPrompt.answer,
     // publish / visibility (per item)
     publish,
     publishLocked,
