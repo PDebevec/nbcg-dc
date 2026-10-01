@@ -89,6 +89,8 @@ export interface BuildViewsInput {
   values: MetadataValues;
   /** Messages by path (empty until validation shows). */
   errors: Record<string, string>;
+  /** A parent passes data: flag the empty per-issue fields "Still to fill". */
+  flagStillToFill?: boolean;
 }
 
 type Plain = Record<string, unknown>;
@@ -164,15 +166,18 @@ function childViews(
   path: string,
   statePath: string,
   entryHints: HintSource | null,
+  flagIssue: boolean,
 ): FieldView[] {
   const firstText = shape.find((c) => c.type === "string");
   return shape
     .filter((c) => input.states[`${statePath}.${c.key}`]?.visible !== false || !isEmpty(value[c.key]))
     .map((c) =>
-      view(input, c, value[c.key], `${path}.${c.key}`, `${statePath}.${c.key}`, c === firstText ? entryHints : null),
+      view(input, c, value[c.key], `${path}.${c.key}`, `${statePath}.${c.key}`, c === firstText ? entryHints : null, flagIssue),
     );
 }
 
+/** `flagIssue`: an empty per-issue field here reads "Still to fill" — off inside
+ * a field that is per-issue itself, which carries the one flag. */
 function view(
   input: BuildViewsInput,
   field: FieldV2,
@@ -180,6 +185,7 @@ function view(
   path: string,
   statePath: string,
   entryHints: HintSource | null,
+  flagIssue: boolean,
 ): FieldView {
   const { schema, states, errors } = input;
   const state = states[statePath];
@@ -193,6 +199,7 @@ function view(
   else if (kind === "vocab") value = raw === null || raw === undefined ? "" : displayOf(options, raw);
   else value = scalarString(raw);
   const entryHintsForList = field.suggest ? { ...field.suggest, fillsEntry: true } : null;
+  const flagChildren = flagIssue && !field.issueIdentifying;
   return {
     key: field.key,
     path,
@@ -211,12 +218,12 @@ function view(
     hints: entryHints ?? hintsFor(schema, field),
     children:
       kind === "object"
-        ? childViews(input, field.objectShape ?? [], isPlainObject(raw) ? raw : {}, path, statePath, null)
+        ? childViews(input, field.objectShape ?? [], isPlainObject(raw) ? raw : {}, path, statePath, null, flagChildren)
         : [],
     entries:
       kind === "object-list" && Array.isArray(raw)
         ? raw.map((entry, i) =>
-            childViews(input, field.objectShape ?? [], isPlainObject(entry) ? entry : {}, `${path}[${i}]`, statePath, entryHintsForList),
+            childViews(input, field.objectShape ?? [], isPlainObject(entry) ? entry : {}, `${path}[${i}]`, statePath, entryHintsForList, flagChildren),
           )
         : [],
     provenance: "none",
@@ -224,7 +231,7 @@ function view(
     sourceOptions: [],
     manualSelected: false,
     error: errors[path] ?? "",
-    flag: "",
+    flag: flagIssue && field.issueIdentifying && isEmpty(raw) ? "Still to fill" : "",
     group: field.group,
     groupLabel: labelText(schema.groups.find((g) => g.key === field.group)?.label) || field.group,
     groupStart: false,
@@ -237,7 +244,7 @@ export function buildFieldViews(input: BuildViewsInput): FieldView[] {
   return input.fields.map((field) => {
     const entry = input.values[field.key];
     const raw = entry?.value;
-    const v = view(input, field, raw, field.key, field.key, null);
+    const v = view(input, field, raw, field.key, field.key, null, input.flagStillToFill ?? false);
     const provenance: Provenance | "none" = entry && !isEmpty(raw) ? entry.provenance : "none";
     v.provenance = provenance;
     v.provLabel = provenance === "none" ? "" : PROVENANCE_LABELS[provenance];

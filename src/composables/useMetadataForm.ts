@@ -33,7 +33,6 @@ import {
 import { PublishTarget, VisibilityStatus } from "@domain/enums";
 import type { Item } from "@domain/item";
 import { labelText, type FieldV2 } from "@domain/schema";
-import { isEmpty } from "@domain/schemaRules";
 import type { MetadataValues } from "@domain/metadata";
 import { fieldAtPath, splitByVisibility, statePathOf } from "@domain/schema-form";
 import {
@@ -275,19 +274,16 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
     return out;
   });
 
-  /** Adds what needs the linked parents: the "Still to fill" flag and the
-   * per-field source picker (shown when 2+ parents that can pass data have a
-   * value for the field). */
+  /** Adds the per-field source picker, shown when 2+ parents that can pass
+   * data have a value for the field. */
   function decorate(list: FieldView[]): FieldView[] {
     const vals = values.value;
     const parentsForPicker: ParentRecord[] = links.sourceRecords.value;
-    const hasPassingParent = links.passingParent.value != null;
     const byKey = new Map(fields.value.map((f) => [f.key, f]));
     return list.map((view) => {
       const field = byKey.get(view.key);
       if (!field) return view;
       const entry = vals[field.key];
-      if (field.issueIdentifying && isEmpty(entry?.value) && hasPassingParent) view.flag = "Still to fill";
       if (field.parentInheritable && parentsForPicker.length >= 2) {
         const opts = fieldSourceOptions(field, vals, parentsForPicker).filter((o) => o.kind === "parent");
         if (opts.length >= 2) {
@@ -314,8 +310,11 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
     const cur = current.value;
     if (!s || !c || !cur) return { shown: [], other: [] };
     const split = splitByVisibility(fields.value, c.states, metadata.plainValues(cur.id));
+    const flagStillToFill = links.passingParent.value != null;
     const build = (list: FieldV2[]) =>
-      decorate(buildFieldViews({ schema: s, fields: list, states: c.states, values: values.value, errors: errors.value }));
+      decorate(
+        buildFieldViews({ schema: s, fields: list, states: c.states, values: values.value, errors: errors.value, flagStillToFill }),
+      );
     return { shown: build(split.shown), other: build(split.other) };
   });
 

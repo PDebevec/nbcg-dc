@@ -9,7 +9,13 @@ const BOOK = { code: "am", en: "Book", cnr: "Knjiga" };
 
 function views(
   plain: Record<string, unknown>,
-  opts: { parents?: Record<string, unknown>[]; itemState?: ItemState; errors?: Record<string, string> } = {},
+  opts: {
+    parents?: Record<string, unknown>[];
+    itemState?: ItemState;
+    errors?: Record<string, string>;
+    /** A parent passes data to the item. */
+    passing?: boolean;
+  } = {},
 ): FieldView[] {
   const ctx = buildContext(plain, opts.parents ?? [], opts.itemState ?? "NEW", "DRAFT");
   const values: MetadataValues = Object.fromEntries(
@@ -21,6 +27,7 @@ function views(
     states: evaluateAll(SNAPSHOT, ctx),
     values,
     errors: opts.errors ?? {},
+    flagStillToFill: opts.passing ?? false,
   });
 }
 
@@ -50,6 +57,23 @@ describe("buildFieldViews", () => {
 
   it("gives free-text fields their hint source", () => {
     expect(find(views({}), "keywords").hints).toMatchObject({ strict: false, fillsEntry: false });
+  });
+
+  it("flags empty per-issue fields Still to fill while a parent passes data, sub-fields too", () => {
+    const list = views({ publication: { place: "Cetinje" } }, { parents: [{ collectionType: 4 }], passing: true });
+    expect(find(list, "issue").flag).toBe("Still to fill");
+    const publication = find(list, "publication");
+    expect(publication.flag).toBe("");
+    expect(publication.children.find((c) => c.key === "year")?.flag).toBe("Still to fill");
+    expect(publication.children.find((c) => c.key === "place")?.flag).toBe("");
+    // The issue is flagged as a whole, not again sub-field by sub-field.
+    expect(find(list, "issue").children.map((c) => c.flag)).toEqual(["", "", ""]);
+  });
+
+  it("flags nothing while no parent passes data", () => {
+    const list = views({}, { parents: [{ collectionType: 4 }] });
+    expect(find(list, "issue").flag).toBe("");
+    expect(find(list, "publication").children.find((c) => c.key === "year")?.flag).toBe("");
   });
 
   it("builds object children and entries with their paths", () => {

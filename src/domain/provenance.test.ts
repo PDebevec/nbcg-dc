@@ -89,6 +89,54 @@ describe("applyParentFields", () => {
   });
 });
 
+describe("an object field a parent passes in part (publication)", () => {
+  const publication = fieldV2({
+    key: "publication",
+    type: "object",
+    input: "object",
+    parentInheritable: true,
+    objectShape: [
+      fieldV2({ key: "place", parentInheritable: true }),
+      fieldV2({ key: "publisher", parentInheritable: true }),
+      fieldV2({ key: "year", issueIdentifying: true }),
+      fieldV2({ key: "placeOfManufacture" }),
+    ],
+  });
+  const obod = parent({
+    id: "p1",
+    metadata: {
+      publication: { place: "Cetinje", publisher: "Obod", year: "1944", placeOfManufacture: "Podgorica" },
+    },
+  });
+
+  it("passes only the sub-fields the schema marks inheritable, never the year", () => {
+    expect(parentInheritableValues(obod, [publication]).publication?.value).toEqual({
+      place: "Cetinje",
+      publisher: "Obod",
+    });
+  });
+
+  it("fills the item's empty sub-fields and keeps the year it already has", () => {
+    const current: MetadataValues = { publication: { value: { year: "1950" }, provenance: "user" } };
+    const result = applyParentFields(current, obod, [publication]);
+    expect(result.values.publication?.value).toEqual({ year: "1950", place: "Cetinje", publisher: "Obod" });
+    expect(result.applied).toEqual(["publication"]);
+  });
+
+  it("offers only the passed part as a field source, and picking it keeps the item's year", () => {
+    const [option] = fieldSourceOptions(publication, {}, [obod]).filter((o) => o.kind === "parent");
+    expect(option.value).toEqual({ place: "Cetinje", publisher: "Obod" });
+    const current: MetadataValues = {
+      publication: { value: { year: "1950", place: "Nikšić" }, provenance: "user" },
+    };
+    expect(chooseFieldSource(current, publication, option).publication).toEqual({
+      value: { year: "1950", place: "Cetinje", publisher: "Obod" },
+      provenance: "parent",
+      sourceParentId: "p1",
+    });
+  });
+});
+
 describe("cobissValues", () => {
   it("keeps schema keys, drops unknown + empty, stamps cobiss", () => {
     const record = {
@@ -213,7 +261,7 @@ describe("per-field source picker", () => {
   });
 
   it("chooses a parent source (provenance parent + sourceParentId)", () => {
-    const next = chooseFieldSource({}, "serialTitle", {
+    const next = chooseFieldSource({}, serialTitle, {
       kind: "parent",
       parentId: "p2",
       value: "Dan",
@@ -225,7 +273,7 @@ describe("per-field source picker", () => {
     const current: MetadataValues = {
       serialTitle: { value: "Pobjeda", provenance: "parent", sourceParentId: "p1" },
     };
-    const next = chooseFieldSource(current, "serialTitle", {
+    const next = chooseFieldSource(current, serialTitle, {
       kind: "manual",
       parentId: null,
       value: "Pobjeda",

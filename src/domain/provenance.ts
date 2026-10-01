@@ -36,6 +36,58 @@ export interface ProvenanceField {
   key: string;
   parentInheritable: boolean;
   issueIdentifying: boolean;
+  /** Repeatable: an object list passes whole, entries and all. */
+  multiple?: boolean;
+  /** An object field's sub-fields: a parent passes only the inheritable ones. */
+  objectShape?: readonly ProvenanceField[] | null;
+}
+
+type Plain = Record<string, unknown>;
+
+function isPlainObject(value: unknown): value is Plain {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The sub-fields a parent passes inside an object field: only those the
+ * schema marks inheritable, never a per-issue one (publication's place and
+ * publisher, not its year). Null when the value passes whole. */
+function passedSubKeys(field: ProvenanceField): string[] | null {
+  if (field.multiple || !field.objectShape || field.objectShape.length === 0) return null;
+  return field.objectShape.filter((c) => c.parentInheritable && !c.issueIdentifying).map((c) => c.key);
+}
+
+/** What `parent` passes down for `field`: its value, or for an object field
+ * only the passed sub-fields. Empty when it passes nothing. */
+function passedValue(parent: ParentRecord, field: ProvenanceField): unknown {
+  const value = parent.metadata[field.key];
+  const keys = passedSubKeys(field);
+  if (!keys) return value;
+  if (!isPlainObject(value)) return undefined;
+  const out: Plain = {};
+  for (const key of keys) if (!isEmpty(value[key])) out[key] = value[key];
+  return out;
+}
+
+/** A parent's value written into the field: an object's passed sub-fields go
+ * over the current object, which keeps its others (an issue's own year); any
+ * other value replaces it whole. */
+function overPassedPart(field: ProvenanceField, current: unknown, incoming: unknown): unknown {
+  if (!passedSubKeys(field) || !isPlainObject(incoming)) return incoming;
+  return { ...(isPlainObject(current) ? current : {}), ...incoming };
+}
+
+/** `incoming`'s sub-fields written into the object `current` where it has
+ * none; null when that changes nothing. */
+function fillEmptySubFields(current: unknown, incoming: unknown): Plain | null {
+  if (!isPlainObject(current) || !isPlainObject(incoming)) return null;
+  const merged: Plain = { ...current };
+  let changed = false;
+  for (const [key, value] of Object.entries(incoming)) {
+    if (!isEmpty(merged[key])) continue;
+    merged[key] = value;
+    changed = true;
+  }
+  return changed ? merged : null;
 }
 
 // ─── the core fill rule ──────────────────────────────────────────────────────
@@ -139,7 +191,8 @@ export function fillValues(
 // ─── building incoming value maps from a source ──────────────────────────────
 
 /** Stamp a parent's **inheritable, non-issue** field values as `parent`
- * provenance (with `sourceParentId`), dropping empties. */
+ * provenance (with `sourceParentId`), dropping empties. An object field
+ * carries only its inheritable sub-fields. */
 export function parentInheritableValues(
   parent: ParentRecord,
   fields: readonly ProvenanceField[],
@@ -148,7 +201,7 @@ export function parentInheritableValues(
   for (const field of fields) {
     if (!field.parentInheritable) continue;
     if (field.issueIdentifying) continue; // per-issue — never inherited
-    const value = parent.metadata[field.key];
+    const value = passedValue(parent, field);
     if (isEmpty(value)) continue;
     out[field.key] = { value, provenance: "parent", sourceParentId: parent.id };
   }
@@ -183,7 +236,8 @@ export interface ApplyParentResult extends FillOutcome {
 
 /**
  * Copy a data-passing parent's shared (inheritable, non-issue) fields into the
- * item's **empty** matching fields (provenance `parent`). A parent copy never
+ * item's **empty** matching fields (provenance `parent`); an object field gets
+ * its empty sub-fields filled and keeps the rest. A parent copy never
  * overwrites an existing value — so there are no conflicts — and per-issue
  * fields are intentionally left for the operator ({@link stillToFill}).
  */
@@ -193,13 +247,27 @@ export function applyParentFields(
   fields: readonly ProvenanceField[],
 ): ApplyParentResult {
   const incoming = parentInheritableValues(parent, fields);
-  // A parent copy only ever fills empties — it never overwrites and never
-  // raises the overwrite prompt (skip-silent), so it produces no conflicts.
-  const outcome = fillValues(current, incoming, {
-    overwriteMachine: false,
-    onUserConflict: "skip-silent",
-  });
-  return { ...outcome, stillToFill: stillToFill(fields, outcome.values) };
+  const values: MetadataValues = { ...current };
+  const applied: string[] = [];
+  const skipped: string[] = [];
+  for (const field of fields) {
+    const next = incoming[field.key];
+    if (!next) continue;
+    const existing = values[field.key];
+    if (!existing || isEmpty(existing.value)) {
+      values[field.key] = { ...next };
+      applied.push(field.key);
+      continue;
+    }
+    const merged = passedSubKeys(field) ? fillEmptySubFields(existing.value, next.value) : null;
+    if (merged === null) {
+      skipped.push(field.key);
+      continue;
+    }
+    values[field.key] = { ...existing, value: merged };
+    applied.push(field.key);
+  }
+  return { values, conflicts: [], applied, skipped, stillToFill: stillToFill(fields, values) };
 }
 
 /**
@@ -256,8 +324,9 @@ export interface FieldSourceOption {
 
 /**
  * The source options for a field: every linked parent that holds a non-empty,
- * inheritable value for it, plus a **Manual entry** option. Shown when two or
- * more parents could supply the same field (docs/tasks/05 §per-field source).
+ * inheritable value for it (for an object, its passed sub-fields), plus a
+ * **Manual entry** option. Shown when two or more parents could supply the same
+ * field (docs/tasks/05 §per-field source).
  */
 export function fieldSourceOptions(
   field: ProvenanceField,
@@ -267,7 +336,7 @@ export function fieldSourceOptions(
   const options: FieldSourceOption[] = [];
   if (field.parentInheritable) {
     for (const parent of parents) {
-      const value = parent.metadata[field.key];
+      const value = passedValue(parent, field);
       if (isEmpty(value)) continue;
       options.push({ kind: "parent", parentId: parent.id, value });
     }
@@ -282,20 +351,22 @@ export function fieldSourceOptions(
 
 /**
  * Apply a source-picker choice to a single field. A parent choice sets the
- * parent's value (provenance `parent`, `sourceParentId`); **Manual entry** keeps
- * the current value but flips provenance to `user` (the operator now owns it).
+ * parent's value (provenance `parent`, `sourceParentId`) — into an object
+ * field, only over its passed sub-fields; **Manual entry** keeps the current
+ * value but flips provenance to `user` (the operator now owns it).
  */
 export function chooseFieldSource(
   current: MetadataValues,
-  fieldKey: string,
+  field: ProvenanceField,
   option: FieldSourceOption,
 ): MetadataValues {
   const values: MetadataValues = { ...current };
+  const held = current[field.key]?.value;
   if (option.kind === "manual") {
-    values[fieldKey] = { value: current[fieldKey]?.value, provenance: "user" };
+    values[field.key] = { value: held, provenance: "user" };
   } else {
-    values[fieldKey] = {
-      value: option.value,
+    values[field.key] = {
+      value: overPassedPart(field, held, option.value),
       provenance: "parent",
       sourceParentId: option.parentId,
     };

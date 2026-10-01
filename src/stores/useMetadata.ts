@@ -574,7 +574,8 @@ export const useMetadataStore = defineStore("metadata", () => {
       option.kind === "parent" && s
         ? { ...option, value: normalizeRecord(s, { [key]: option.value })[key] }
         : option;
-    setValues(itemId, chooseFieldSource(getValues(itemId), key, picked));
+    const field = fields.value.find((f) => f.key === key) ?? { key, parentInheritable: false, issueIdentifying: false };
+    setValues(itemId, chooseFieldSource(getValues(itemId), field, picked));
   }
 
   // ── parent records (shared cache) ─────────────────────────────────────────
