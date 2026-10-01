@@ -167,7 +167,7 @@ describe("parent rows", () => {
       "No longer exists",
       "Not found on backend",
       "Couldn't load",
-      "Record",
+      "Collection type 0",
     ]);
   });
 });

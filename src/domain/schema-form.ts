@@ -4,7 +4,7 @@
  */
 
 import { isEmpty, type FieldState } from "./schemaRules";
-import type { FieldV2, RecordSchemaV2, VocabularyValue } from "./schema";
+import { labelText, type FieldV2, type RecordSchemaV2, type VocabularyValue } from "./schema";
 
 /** How a field renders — the backend's `input`, refined by `multiple` and `type`. */
 export type FieldKind =
@@ -55,6 +55,17 @@ export function orderedFields(schema: RecordSchemaV2): FieldV2[] {
   return schema.fields
     .slice()
     .sort((a, b) => rank(a) - rank(b) || a.order - b.order || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+}
+
+/** A code's label in a vocabulary sent whole, as its select shows it; null
+ * when the schema doesn't list it. */
+export function codeLabel(
+  schema: RecordSchemaV2 | null | undefined,
+  vocabulary: string,
+  code: string | number,
+): string | null {
+  const value = schema?.vocabularies[vocabulary]?.values?.find((v) => v.code === code);
+  return value ? labelText(value) || null : null;
 }
 
 /** An enum field's inline code list (`[]` for a searched vocabulary). */

@@ -6,6 +6,8 @@ import { DEFAULT_CONFIG } from "@domain/config";
 import { PublishTarget, VisibilityStatus } from "@domain/enums";
 import { ItemState, type Item } from "@domain/item";
 import type { ParentRecord } from "@domain/parent";
+import type { RecordSchemaV2 } from "@domain/schema";
+import { SNAPSHOT } from "@domain/schema.fixture";
 
 function makeBatch(itemIds: string[], over: Partial<Batch> = {}): Batch {
   const proc: Record<string, ItemRunStatus> = {};
@@ -51,6 +53,7 @@ const metadataFake = {
   parentMissing: ref(new Set<string>()),
   parentFailed: ref(new Set<string>()),
   backendLinks: ref(new Map<string, string[] | null>()),
+  schema: SNAPSHOT as RecordSchemaV2,
   ensureParents: async () => {},
   ensureParent: async () => {},
   findParents: async (_q: string, _signal?: AbortSignal) => [] as ParentRecord[],
@@ -90,7 +93,40 @@ beforeEach(() => {
   metadataFake.parentMissing.value = new Set();
   metadataFake.parentFailed.value = new Set();
   metadataFake.findParents = async () => [];
+  metadataFake.schema = SNAPSHOT;
   useSettingsStore().config = { ...DEFAULT_CONFIG, dataPassingCollectionTypes: [SERIAL] };
+});
+
+describe("collection types", () => {
+  it("names each parent's type as the schema's Collection type select does", () => {
+    metadataFake.parentRecords.value = new Map([
+      ["s1", record("s1", 4)],
+      ["z1", record("z1", 3)],
+      ["c1", record("c1", 1)],
+      ["n1", record("n1", null)],
+    ]);
+    const { links } = setup({ targets: ["i1"], backend: { i1: ["s1", "z1", "c1", "n1"] } });
+    expect(links.parents.value.map((p) => p.typeLabel)).toEqual([
+      "Serijska zbirka",
+      "Zbirka",
+      "Primarna zbirka",
+      "Nije zbirka",
+    ]);
+  });
+
+  it("names a search hit's type, and says when it can pass data", async () => {
+    metadataFake.findParents = async () => [record("s1", 4), record("z1", 3)];
+    const { links } = setup({ targets: ["i1"] });
+    await links.openPicker();
+    expect(links.results.value.map((r) => r.meta)).toEqual(["Serijska zbirka · can pass data", "Zbirka"]);
+  });
+
+  it("falls back to the type's number when the schema doesn't list it", () => {
+    metadataFake.schema = { ...SNAPSHOT, vocabularies: {} };
+    metadataFake.parentRecords.value = new Map([["s1", record("s1", 4)]]);
+    const { links } = setup({ targets: ["i1"], backend: { i1: ["s1"] } });
+    expect(links.parents.value[0].typeLabel).toBe("Collection type 4");
+  });
 });
 
 describe("rows for one item (Metadata)", () => {

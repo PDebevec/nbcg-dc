@@ -24,6 +24,7 @@ import {
   type ParentChanges,
   type ParentRecord,
 } from "@domain/parent";
+import { codeLabel } from "@domain/schema-form";
 import { useBatchesStore } from "@stores/useBatches";
 import { useMetadataStore } from "@stores/useMetadata";
 import { useSettingsStore } from "@stores/useSettings";
@@ -37,7 +38,7 @@ export type ParentRowStatus = "linked" | "new" | "unlinking";
 export interface ParentRowView {
   id: string;
   name: string;
-  /** "Serial" (data-passing type) / "Record", or why it isn't usable. */
+  /** Its collection type as the schema names it ("Serijska zbirka"), or why it isn't usable. */
   typeLabel: string;
   /** Eligible to pass data (serial-type collectionType). */
   canPassData: boolean;
@@ -52,7 +53,7 @@ export interface ParentRowView {
 export interface ParentSearchRow {
   id: string;
   title: string;
-  /** "Serial · can pass data" / "Record". */
+  /** Its collection type ("Zbirka"), with " · can pass data" when it can. */
   meta: string;
   /** Already a parent of every target. */
   linked: boolean;
@@ -106,6 +107,13 @@ export function useParentLinks(
     return record != null && isEligibleParent(record, dataPassingTypes.value);
   }
 
+  /** A collection type as the schema's Collection type select names it. No
+   * type reads as 0, as the backend and the rules treat it. */
+  function collectionTypeName(type: number | null): string {
+    const code = type ?? 0;
+    return codeLabel(metadata.schema, "collectionType", code) ?? `Collection type ${code}`;
+  }
+
   function linksOf(b: Batch, itemId: string): ItemLinks {
     const backend = backendLinks.value.get(itemId) ?? [];
     const changes = parentChangesOf(b, itemId);
@@ -137,7 +145,8 @@ export function useParentLinks(
     if (parentGone.value.has(id)) return "No longer exists";
     if (parentMissing.value.has(id)) return "Not found on backend";
     if (parentFailed.value.has(id)) return "Couldn't load";
-    if (parentRecords.value.has(id)) return isEligible(id) ? "Serial" : "Record";
+    const record = parentRecords.value.get(id);
+    if (record) return collectionTypeName(record.collectionType);
     return parentLoading.value.has(id) ? "Loading…" : "Not found on backend";
   }
 
@@ -238,7 +247,7 @@ export function useParentLinks(
       return {
         id: r.id,
         title: r.title,
-        meta: eligible ? "Serial · can pass data" : "Record",
+        meta: `${collectionTypeName(r.collectionType)}${eligible ? " · can pass data" : ""}`,
         linked: onAll(targets(), r.id),
         linkedAll: onAll(members(), r.id),
       };
