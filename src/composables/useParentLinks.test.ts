@@ -217,6 +217,19 @@ describe("passing data", () => {
   });
 });
 
+describe("the per-field source picker", () => {
+  it("offers only the item's parents that can pass data", () => {
+    useSettingsStore().config = { ...DEFAULT_CONFIG, dataPassingCollectionTypes: [3, 4] };
+    metadataFake.parentRecords.value = new Map([
+      ["s1", record("s1", 4)],
+      ["c1", record("c1", 1)],
+      ["z1", record("z1", 3)],
+    ]);
+    const { links } = setup({ targets: ["i1"], backend: { i1: ["s1", "c1", "z1"] } });
+    expect(links.sourceRecords.value.map((r) => r.id)).toEqual(["s1", "z1"]);
+  });
+});
+
 describe("the picker's list", () => {
   it("lists the newest collections when opened with nothing typed, once", async () => {
     const asked: string[] = [];

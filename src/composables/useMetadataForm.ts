@@ -276,10 +276,11 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
   });
 
   /** Adds what needs the linked parents: the "Still to fill" flag and the
-   * per-field source picker (shown when 2+ parents can supply the field). */
+   * per-field source picker (shown when 2+ parents that can pass data have a
+   * value for the field). */
   function decorate(list: FieldView[]): FieldView[] {
     const vals = values.value;
-    const parentsForPicker: ParentRecord[] = links.linkedRecords.value;
+    const parentsForPicker: ParentRecord[] = links.sourceRecords.value;
     const hasPassingParent = links.passingParent.value != null;
     const byKey = new Map(fields.value.map((f) => [f.key, f]));
     return list.map((view) => {
@@ -413,7 +414,7 @@ export function useMetadataForm(batchId: MaybeRefOrGetter<string>) {
     if (!c || !editable.value) return;
     const field = fields.value.find((f) => f.key === key);
     if (!field) return;
-    const option = fieldSourceOptions(field, values.value, links.linkedRecords.value).find(
+    const option = fieldSourceOptions(field, values.value, links.sourceRecords.value).find(
       (o) => o.kind === "parent" && o.parentId === parentId,
     );
     if (option) metadata.chooseSource(c.id, key, option);

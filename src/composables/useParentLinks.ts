@@ -177,9 +177,11 @@ export function useParentLinks(
     return first ? passingParentOf(first.id) : null;
   });
 
-  /** The first target's parents whose records we hold (the per-field source picker). */
-  const linkedRecords = computed<ParentRecord[]>(() =>
+  /** The first target's parents that can pass data, whose records we hold —
+   * what the per-field source picker offers. */
+  const sourceRecords = computed<ParentRecord[]>(() =>
     (targetLinks.value[0]?.ids ?? [])
+      .filter(isEligible)
       .map((id) => parentRecords.value.get(id))
       .filter((r): r is ParentRecord => r != null),
   );
@@ -362,7 +364,7 @@ export function useParentLinks(
 
   return {
     parents,
-    linkedRecords,
+    sourceRecords,
     passingParent,
     passingParentOf,
     // search
