@@ -172,16 +172,16 @@ const themeOptions = [
         <div class="card-title">Parent data passing</div>
         <div class="card-desc">
           Which <span class="mono">collectionType</span> numbers mark a parent
-          record (a serial, a collection) that may pass its shared fields down
-          to the items linked under it. Leave empty if unsure — parents can
-          still be linked, they just won't prefill.
+          record that may pass its shared fields down to the items linked under
+          it: 3 = Zbirka, 4 = Serijska zbirka. Leave empty to turn data passing
+          off — parents can still be linked, they just won't prefill.
         </div>
         <div class="field">
           <label>Data-passing collection types</label>
           <input
             class="mono-input"
             :value="dataPassingTypes"
-            placeholder="e.g. 2, 5"
+            placeholder="e.g. 3, 4"
             @input="setDataPassingTypes(($event.target as HTMLInputElement).value)"
             @blur="commitDataPassingTypes()"
           />

@@ -37,8 +37,8 @@ export interface AppConfig {
   theme: ThemePreference;
   /**
    * Which `collectionType` numbers make a linked parent eligible to pass its
-   * shared fields down (serial-type). Exact value(s) TBD, so it is a
-   * configurable list (see docs/03 decisions).
+   * shared fields down: 3 (Zbirka) and 4 (Serijska zbirka) by default. Empty
+   * turns data passing off.
    */
   dataPassingCollectionTypes: number[];
   // NOTE: the record-schema cache (ETag + offline copy) lives in
@@ -54,7 +54,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   keycloakUrl: "http://localhost:8082",
   kcUsername: "",
   theme: "system",
-  dataPassingCollectionTypes: [],
+  dataPassingCollectionTypes: [3, 4],
 };
 
 /** True when the app has enough config to be useful (drives first-run card). */

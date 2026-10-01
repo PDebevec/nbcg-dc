@@ -16,6 +16,14 @@ import {
   validateConfig,
   normalizeConfig,
 } from "./config";
+import { isDataPassingType } from "./parent";
+
+describe("data passing on a fresh install", () => {
+  it("lets Zbirka (3) and Serijska zbirka (4) parents pass data, and no other type", () => {
+    const types = DEFAULT_CONFIG.dataPassingCollectionTypes;
+    expect([0, 1, 2, 3, 4, 5].filter((t) => isDataPassingType(t, types))).toEqual([3, 4]);
+  });
+});
 
 describe("isConfigured", () => {
   it("needs both roots and a base URL", () => {
