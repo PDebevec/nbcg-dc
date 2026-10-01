@@ -41,7 +41,7 @@ export interface ParentRowView {
   name: string;
   /** Its collection type as the schema names it ("Serijska zbirka"), or why it isn't usable. */
   typeLabel: string;
-  /** Eligible to pass data (serial-type collectionType). */
+  /** Eligible to pass data: its collection type is in the data-passing set. */
   canPassData: boolean;
   /** Passing its shared fields down to every target that has it. */
   passesData: boolean;
